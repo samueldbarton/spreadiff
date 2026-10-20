@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>spreadiff — vanilla example</title>
+    <style>
+      body { margin: 0; font: 14px/1.5 Inter, system-ui, sans-serif; background: Canvas; color: CanvasText; color-scheme: light dark; }
+      main { max-width: 1100px; margin: 32px auto; padding: 0 16px; }
+      #grid { height: 520px; border: 1px solid color-mix(in srgb, CanvasText 12%, Canvas); border-radius: 12px; overflow: hidden;
+        /* Theme with plain CSS variables. */
+        --sd-modified: #8b5cf6; --sd-font-size: 13px; }
+      .note { margin: 6px 12px 8px 96px; padding: 8px 12px; border-radius: 8px; font-size: 12px;
+        background: color-mix(in srgb, #8b5cf6 10%, Canvas); border: 1px solid color-mix(in srgb, #8b5cf6 30%, Canvas); }
+      .note b { color: #8b5cf6; }
+      button { font: inherit; padding: 4px 10px; border-radius: 6px; border: 1px solid color-mix(in srgb, CanvasText 18%, Canvas); background: Canvas; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h2>Vanilla JS + annotations</h2>
+      <p>
+        <button id="prev">↑ prev</button> <button id="next">↓ next</button>
+        <button id="layout">toggle split</button> <span id="info"></span>
+      </p>
+      <div id="grid"></div>
+    </main>
+    <script type="module">
+      import { DiffGrid, diffTables, parseCsv } from 'spreadiff';
+
+      const before = parseCsv(`id,city,population,mayor
+1,Lisbon,545923,Carlos Moedas
+2,Porto,231800,Rui Moreira
+3,Braga,193333,Ricardo Rio
+4,Coimbra,140796,José Manuel Silva
+5,Faro,64560,Rogério Bacalhau
+6,Aveiro,80954,José Ribau Esteves`);
+      const after = parseCsv(`id,city,population,mayor,region
+1,Lisbon,548703,Carlos Moedas,Lisboa
+2,Porto,232125,Pedro Duarte,Norte
+3,Braga,193333,João Rodrigues,Norte
+4,Coimbra,140796,Ana Abrunhosa,Centro
+6,Aveiro,80954,Luís Souto,Centro
+7,Évora,53591,Carlos Zorrinho,Alentejo`);
+
+      const diff = diffTables(before, after);
+      const grid = new DiffGrid({
+        collapseUnchanged: false,
+        annotations: [{ row: 1, column: 'mayor', data: { author: 'ana', text: 'Confirmed with the 2025 local election results.' } }],
+        renderAnnotation: (a) => {
+          const el = document.createElement('div');
+          el.className = 'note';
+          el.innerHTML = `<b>@${a.data.author}</b> ${a.data.text}`;
+          return el;
+        },
+        onSelectionChange: (cell) => {
+          document.getElementById('info').textContent = cell
+            ? `${cell.column.name}: ${cell.oldValue ?? '∅'} → ${cell.newValue ?? '∅'}`
+            : '';
+        },
+      });
+      grid.render({ diff, container: document.getElementById('grid') });
+      document.getElementById('next').onclick = () => grid.nextChange();
+      document.getElementById('prev').onclick = () => grid.prevChange();
+      document.getElementById('layout').onclick = () =>
+        grid.setOptions({ layout: grid.getOptions().layout === 'split' ? 'unified' : 'split' });
+    </script>
+  </body>
+</html>
