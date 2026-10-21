@@ -171,16 +171,24 @@ function toTable(raw: string[][], options: ParseCsvOptions): Table {
     }
     rows[r] = out;
   }
-  return { name: options.name ?? 'Sheet1', columns, rows };
+  return { name: options.name ?? 'Sheet1', columns, rows, origin: { row: header ? 1 : 0, col: 0 } };
 }
 
 /** Fill blanks with column letters and suffix duplicates: `x`, `x (2)`. */
 export function uniqueNames(names: string[]): string[] {
-  const seen = new Map<string, number>();
-  return names.map((raw, i) => {
-    const base = raw.trim() === '' ? columnLabel(i) : raw.trim();
-    const n = (seen.get(base) ?? 0) + 1;
-    seen.set(base, n);
-    return n === 1 ? base : `${base} (${n})`;
+  const bases = names.map((raw, i) => (raw.trim() === '' ? columnLabel(i) : raw.trim()));
+  // Reserve every original name first, so a generated "x (2)" never
+  // collides with a real column called "x (2)".
+  const taken = new Set<string>();
+  const firstSeen = new Set<string>();
+  const isDup = bases.map((b) => (firstSeen.has(b) ? true : (firstSeen.add(b), false)));
+  bases.forEach((b, i) => { if (!isDup[i]) taken.add(b); });
+  return bases.map((b, i) => {
+    if (!isDup[i]) return b;
+    let n = 2;
+    while (taken.has(`${b} (${n})`)) n++;
+    const name = `${b} (${n})`;
+    taken.add(name);
+    return name;
   });
 }

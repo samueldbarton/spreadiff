@@ -14,6 +14,8 @@ import type { TableDiff } from '../core/types.js';
 
 export interface DiffGridProps<A = unknown> extends Omit<DiffGridOptions<A>, 'renderAnnotation'> {
   diff: TableDiff;
+  /** Keep this array referentially stable (useMemo); a new array re-renders every annotation. */
+  annotations?: CellAnnotation<A>[];
   className?: string;
   style?: CSSProperties;
   /** Render annotation content with React; it is portaled below the annotated row. */
@@ -39,6 +41,14 @@ export const DiffGrid = forwardRef(function DiffGrid<A>(
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<DiffGridView<A> | null>(null);
   const [portals, setPortals] = useState<Map<CellAnnotation<A>, HTMLElement>>(new Map());
+  // Stable React keys per annotation object (row:column can repeat).
+  const keys = useRef(new WeakMap<CellAnnotation<A>, number>());
+  const nextKey = useRef(0);
+  const keyOf = (a: CellAnnotation<A>) => {
+    let k = keys.current.get(a);
+    if (k === undefined) keys.current.set(a, (k = nextKey.current++));
+    return k;
+  };
 
   const vanillaRender = renderAnnotation
     ? (a: CellAnnotation<A>) => {
@@ -100,7 +110,7 @@ export const DiffGrid = forwardRef(function DiffGrid<A>(
 
   return (
     <div ref={containerRef} className={className} style={{ position: 'relative', ...style }}>
-      {renderAnnotation && [...portals].map(([a, host]) => createPortal(renderAnnotation(a), host, `${a.row}:${a.column ?? ''}`))}
+      {renderAnnotation && [...portals].map(([a, host]) => createPortal(renderAnnotation(a), host, keyOf(a)))}
     </div>
   );
 }) as <A = unknown>(props: DiffGridProps<A> & { ref?: React.Ref<DiffGridHandle> }) => ReactNode;

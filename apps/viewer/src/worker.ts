@@ -25,7 +25,6 @@ self.onmessage = (e: MessageEvent<Req>) => {
       b = { name: `synthetic-${req.rows}-b.csv`, sheets: [parseCsv(s.new, { name: 'synthetic' })] };
     }
     const t1 = performance.now();
-    const gen = req.type === 'synthetic' ? t1 - t0 : 0;
     const result = diffWorkbooks(a, b, req.options);
     const t2 = performance.now();
     const { packed, transfer } = packWorkbookDiff(result);

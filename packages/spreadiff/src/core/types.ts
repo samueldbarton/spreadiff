@@ -7,8 +7,17 @@ export interface Table {
   /** Column names. When the source has no header row, use `A`, `B`, … */
   columns: string[];
   rows: CellValue[][];
-  /** Optional formulas, parallel to `rows` (`null` where a cell has none). */
+  /**
+   * Optional formulas, parallel to `rows` (`null` where a cell has none). A
+   * row may be missing (sparse). Set this (even empty) for any source that
+   * can hold formulas, so a formula replaced by a value counts as a change.
+   */
   formulas?: (string | null)[][];
+  /**
+   * Where `rows[0][0]` sits in the source sheet (0-based), for showing real
+   * spreadsheet row numbers and column letters. CSV with a header: `{ row: 1, col: 0 }`.
+   */
+  origin?: { row: number; col: number };
 }
 
 /** A workbook is an ordered list of sheets. CSV files are one-sheet workbooks. */

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>spreadiff browser test harness</title>
+    <style>body { margin: 0; } #grid { width: 900px; height: 500px; } button { margin: 4px; }</style>
+  </head>
+  <body>
+    <button id="before">before</button>
+    <div id="grid"></div>
+    <button id="after">after</button>
+    <script type="module">
+      // Exposes the library on window for bench/browser-test.mjs.
+      import * as sd from 'spreadiff';
+      window.sd = sd;
+      window.ready = true;
+    </script>
+  </body>
+</html>

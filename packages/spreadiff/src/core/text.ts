@@ -56,8 +56,9 @@ export function formatCell(v: CellValue): string {
   if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
   if (typeof v === 'number') {
     if (Number.isInteger(v)) return String(v);
-    // Trim float noise (0.1 + 0.2) without hiding real precision.
-    return String(Number(v.toPrecision(12)));
+    // Trim float noise (0.1 + 0.2 → 0.3); 15 significant digits is the most
+    // a double always round-trips, so real differences stay visible.
+    return String(Number(v.toPrecision(15)));
   }
   return v;
 }

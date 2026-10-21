@@ -19,7 +19,8 @@ This repo contains:
 ```bash
 npm install
 npm run dev        # viewer at http://localhost:5173
-npm test           # library tests
+npm test           # library unit tests (vitest)
+npm run test:browser  # renderer tests in Chromium; needs `npx vite --port 5199` in apps/viewer
 npm run build      # library (tsc) + viewer (vite)
 ```
 
@@ -135,12 +136,14 @@ is projected through a `<slot>`, so your page CSS styles it.
 about 3 rows per frame, with a horizontal wobble. Collapsing is off, so both
 renderers draw every row. Headless Chromium on a 4-core cloud VM:
 
+Ranges are across 3–4 runs, because single runs vary a lot:
+
 | Rows | Renderer | Frame p50 | Frame p95 | Worst frame | Frames > 25 ms | Long tasks |
 | --- | --- | --- | --- | --- | --- | --- |
-| 100k | **spreadiff** | 16.7 ms | 17.7 ms | 22.6 ms | 0 | 0 |
-| 100k | Glide | 16.7 ms | 19.0 ms | 33.2 ms | 3 | 0 |
-| 1M | **spreadiff** | 16.7 ms | 17.3 ms | 22.8 ms | 0 | 0 |
-| 1M | Glide | 16.7 ms | 20.2 ms | 131.1 ms | 4 | 1 |
+| 100k | **spreadiff** | 16.7 ms | 17.0–17.9 ms | 21–25 ms (one outlier at 71 ms) | 0 (one run: 5) | 0 |
+| 100k | Glide | 16.6–20.2 ms | 19–27 ms | 33–205 ms | 3–30 | 0–4 |
+| 1M | **spreadiff** | 16.7 ms | 17.1–17.3 ms | 23–30 ms | 0–4 | 0 |
+| 1M | Glide | 16.7–21.7 ms | 20–27 ms | 131–147 ms | 4–29 | 1–2 |
 
 Pipeline at 1M rows (worker):
 
@@ -161,6 +164,7 @@ Two changes moved those numbers:
 
 ### How these numbers could be wrong
 
+- **Single runs are noisy.** Glide's worst frame ranged from 33 to 205 ms on identical input. Don't trust any one run, including the ones behind my earlier claims.
 - **Medians are vsync-capped.** Both renderers hit 16.7 ms at p50, so the medians
   can't tell them apart. The signal is in the tail: worst frame and long tasks.
   A higher-refresh display, or a test that times `drawNow()` directly, would
@@ -183,5 +187,6 @@ Two changes moved those numbers:
 - **Accessibility.** Canvas cells aren't in the accessibility tree. The grid exposes `role="grid"`, keyboard navigation and DOM popovers, but no per-cell ARIA. A hidden DOM mirror of the visible window would fix this.
 - **Main-thread memory.** Main-thread memory is still O(cells) once the result arrives. Keeping the tables in the worker and fetching visible cells on demand would remove the remaining transfer and halve memory.
 - **Moved rows** in keyed mode are aligned correctly, but not flagged as "moved".
+- **Annotation identity.** Annotations are tracked by object identity, so pass a memoized array. A new array every render re-creates every annotation element.
 - **XLSX reader scope.** It reads values and formulas only. No styles, merged cells or `.xls`.
 - **Minimap at high change density.** When changes are dense (e.g. ~4,000 changed rows in a 1M-row diff, displayed with collapsing), every pixel bucket has a change and the strip turns solid red. Density shading would read better.

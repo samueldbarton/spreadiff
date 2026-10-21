@@ -11,7 +11,8 @@
     "dev": "npm run dev -w @spreadiff/viewer",
     "test": "npm test -w spreadiff",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "bench": "node bench/run.mjs"
+    "bench": "node bench/run.mjs",
+    "test:browser": "node bench/browser-test.mjs"
   },
   "devDependencies": {
     "playwright": "^1.64.1"

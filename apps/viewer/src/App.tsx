@@ -15,17 +15,37 @@ interface Loaded {
   timings: { parse: number; diff: number; transfer: number };
 }
 
-// One long-lived worker; requests are matched by id.
-const worker = new DiffWorker();
+// One long-lived worker; requests are matched by id. If it dies (e.g. out
+// of memory on a huge file), fail what's pending and start a fresh one.
+let worker = new DiffWorker();
 let seq = 0;
+const inflight = new Map<number, (err: Error) => void>();
+function watchWorker(w: Worker) {
+  w.addEventListener('error', (e) => {
+    e.preventDefault();
+    const err = new Error(e.message || 'The diff worker crashed (the files may be too large for this browser tab).');
+    for (const fail of inflight.values()) fail(err);
+    inflight.clear();
+    w.terminate();
+    worker = new DiffWorker();
+    watchWorker(worker);
+  });
+}
+watchWorker(worker);
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
 function run(req: DistributiveOmit<Req, 'id'>, transfer: Transferable[] = []): Promise<Loaded> {
   const id = ++seq;
   const t0 = performance.now();
+  const w = worker;
   return new Promise((resolve, reject) => {
+    inflight.set(id, (err) => {
+      w.removeEventListener('message', onMessage);
+      reject(err);
+    });
     const onMessage = (e: MessageEvent) => {
       if (e.data.id !== id) return;
-      worker.removeEventListener('message', onMessage);
+      w.removeEventListener('message', onMessage);
+      inflight.delete(id);
       if (e.data.error) return reject(new Error(e.data.error));
       const result = unpackWorkbookDiff(e.data.packed);
       const total = performance.now() - t0;
@@ -33,13 +53,25 @@ function run(req: DistributiveOmit<Req, 'id'>, transfer: Transferable[] = []): P
       // "transfer" = pack in worker + postMessage + unpack on main thread.
       resolve({ result, names: e.data.names, timings: { parse, diff, transfer: Math.max(0, total - parse - diff) } });
     };
-    worker.addEventListener('message', onMessage);
-    worker.postMessage({ ...req, id }, transfer);
+    w.addEventListener('message', onMessage);
+    w.postMessage({ ...req, id }, transfer);
   });
 }
 
 const fmt = (n: number) => n.toLocaleString();
 const ms = (n: number) => (n < 10 ? `${n.toFixed(1)} ms` : n < 1000 ? `${Math.round(n)} ms` : `${(n / 1000).toFixed(2)} s`);
+
+function readTheme(): Theme {
+  try {
+    const t = localStorage.getItem('sd-theme');
+    return t === 'light' || t === 'dark' ? t : 'system';
+  } catch {
+    return 'system'; // storage blocked (private mode, sandboxed iframe)
+  }
+}
+
+/** What produced the current diff, so option changes can re-run it. */
+type Source = { kind: 'files'; a: File; b: File } | { kind: 'sample' } | { kind: 'synthetic'; rows: number };
 
 function usePrefersDark(theme: Theme) {
   const [sys, setSys] = useState(() => matchMedia('(prefers-color-scheme: dark)').matches);
@@ -58,16 +90,18 @@ export function App() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sheet, setSheet] = useState(0);
+  const sheetName = useRef<string | null>(null);
   const [layout, setLayout] = useState<DiffLayout>('unified');
   const [collapse, setCollapse] = useState(true);
   const [changedColsOnly, setChangedColsOnly] = useState(false);
-  const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem('sd-theme') as Theme) || 'system');
+  const [theme, setTheme] = useState<Theme>(readTheme);
   const [renderer, setRenderer] = useState<Renderer>('spreadiff');
   const [options, setOptions] = useState<DiffOptions>({ keys: 'auto', trimWhitespace: true, ignoreCase: false, numericTolerance: 0 });
   const [header, setHeader] = useState(true);
   const [selected, setSelected] = useState<CellInfo | null>(null);
   const [showOptions, setShowOptions] = useState(false);
-  const lastReq = useRef<(() => Promise<Loaded>) | null>(null);
+  const source = useRef<Source | null>(null);
+  const loadToken = useRef(0);
   const gridRef = useRef<DiffGridHandle>(null);
   const dark = usePrefersDark(theme);
 
@@ -78,54 +112,61 @@ export function App() {
     } catch {}
   }, [theme]);
 
-  const load = useCallback(async (label: string, make: () => Promise<Loaded>) => {
+  const run_ = useCallback(async (src: Source, opts: DiffOptions, hdr: boolean, label: string) => {
+    // Only the latest request may update the UI; an older one finishing
+    // later (or failing) must not overwrite it.
+    const token = ++loadToken.current;
+    source.current = src;
     setBusy(label);
     setError(null);
-    lastReq.current = make;
     try {
-      const r = await make();
+      let r: Loaded;
+      if (src.kind === 'files') {
+        const [x, y] = await Promise.all([src.a.arrayBuffer(), src.b.arrayBuffer()]);
+        r = await run({ type: 'files', old: { name: src.a.name, data: x }, new: { name: src.b.name, data: y }, options: opts, header: hdr }, [x, y]);
+      } else if (src.kind === 'sample') {
+        const { old, new: next } = sampleWorkbooks();
+        r = await run({ type: 'books', old, new: next, options: opts });
+      } else {
+        r = await run({ type: 'synthetic', rows: src.rows, cols: 12, options: opts });
+      }
+      if (token !== loadToken.current) return;
       setLoaded(r);
       setSelected(null);
+      // Stay on the same sheet (by name) if it still exists.
+      const byName = r.result.sheets.findIndex((s) => s.name === sheetName.current);
       const firstChanged = r.result.sheets.findIndex((s) => s.status !== 'equal');
-      setSheet((cur) => (cur < r.result.sheets.length && r.result.sheets[cur].status !== 'equal' ? cur : Math.max(0, firstChanged)));
+      const idx = byName >= 0 ? byName : Math.max(0, firstChanged);
+      sheetName.current = r.result.sheets[idx]?.name ?? null;
+      setSheet(idx);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (token === loadToken.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(null);
+      if (token === loadToken.current) setBusy(null);
     }
   }, []);
 
-  const diffFiles = useCallback(
-    (a: File, b: File, opts = options, hdr = header) =>
-      load(`Diffing ${a.name} → ${b.name}`, async () => {
-        const [x, y] = await Promise.all([a.arrayBuffer(), b.arrayBuffer()]);
-        return run({ type: 'files', old: { name: a.name, data: x }, new: { name: b.name, data: y }, options: opts, header: hdr }, [x, y]);
-      }),
-    [load, options, header],
-  );
+  const diffFiles = (a: File, b: File) => void run_({ kind: 'files', a, b }, options, header, `Diffing ${a.name} → ${b.name}`);
 
   const loadSample = () => {
-    const { old, new: next } = sampleWorkbooks();
     setFiles([null, null]);
-    void load('Diffing sample workbooks', () => run({ type: 'books', old, new: next, options }));
+    void run_({ kind: 'sample' }, options, header, 'Diffing sample workbooks');
   };
 
   const loadSynthetic = (rows: number) => {
     setFiles([null, null]);
-    void load(`Generating and diffing ${fmt(rows)} rows`, () => run({ type: 'synthetic', rows, cols: 12, options }));
+    void run_({ kind: 'synthetic', rows }, options, header, `Generating and diffing ${fmt(rows)} rows`);
   };
 
   // Re-run the last diff when options change.
   const rerun = (next: DiffOptions, hdr = header) => {
     setOptions(next);
-    if (files[0] && files[1]) void diffFiles(files[0], files[1], next, hdr);
-    else if (loaded?.names[0].startsWith('inventory')) {
-      const { old, new: n } = sampleWorkbooks();
-      void load('Re-diffing', () => run({ type: 'books', old, new: n, options: next }));
-    } else if (loaded?.names[0].startsWith('synthetic')) {
-      const rows = Number(loaded.names[0].split('-')[1]);
-      void load('Re-diffing', () => run({ type: 'synthetic', rows, cols: 12, options: next }));
-    }
+    if (source.current) void run_(source.current, next, hdr, 'Re-diffing');
+  };
+
+  const pickSheet = (i: number) => {
+    sheetName.current = sheets[i]?.name ?? null;
+    setSheet(i);
   };
 
   const setFile = (i: 0 | 1, f: File) => {
@@ -142,6 +183,7 @@ export function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return; // don't hijack ⌘S etc.
       if ((e.target as HTMLElement)?.closest?.('input,select,textarea')) return;
       if (e.key === 'u') setLayout('unified');
       if (e.key === 's') setLayout('split');
@@ -157,7 +199,8 @@ export function App() {
     a.href = URL.createObjectURL(blob);
     a.download = `${current.name}.diff.csv`;
     a.click();
-    URL.revokeObjectURL(a.href);
+    // Revoking synchronously can cancel the download in Firefox/Safari.
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   };
 
   const keyChoices = useMemo(() => diff?.columns.filter((c) => c.oldIndex >= 0 && c.newIndex >= 0).map((c) => c.name) ?? [], [diff]);
@@ -171,9 +214,9 @@ export function App() {
         </div>
         {loaded && (
           <div className="files">
-            <FileChip side="old" name={loaded.names[0]} onPick={(f) => setFile(0, f)} />
+            <FileChip side="old" name={loaded.names[0]} onPick={files[0] && files[1] ? (f) => setFile(0, f) : undefined} />
             <span className="arrow">→</span>
-            <FileChip side="new" name={loaded.names[1]} onPick={(f) => setFile(1, f)} />
+            <FileChip side="new" name={loaded.names[1]} onPick={files[0] && files[1] ? (f) => setFile(1, f) : undefined} />
           </div>
         )}
         <div className="spacer" />
@@ -249,7 +292,7 @@ export function App() {
                 const st = s.diff.stats;
                 const n = st.rowsAdded + st.rowsRemoved + st.rowsModified;
                 return (
-                  <button key={s.name} role="tab" aria-selected={i === sheet} className={`tab ${s.status}`} onClick={() => setSheet(i)}>
+                  <button key={s.name} role="tab" aria-selected={i === sheet} className={`tab ${s.status}`} onClick={() => pickSheet(i)}>
                     <span className="dot" />
                     {s.name}
                     {s.status === 'added' ? <em>new</em> : s.status === 'removed' ? <em>deleted</em> : n > 0 ? <em>{fmt(n)}</em> : null}
@@ -282,7 +325,7 @@ export function App() {
             {selected ? <Inspector cell={selected} /> : <span className="hint">Click a cell to inspect · <kbd>n</kbd>/<kbd>p</kbd> next/prev change · <kbd>u</kbd>/<kbd>s</kbd> unified/split · arrows move</span>}
             <div className="spacer" />
             <span className="timing">
-              {fmt(diff.oldTable.rows.length)} → {fmt(diff.newTable.rows.length)} rows · {diff.columns.length} cols · parse {ms(loaded.timings.parse)} · diff {ms(loaded.timings.diff)} · transfer {ms(loaded.timings.transfer)}
+              {fmt(diff.oldTable.rows.length)} → {fmt(diff.newTable.rows.length)} rows · {diff.columns.length} cols · {source.current?.kind === 'synthetic' ? 'generate + parse' : 'parse'} {ms(loaded.timings.parse)} · diff {ms(loaded.timings.diff)} · transfer {ms(loaded.timings.transfer)}
             </span>
           </footer>
         </>
@@ -344,24 +387,47 @@ function DropZone({ side, file, onFile }: { side: 'old' | 'new'; file: File | nu
         if (fs[0]) onFile(fs[0]);
       }}
       onClick={() => input.current?.click()}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          input.current?.click();
+        }
+      }}
       role="button"
       tabIndex={0}
     >
       <span className="drop-label">{side === 'old' ? 'Before' : 'After'}</span>
       <span className="drop-name">{file ? file.name : 'Drop a file or click to choose'}</span>
       <span className="drop-hint">.csv · .tsv · .xlsx</span>
-      <input ref={input} type="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm" hidden onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
+      <input ref={input} type="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm" hidden onChange={(e) => {
+        const f = e.target.files?.[0];
+        e.target.value = ''; // so choosing the same file again still fires
+        if (f) onFile(f);
+      }} />
     </div>
   );
 }
 
-function FileChip({ side, name, onPick }: { side: 'old' | 'new'; name: string; onPick: (f: File) => void }) {
+function FileChip({ side, name, onPick }: { side: 'old' | 'new'; name: string; onPick?: (f: File) => void }) {
   const input = useRef<HTMLInputElement>(null);
+  // Replacing one side only makes sense when both sides are real files.
+  if (!onPick) {
+    return (
+      <span className={`file-chip ${side}`}>
+        <span className="dot" />
+        {name}
+      </span>
+    );
+  }
   return (
     <button className={`file-chip ${side}`} onClick={() => input.current?.click()} title="Replace file">
       <span className="dot" />
       {name}
-      <input ref={input} type="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm" hidden onChange={(e) => e.target.files?.[0] && onPick(e.target.files[0])} />
+      <input ref={input} type="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm" hidden onChange={(e) => {
+        const f = e.target.files?.[0];
+        e.target.value = '';
+        if (f) onPick(f);
+      }} />
     </button>
   );
 }

@@ -30,7 +30,7 @@ type Normalizer = (v: CellValue) => string;
 function makeNormalizer(o: Required<DiffOptions>): Normalizer {
   return (v) => {
     if (v === null || v === undefined) return '';
-    if (typeof v === 'number') return Number.isFinite(v) ? String(v) : String(v);
+    if (typeof v === 'number') return String(v);
     if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
     let s = v;
     if (o.trimWhitespace) s = s.trim();
@@ -97,6 +97,8 @@ export function diffTables(oldTable: Table, newTable: Table, options: DiffOption
     .filter(({ c }) => c.oldIndex >= 0 && c.newIndex >= 0);
   const of = oldTable.formulas;
   const nf = newTable.formulas;
+  // Compare formulas only when both sources can carry them (XLSX vs. XLSX);
+  // against a CSV every formula would otherwise look like a change.
   const checkFormulas = o.compareFormulas && !!of && !!nf;
   const stats: DiffStats = {
     rowsAdded: 0,
@@ -207,11 +209,16 @@ export function hasChanges(d: TableDiff): boolean {
 // ---------------------------------------------------------------------------
 
 function alignColumns(oldCols: string[], newCols: string[]): AlignedColumn[] {
-  const oldIndex = new Map<string, number>();
-  oldCols.forEach((n, i) => oldIndex.set(n, i));
+  // Duplicate names (possible in hand-built tables) match in order.
+  const oldIndex = new Map<string, number[]>();
+  oldCols.forEach((n, i) => {
+    const q = oldIndex.get(n);
+    if (q) q.push(i);
+    else oldIndex.set(n, [i]);
+  });
   const used = new Set<number>();
   const out: AlignedColumn[] = newCols.map((name, ni) => {
-    const oi = oldIndex.get(name);
+    const oi = oldIndex.get(name)?.shift();
     if (oi !== undefined) {
       used.add(oi);
       return { oldIndex: oi, newIndex: ni, name, status: 'equal', changes: 0 };
@@ -236,7 +243,9 @@ function alignColumns(oldCols: string[], newCols: string[]): AlignedColumn[] {
   return out;
 }
 
-const KEY_NAME = /^(id|key|uuid|guid|sku|code|.*[ _-]id|.*Id)$/;
+// "id", "ID", "Order ID", "order_id", "customerId" — but not "paid" or "valid".
+const isKeyName = (name: string) =>
+  /^(id|key|uuid|guid|sku|code)$/i.test(name) || /[ _.-](id|key|code)$/i.test(name) || /[a-z0-9](Id|ID)$/.test(name);
 
 function resolveKeys(
   oldTable: Table,
@@ -256,7 +265,7 @@ function resolveKeys(
   // Auto: only id-like column names, leftmost first, with unique non-empty
   // values on both sides. A "name" column would turn renames into
   // remove + add, so plain data columns never become keys implicitly.
-  const candidates = shared.filter((c) => KEY_NAME.test(c.name)).sort((x, y) => x.newIndex - y.newIndex);
+  const candidates = shared.filter((c) => isKeyName(c.name)).sort((x, y) => x.newIndex - y.newIndex);
   for (const c of candidates.slice(0, 4)) {
     if (isUniqueKey(oldTable, c.oldIndex, norm) && isUniqueKey(newTable, c.newIndex, norm)) {
       // A key that matches almost nothing (e.g. regenerated ids) is worse than none.
@@ -420,19 +429,20 @@ function detectRenames(
     let bestScore = 0.8;
     for (const ac of added) {
       if (merged.has(ac)) continue;
+      // Score only rows where either side has a value: two mostly-empty
+      // columns are "equal" on their blanks and would otherwise pair up.
       let same = 0;
       let total = 0;
-      let nonEmpty = 0;
       for (let s = 0; s < matched.length; s += step) {
         const k = matched[s];
         const x = oldTable.rows[pairs[k]][rc.oldIndex] ?? null;
         const y = newTable.rows[pairs[k + 1]][ac.newIndex] ?? null;
+        if ((x === null || x === '') && (y === null || y === '')) continue;
         total++;
-        if (x !== null && x !== '') nonEmpty++;
         if (equal(x, y)) same++;
       }
-      const score = same / total;
-      if (nonEmpty > 0 && score >= bestScore) {
+      const score = total ? same / total : 0;
+      if (total >= Math.min(3, matched.length) && score >= bestScore) {
         best = ac;
         bestScore = score;
       }
@@ -444,5 +454,6 @@ function detectRenames(
       merged.add(best);
     }
   }
-  return columns.filter((c) => !(c.status === 'removed' && [...merged].some((m) => m.oldIndex === c.oldIndex)));
+  const mergedOld = new Set([...merged].map((m) => m.oldIndex));
+  return columns.filter((c) => !(c.status === 'removed' && mergedOld.has(c.oldIndex)));
 }

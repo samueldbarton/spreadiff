@@ -55,7 +55,10 @@ export interface DiffGridOptions<A = unknown> {
   hideUnchangedColumns?: boolean;
   /** Columns pinned to the left. `'keys'` pins the diff's key columns. Default `'keys'`. */
   frozenColumns?: number | 'keys';
-  /** Added to the 0-based row index for display. Default 2 (1-based, after a header row). */
+  /**
+   * Added to the 0-based row index for display. Defaults to the table's
+   * `origin` (real sheet row numbers), or 2 (1-based, after a header row).
+   */
   rowNumberOffset?: number;
   /** Force a color scheme. Default follows the page (`system`). */
   theme?: 'system' | 'light' | 'dark';
@@ -135,7 +138,7 @@ export class DiffGrid<A = unknown> {
   private widthOverrides = new Map<number, number>();
   private numericCols: Uint8Array = new Uint8Array(0);
   private expanded = new Set<string>();
-  private annotationEls = new Map<CellAnnotation<A>, { el: HTMLElement; height: number }>();
+  private annotationEls = new Map<CellAnnotation<A>, { el: HTMLElement; height: number; ro: ResizeObserver }>();
   private cellMarks = new Set<string>();
   private width = 0;
   private height = 0;
@@ -145,6 +148,8 @@ export class DiffGrid<A = unknown> {
   private selected: { row: number; col: number } | null = null;
   private tooltipTimer = 0;
   private resizing: { vcol: number; startX: number; startW: number } | null = null;
+  private lastPointer: { x: number; y: number } | null = null;
+  private themeFrame = 0;
   private textCache = new Map<string, string>();
   private minimapCache: { key: string; colors: (string | null)[] } | null = null;
   private cleanups: (() => void)[] = [];
@@ -190,31 +195,45 @@ export class DiffGrid<A = unknown> {
   }
 
   setDiff(diff: TableDiff): void {
-    const changed = this.diff !== diff;
+    if (this.diff === diff) return;
     this.diff = diff;
-    if (changed) {
-      this.expanded.clear();
-      this.selected = null;
-      this.widthOverrides.clear();
-      this.scroller.scrollTop = 0;
-      this.scroller.scrollLeft = 0;
-    }
+    this.expanded.clear();
+    this.selected = null;
+    this.hover = null;
+    this.widthOverrides.clear();
+    this.scroller.scrollTop = 0;
+    this.scroller.scrollLeft = 0;
     if (!this.theme) this.refreshTheme();
     this.measureColumns();
     this.syncAnnotations();
     this.relayout();
   }
 
+  /**
+   * Merge options. Cheap to call on every render (as the React wrapper does):
+   * only options that actually changed trigger re-measuring or re-layout.
+   */
   setOptions(next: Partial<DiffGridOptions<A>>): void {
     const prev = this.options;
+    const changed = (Object.keys(next) as (keyof DiffGridOptions<A>)[]).filter((k) =>
+      // Inline `columnWidths={{…}}` objects are new every render; compare contents.
+      k === 'columnWidths' ? !shallowEqual(next[k], prev[k]) : next[k] !== prev[k],
+    );
+    if (!changed.length) return;
     this.options = { ...prev, ...next };
-    if (next.theme !== undefined && next.theme !== prev.theme) {
+    const has = (...keys: (keyof DiffGridOptions<A>)[]) => keys.some((k) => changed.includes(k));
+    if (has('theme')) {
       this.applyThemeAttr();
       this.refreshTheme();
     }
-    if (next.columnWidths !== undefined) this.measureColumns();
-    if (next.annotations !== undefined || next.renderAnnotation !== undefined) this.syncAnnotations();
-    if (this.diff) this.relayout();
+    if (!this.diff) return;
+    if (has('columnWidths')) this.measureColumns();
+    if (has('annotations', 'renderAnnotation')) this.syncAnnotations();
+    if (has('layout', 'collapseUnchanged', 'context', 'hideUnchangedColumns', 'frozenColumns', 'columnWidths', 'annotations', 'renderAnnotation', 'rowNumberOffset', 'minimap')) {
+      this.relayout();
+    } else {
+      this.schedule();
+    }
   }
 
   getOptions(): Readonly<DiffGridOptions<A>> {
@@ -265,6 +284,8 @@ export class DiffGrid<A = unknown> {
 
   /** Re-read CSS variables (call after changing them programmatically). */
   refreshTheme(): void {
+    // Computed styles of a detached element are empty; resolve on attach.
+    if (!this.host.isConnected && this.theme) return;
     this.theme = resolveTheme(this.shadow, this.host);
     this.hatch = this.makeHatch();
     this.textCache.clear();
@@ -274,6 +295,8 @@ export class DiffGrid<A = unknown> {
 
   cleanUp(): void {
     this.detach();
+    for (const info of this.annotationEls.values()) info.ro.disconnect();
+    this.annotationEls.clear();
     this.host.remove();
     this.container = null;
     this.diff = null;
@@ -293,11 +316,15 @@ export class DiffGrid<A = unknown> {
     };
     on(this.scroller, 'scroll', () => {
       this.hideTooltip();
+      // Content moved under a still pointer: re-hit-test so the hover
+      // highlight follows the cursor, not the row it was over.
+      if (this.lastPointer && !this.resizing) this.hover = this.hitTest(this.lastPointer.x, this.lastPointer.y);
       this.schedule();
     }, { passive: true });
     on(this.scroller, 'pointermove', (e) => this.onPointerMove(e));
     on(this.scroller, 'pointerleave', () => {
       if (this.resizing) return;
+      this.lastPointer = null;
       this.hover = null;
       this.hideTooltip();
       this.options.onCellHover?.(null);
@@ -306,13 +333,37 @@ export class DiffGrid<A = unknown> {
     on(this.scroller, 'pointerdown', (e) => this.onPointerDown(e));
     on(this.scroller, 'keydown', (e) => this.onKeyDown(e));
 
+    // Observe the scroller, not the host: its client box shrinks when a
+    // scrollbar appears, which the host's size never reflects.
     const ro = new ResizeObserver(() => this.resize());
-    ro.observe(this.host);
+    ro.observe(this.scroller);
     this.cleanups.push(() => ro.disconnect());
 
-    // Re-resolve colors when the page's scheme or theme attributes change.
+    // Web fonts finishing late would leave canvas text in the fallback face.
+    const fonts = document.fonts;
+    if (fonts) {
+      const onFonts = () => {
+        this.textCache.clear();
+        if (this.diff) {
+          this.measureColumns();
+          this.relayoutColumns();
+        }
+      };
+      fonts.addEventListener('loadingdone', onFonts);
+      this.cleanups.push(() => fonts.removeEventListener('loadingdone', onFonts));
+      void fonts.ready.then(() => this.container && onFonts());
+    }
+
+    // Re-resolve colors when the page's scheme or theme attributes change
+    // (coalesced: apps may touch <html> attributes many times per frame).
     const mq = matchMedia('(prefers-color-scheme: dark)');
-    const onScheme = () => this.refreshTheme();
+    const onScheme = () => {
+      if (this.themeFrame) return;
+      this.themeFrame = requestAnimationFrame(() => {
+        this.themeFrame = 0;
+        this.refreshTheme();
+      });
+    };
     mq.addEventListener('change', onScheme);
     this.cleanups.push(() => mq.removeEventListener('change', onScheme));
     const mo = new MutationObserver(onScheme);
@@ -320,13 +371,18 @@ export class DiffGrid<A = unknown> {
     mo.observe(document.documentElement, watch);
     if (this.container) mo.observe(this.container, watch);
     this.cleanups.push(() => mo.disconnect());
+    // Colors resolved while detached (or under another container) are stale.
+    if (this.theme) this.refreshTheme();
     this.resize();
   }
 
   private detach(): void {
     for (const fn of this.cleanups.splice(0)) fn();
     cancelAnimationFrame(this.frame);
+    cancelAnimationFrame(this.themeFrame);
     this.frame = 0;
+    this.themeFrame = 0;
+    this.hideTooltip();
   }
 
   private applyThemeAttr(): void {
@@ -340,9 +396,11 @@ export class DiffGrid<A = unknown> {
     const h = this.scroller.clientHeight;
     const dpr = window.devicePixelRatio || 1;
     if (w === this.width && h === this.height && dpr === this.dpr) return;
+    const dprChanged = dpr !== this.dpr;
     this.width = w;
     this.height = h;
     this.dpr = dpr;
+    if (dprChanged && this.theme) this.hatch = this.makeHatch();
     for (const [c, cw] of [
       [this.canvas, w],
       [this.minimap, MINIMAP_WIDTH],
@@ -392,7 +450,13 @@ export class DiffGrid<A = unknown> {
       separatorHeight: SEPARATOR_HEIGHT,
       annotationsAfter,
     });
+    this.minimapCache = null;
+    this.relayoutColumns();
+  }
 
+  /** Recompute column geometry only (resizing a column must not walk every row). */
+  private relayoutColumns(): void {
+    const diff = this.diff!;
     const keys = new Set(diff.keyColumns);
     const visible: number[] = [];
     diff.columns.forEach((c, i) => {
@@ -409,10 +473,9 @@ export class DiffGrid<A = unknown> {
       visible.splice(0, visible.length, ...keyCols, ...rest);
       frozenCount = keyCols.length;
     } else {
-      frozenCount = frozenOpt;
+      frozenCount = Math.max(0, frozenOpt);
     }
     this.cols = computeColumnLayout(visible, (i) => this.widthOverrides.get(i) ?? this.widths[i], frozenCount);
-    this.minimapCache = null;
     this.updateSpacer();
     this.schedule();
   }
@@ -429,7 +492,10 @@ export class DiffGrid<A = unknown> {
 
   private panes(): PaneGeometry[] {
     const w = this.width - this.minimapWidth;
-    const digits = String(Math.max(this.diff?.oldTable.rows.length ?? 0, this.diff?.newTable.rows.length ?? 0) + (this.options.rowNumberOffset ?? 2)).length;
+    const digits = String(Math.max(
+      (this.diff?.oldTable.rows.length ?? 0) + this.rowOffset('old'),
+      (this.diff?.newTable.rows.length ?? 0) + this.rowOffset('new'),
+    )).length;
     const numW = Math.max(28, digits * 7.5 + 14);
     if (this.layout === 'split') {
       const pw = Math.floor((w - SPLIT_DIVIDER) / 2);
@@ -442,11 +508,26 @@ export class DiffGrid<A = unknown> {
     return [{ x: 0, width: w, gutter: numW * 2 + BAR_WIDTH + 16, side: 'unified' }];
   }
 
+  /** Display row number = index + this. Real sheet rows when the table knows its origin. */
+  private rowOffset(side: 'old' | 'new'): number {
+    if (this.options.rowNumberOffset !== undefined) return this.options.rowNumberOffset;
+    const t = side === 'old' ? this.diff?.oldTable : this.diff?.newTable;
+    return t?.origin ? t.origin.row + 1 : 2;
+  }
+
+  private columnLetter(col: AlignedColumn, side: 'old' | 'new'): string {
+    const diff = this.diff!;
+    const useOld = side === 'old' || col.newIndex < 0;
+    const idx = useOld ? col.oldIndex : col.newIndex;
+    const origin = (useOld ? diff.oldTable : diff.newTable).origin?.col ?? 0;
+    return columnLabel(idx + origin);
+  }
+
   private measureColumns(): void {
     const diff = this.diff!;
     const ctx = this.ctx;
     const t = this.theme;
-    const sample = 400;
+    const rows = this.sampleRows(400);
     this.numericCols = new Uint8Array(diff.columns.length);
     this.widths = diff.columns.map((c, i) => {
       const fixed = this.options.columnWidths?.[c.name];
@@ -454,14 +535,12 @@ export class DiffGrid<A = unknown> {
       let header = ctx.measureText(c.status === 'renamed' ? `${c.oldName} → ${c.name}` : c.status === 'equal' ? c.name : `+ ${c.name}`).width;
       if (c.status === 'renamed') header += 20;
       ctx.font = `500 ${t.fontSize - 3}px ${t.monoFontFamily}`;
-      header += ctx.measureText(columnLabel(Math.max(c.oldIndex, c.newIndex))).width + 6;
+      header += ctx.measureText(this.columnLetter(c, 'new')).width + 6;
       header += CELL_PAD * 2 + 4 + (c.changes ? 30 : 0);
       ctx.font = `${t.fontSize}px ${t.fontFamily}`;
       const ws: number[] = [];
       let numeric = 0;
       let nonEmpty = 0;
-      // Sample around the changes first: that's what people look at.
-      const rows = this.sampleRows(sample);
       for (const r of rows) {
         for (const [table, idx, ri] of [
           [diff.oldTable, c.oldIndex, diff.oldRows[r]],
@@ -506,6 +585,7 @@ export class DiffGrid<A = unknown> {
     const keep = new Set(list);
     for (const [a, info] of this.annotationEls) {
       if (!keep.has(a) || !render) {
+        info.ro.disconnect();
         info.el.remove();
         this.annotationEls.delete(a);
       }
@@ -520,8 +600,6 @@ export class DiffGrid<A = unknown> {
       wrap.style.cssText = 'position:absolute;left:0;top:0;box-sizing:border-box;pointer-events:auto;';
       wrap.appendChild(content);
       this.host.appendChild(wrap);
-      const info = { el: wrap, height: Math.max(1, wrap.offsetHeight || 40) };
-      this.annotationEls.set(a, info);
       const ro = new ResizeObserver(() => {
         const h = Math.max(1, wrap.offsetHeight);
         if (h !== info.height) {
@@ -529,8 +607,9 @@ export class DiffGrid<A = unknown> {
           if (this.diff) this.relayout();
         }
       });
+      const info = { el: wrap, height: Math.max(1, wrap.offsetHeight || 40), ro };
+      this.annotationEls.set(a, info);
       ro.observe(wrap);
-      this.cleanups.push(() => ro.disconnect());
     }
   }
 
@@ -545,7 +624,7 @@ export class DiffGrid<A = unknown> {
     }
     const width = this.width - this.minimapWidth;
     for (const [row, els] of byRow) {
-      const d = this.rows.displayOf[row];
+      const d = this.rows.displayOf[row] ?? -1; // out-of-range rows: hidden
       els.forEach((e, k) => {
         if (d < 0) {
           e.style.display = 'none';
@@ -574,6 +653,12 @@ export class DiffGrid<A = unknown> {
   /** Draw synchronously. Exposed for benchmarks. */
   drawNow(): void {
     if (!this.diff || !this.theme || this.width === 0) return;
+    // Window moved to a display with a different pixel ratio.
+    if ((window.devicePixelRatio || 1) !== this.dpr) {
+      this.width = 0;
+      this.resize();
+      return;
+    }
     const ctx = this.ctx;
     const t = this.theme;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
@@ -745,6 +830,21 @@ export class DiffGrid<A = unknown> {
       }
     }
 
+    let oldText = formatCell(oldV ?? null);
+    let newText = formatCell(newV ?? null);
+    if (changed && oldText === newText) {
+      // Same display text, different cell: a formula-only change, or digits
+      // beyond display precision. Show what actually differs.
+      const of = oi >= 0 ? diff.oldTable.formulas?.[oi]?.[col.oldIndex] ?? null : null;
+      const nf = ni >= 0 ? diff.newTable.formulas?.[ni]?.[col.newIndex] ?? null : null;
+      if (of !== nf) {
+        oldText = of ?? oldText;
+        newText = nf ?? newText;
+      } else {
+        oldText = String(oldV);
+        newText = String(newV);
+      }
+    }
     if (changed && p.side === 'unified') {
       // Old value over new value, each on its own tinted band.
       const half = Math.floor(h / 2);
@@ -753,13 +853,12 @@ export class DiffGrid<A = unknown> {
       ctx.fillStyle = t.addedEmphasis;
       ctx.fillRect(x, y + half, w - 1, h - half);
       const small = `${t.fontSize - 1}px ${t.fontFamily}`;
-      this.text(formatCell(oldV ?? null), x, y + half / 2 + 0.5, w, align, small, t.removedFg, true);
-      this.text(formatCell(newV ?? null), x, y + half + (h - half) / 2 + 0.5, w, align, font, t.fg);
+      this.text(oldText, x, y + half / 2 + 0.5, w, align, small, t.removedFg, true);
+      this.text(newText, x, y + half + (h - half) / 2 + 0.5, w, align, font, t.fg);
     } else if (changed) {
       ctx.fillStyle = p.side === 'old' ? t.removedEmphasis : t.addedEmphasis;
       ctx.fillRect(x, y, w - 1, h);
-      const v = p.side === 'old' ? oldV : newV;
-      this.text(formatCell(v ?? null), x, y + h / 2 + 0.5, w, align, font, t.fg);
+      this.text(p.side === 'old' ? oldText : newText, x, y + h / 2 + 0.5, w, align, font, t.fg);
     } else {
       const v = p.side === 'old' ? oldV : p.side === 'new' ? newV : newV !== undefined ? newV : oldV;
       let color = t.fg;
@@ -782,7 +881,8 @@ export class DiffGrid<A = unknown> {
     const ctx = this.ctx;
     const t = this.theme;
     const diff = this.diff!;
-    const off = this.options.rowNumberOffset ?? 2;
+    const offOld = this.rowOffset('old');
+    const offNew = this.rowOffset('new');
     const bg =
       missing ? t.gutterBg
       : status === ROW_STATUS.added ? t.addedBg
@@ -812,8 +912,8 @@ export class DiffGrid<A = unknown> {
     const ni = diff.newRows[r];
     if (p.side === 'unified') {
       const numW = (p.gutter - BAR_WIDTH - 16) / 2;
-      if (oi >= 0) this.text(String(oi + off), p.x + BAR_WIDTH, cy, numW, 'right', mono, numColor);
-      if (ni >= 0) this.text(String(ni + off), p.x + BAR_WIDTH + numW, cy, numW, 'right', mono, numColor);
+      if (oi >= 0) this.text(String(oi + offOld), p.x + BAR_WIDTH, cy, numW, 'right', mono, numColor);
+      if (ni >= 0) this.text(String(ni + offNew), p.x + BAR_WIDTH + numW, cy, numW, 'right', mono, numColor);
       const sign = status === ROW_STATUS.added ? '+' : status === ROW_STATUS.removed ? '−' : status === ROW_STATUS.modified ? '~' : '';
       if (sign) {
         ctx.font = `600 ${t.fontSize}px ${t.monoFontFamily}`;
@@ -823,6 +923,7 @@ export class DiffGrid<A = unknown> {
       }
     } else if (!missing) {
       const idx = p.side === 'old' ? oi : ni;
+      const off = p.side === 'old' ? offOld : offNew;
       if (idx >= 0) this.text(String(idx + off), p.x + BAR_WIDTH, cy, p.gutter - BAR_WIDTH, 'right', mono, numColor);
     }
     vline(this.ctx, p.x + p.gutter, y, y + h, t.border);
@@ -934,8 +1035,7 @@ export class DiffGrid<A = unknown> {
     }
     vline(ctx, x + w, 0, HEADER_HEIGHT, t.border);
     if (missing) return;
-    const letterIdx = p.side === 'old' ? col.oldIndex : col.newIndex >= 0 ? col.newIndex : col.oldIndex;
-    const letter = columnLabel(letterIdx);
+    const letter = this.columnLetter(col, p.side === 'old' ? 'old' : 'new');
     const small = `500 ${t.fontSize - 3}px ${t.monoFontFamily}`;
     ctx.font = small;
     const lw = ctx.measureText(letter).width;
@@ -989,10 +1089,12 @@ export class DiffGrid<A = unknown> {
     ctx.fillStyle = t.gutterBg;
     ctx.fillRect(0, 0, mw, h);
     vline(ctx, 0, 0, h, t.border);
-    const total = this.rows.offsets[this.rows.count];
-    if (total <= 0) return;
     const trackTop = HEADER_HEIGHT;
     const trackH = h - trackTop;
+    // Scale to at least the viewport, so a short diff isn't stretched to
+    // fill the strip (4 rows would otherwise look like the whole file).
+    const total = Math.max(this.rows.offsets[this.rows.count], trackH);
+    if (this.rows.count === 0 || trackH <= 0) return;
     const key = `${this.rows.count}:${total}:${trackH}`;
     if (this.minimapCache?.key !== key) {
       const colors: (string | null)[] = new Array(Math.ceil(trackH)).fill(null);
@@ -1130,10 +1232,11 @@ export class DiffGrid<A = unknown> {
   }
 
   private onPointerMove(e: PointerEvent): void {
+    this.lastPointer = { x: e.clientX, y: e.clientY };
     if (this.resizing) {
       const w = Math.max(MIN_COL / 2, this.resizing.startW + e.clientX - this.resizing.startX);
       this.widthOverrides.set(this.cols.cols[this.resizing.vcol], Math.round(w));
-      this.relayout();
+      this.relayoutColumns();
       return;
     }
     const hit = this.hitTest(e.clientX, e.clientY);
@@ -1162,16 +1265,15 @@ export class DiffGrid<A = unknown> {
       this.resizing = { vcol: hit.resize, startX: e.clientX, startW: this.cols.widths[hit.resize] };
       const up = () => {
         this.resizing = null;
-        this.scroller.removeEventListener('pointerup', up);
-        this.minimapCache = null;
+        for (const t of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) this.scroller.removeEventListener(t, up);
       };
-      this.scroller.addEventListener('pointerup', up);
+      for (const t of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) this.scroller.addEventListener(t, up);
       return;
     }
     if (hit.area === 'minimap') {
       const rect = this.scroller.getBoundingClientRect();
       const frac = (e.clientY - rect.top - HEADER_HEIGHT) / (this.height - HEADER_HEIGHT);
-      const total = this.rows.offsets[this.rows.count];
+      const total = Math.max(this.rows.offsets[this.rows.count], this.height - HEADER_HEIGHT);
       this.scroller.scrollTop = Math.max(0, frac * total - (this.height - HEADER_HEIGHT) / 2);
       return;
     }
@@ -1200,9 +1302,21 @@ export class DiffGrid<A = unknown> {
       }
       return;
     }
+    const firstDataRowFrom = (d: number) => {
+      while (d < this.rows.count && this.rows.kind[d] !== ROW_KIND.data) d++;
+      return d < this.rows.count ? d : -1;
+    };
     const move = (dr: number, dc: number) => {
-      const sel = this.selected ?? { row: this.rows.ref[Math.max(0, rowAt(this.rows, this.scroller.scrollTop))] ?? 0, col: this.cols.cols[0] };
-      let d = this.rows.displayOf[sel.row];
+      if (!this.cols.cols.length) return;
+      let d = this.selected ? this.rows.displayOf[this.selected.row] : -1;
+      const col = this.selected?.col ?? this.cols.cols[0];
+      if (d < 0) {
+        // No (visible) selection yet: start at the first row in view.
+        d = firstDataRowFrom(Math.max(0, rowAt(this.rows, this.scroller.scrollTop)));
+        if (d < 0) return;
+        dr = 0;
+      }
+      const sel = { row: this.rows.ref[d], col };
       if (dr) {
         do d += dr;
         while (d >= 0 && d < this.rows.count && this.rows.kind[d] !== ROW_KIND.data);
@@ -1235,9 +1349,9 @@ export class DiffGrid<A = unknown> {
         move(0, -1);
         break;
       case 'ArrowRight':
-      case 'Tab':
-        move(0, e.shiftKey && e.key === 'Tab' ? -1 : 1);
+        move(0, 1);
         break;
+      // Tab is deliberately not handled: it must move focus out of the grid.
       case 'Escape':
         this.select(null);
         break;
@@ -1338,8 +1452,7 @@ export class DiffGrid<A = unknown> {
             .map((s) => (s.kind === 'equal' ? esc(s.text) : kind === 'removed' ? `<del>${esc(s.text)}</del>` : `<ins>${esc(s.text)}</ins>`))
             .join('')
         : esc(kind === 'removed' ? before : after);
-    const off = this.options.rowNumberOffset ?? 2;
-    const rowLabel = info.newRow >= 0 ? `row ${info.newRow + off}` : `row ${info.oldRow + off}`;
+    const rowLabel = info.newRow >= 0 ? `row ${info.newRow + this.rowOffset('new')}` : `row ${info.oldRow + this.rowOffset('old')}`;
     let html = `<div class="sd-tt-head"><span class="sd-tt-col">${esc(info.column.name)}</span><span>${rowLabel}</span></div>`;
     html += `<div class="sd-tt-row sd-tt-old"><span class="sd-tt-sign">−</span><span class="sd-tt-val">${side('removed') || '<i>empty</i>'}</span></div>`;
     html += `<div class="sd-tt-row sd-tt-new"><span class="sd-tt-sign">+</span><span class="sd-tt-val">${side('added') || '<i>empty</i>'}</span></div>`;
@@ -1384,6 +1497,14 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string): HTMLEle
   const e = document.createElement(tag);
   e.className = cls;
   return e;
+}
+
+function shallowEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false;
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  return ka.length === kb.length && ka.every((k) => (a as Record<string, unknown>)[k] === (b as Record<string, unknown>)[k]);
 }
 
 function colAt(cols: ColumnLayout, x: number): number {

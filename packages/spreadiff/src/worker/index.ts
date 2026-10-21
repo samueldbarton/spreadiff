@@ -26,11 +26,23 @@ export function createDiffWorker(worker: Worker) {
     if (e.data.error) p.reject(new Error(e.data.error));
     else p.resolve({ result: unpackWorkbookDiff(e.data.packed), timings: e.data.timings });
   };
+  // A crashed worker (e.g. out of memory on a huge file) never replies;
+  // fail every pending request instead of leaving them hanging forever.
+  const failAll = (message: string) => {
+    for (const p of pending.values()) p.reject(new Error(message));
+    pending.clear();
+  };
+  worker.onerror = (e) => {
+    e.preventDefault?.();
+    failAll(e.message || 'Diff worker crashed (possibly out of memory)');
+  };
+  worker.onmessageerror = () => failAll('Diff worker sent an unreadable message');
   return {
     async diffFiles(oldFile: File, newFile: File, options?: DiffOptions, parse?: { header?: boolean }) {
       const [a, b] = await Promise.all([oldFile.arrayBuffer(), newFile.arrayBuffer()]);
       return this.diffBuffers({ name: oldFile.name, data: a }, { name: newFile.name, data: b }, options, parse);
     },
+    /** Note: the buffers are transferred to the worker and become unusable here. */
     diffBuffers(
       oldData: { name: string; data: ArrayBuffer },
       newData: { name: string; data: ArrayBuffer },
@@ -44,6 +56,9 @@ export function createDiffWorker(worker: Worker) {
         worker.postMessage(msg, [oldData.data, newData.data]);
       });
     },
-    terminate: () => worker.terminate(),
+    terminate: () => {
+      worker.terminate();
+      failAll('Diff worker terminated');
+    },
   };
 }

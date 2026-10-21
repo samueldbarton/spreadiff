@@ -167,5 +167,6 @@ describe('pack/unpack', () => {
     expect(u.rows[2][0]).toBe('y�z');
     expect(u.rows[2][1]).toBeNaN();
     expect(u.formulas).toEqual(t.formulas);
+    expect(unpackTable(packTable({ ...t, origin: { row: 4, col: 2 } })).origin).toEqual({ row: 4, col: 2 });
   });
 });

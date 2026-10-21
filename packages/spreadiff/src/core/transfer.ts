@@ -17,6 +17,7 @@ export interface PackedTable {
   /** String cells joined by U+0000, in row-major order. */
   strings: string;
   formulas?: (string | null)[][];
+  origin?: { row: number; col: number };
 }
 
 const SEP = '\u0000';
@@ -42,7 +43,7 @@ export function packTable(t: Table): PackedTable {
       } else types[i] = v ? 3 : 4;
     }
   }
-  return { name: t.name, columns: t.columns, width, height, types, numbers, strings: parts.join(SEP), formulas: t.formulas };
+  return { name: t.name, columns: t.columns, width, height, types, numbers, strings: parts.join(SEP), formulas: t.formulas, origin: t.origin };
 }
 
 export function unpackTable(p: PackedTable): Table {
@@ -61,6 +62,7 @@ export function unpackTable(p: PackedTable): Table {
   }
   const t: Table = { name: p.name, columns: p.columns, rows };
   if (p.formulas) t.formulas = p.formulas;
+  if (p.origin) t.origin = p.origin;
   return t;
 }
 
