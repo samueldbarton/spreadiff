@@ -297,8 +297,15 @@ function alignByKey(
   pairs: number[],
 ): void {
   const keyCols = keys.map((k) => columns.find((c) => c.name === k)!);
-  const keyOf = (row: CellValue[], side: 'oldIndex' | 'newIndex') =>
-    keyCols.map((c) => norm(row[c[side]] ?? null)).join('\u0001');
+  // Length-prefixed, so values containing the separator can't collide.
+  const keyOf = (row: CellValue[], side: 'oldIndex' | 'newIndex') => {
+    let k = '';
+    for (const c of keyCols) {
+      const v = norm(row[c[side]] ?? null);
+      k += v.length + ':' + v;
+    }
+    return k;
+  };
   const oldByKey = new Map<string, number[]>();
   oldTable.rows.forEach((r, i) => {
     const k = keyOf(r, 'oldIndex');
@@ -308,10 +315,16 @@ function alignByKey(
   });
   const matchedOld = new Int32Array(newTable.rows.length).fill(-1);
   const oldUsed = new Uint8Array(oldTable.rows.length);
+  // Duplicate keys match in order. A cursor per key, not Array#shift (O(n)
+  // per call: quadratic when a low-cardinality column is used as the key).
+  const cursor = new Map<string, number>();
   newTable.rows.forEach((r, ni) => {
-    const q = oldByKey.get(keyOf(r, 'newIndex'));
-    if (q && q.length) {
-      const oi = q.shift()!;
+    const k = keyOf(r, 'newIndex');
+    const q = oldByKey.get(k);
+    const at = cursor.get(k) ?? 0;
+    if (q && at < q.length) {
+      const oi = q[at];
+      cursor.set(k, at + 1);
       matchedOld[ni] = oi;
       oldUsed[oi] = 1;
     }
@@ -350,7 +363,10 @@ function alignBySequence(
   const ids = new Map<string, number>();
   const intern = (row: CellValue[], side: 'oldIndex' | 'newIndex') => {
     let s = '';
-    for (const c of shared) s += norm(row[c[side]] ?? null) + '\u0001';
+    for (const c of shared) {
+      const v = norm(row[c[side]] ?? null);
+      s += v.length + ':' + v; // length-prefixed: no separator collisions
+    }
     let id = ids.get(s);
     if (id === undefined) ids.set(s, (id = ids.size));
     return id;
@@ -423,37 +439,63 @@ function detectRenames(
   for (let k = 0; k < pairs.length; k += 2) if (pairs[k] >= 0 && pairs[k + 1] >= 0) matched.push(k);
   if (matched.length === 0) return columns;
   const step = Math.max(1, Math.floor(matched.length / 2000));
+  const isBlank = (v: CellValue) => v === null || v === '';
+  // Score only rows where either side has a value: two mostly-empty
+  // columns are "equal" on their blanks and would otherwise pair up.
+  const score = (rc: AlignedColumn, ac: AlignedColumn) => {
+    let same = 0;
+    let total = 0;
+    for (let s = 0; s < matched.length; s += step) {
+      const k = matched[s];
+      const x = oldTable.rows[pairs[k]][rc.oldIndex] ?? null;
+      const y = newTable.rows[pairs[k + 1]][ac.newIndex] ?? null;
+      if (isBlank(x) && isBlank(y)) continue;
+      total++;
+      if (equal(x, y)) same++;
+    }
+    return total >= Math.min(3, matched.length) ? same / total : 0;
+  };
+  // Candidate order keeps this near-linear on wide sheets where every header
+  // changed: the column in the same relative position, then columns whose
+  // sampled contents hash identically, then (only for small sets) all of them.
+  const fingerprint = (table: Table, col: number, side: 0 | 1) => {
+    let h = '';
+    for (let s = 0, n = 0; s < matched.length && n < 64; s += step, n++) {
+      h += String(table.rows[pairs[matched[s] + side]][col] ?? '') + '\u0000';
+    }
+    return h;
+  };
+  const byPrint = new Map<string, AlignedColumn[]>();
+  for (const ac of added) {
+    const f = fingerprint(newTable, ac.newIndex, 1);
+    const list = byPrint.get(f);
+    if (list) list.push(ac);
+    else byPrint.set(f, [ac]);
+  }
+  const exhaustive = removed.length * added.length <= 4096;
   const merged = new Set<AlignedColumn>();
-  for (const rc of removed) {
+  removed.forEach((rc, i) => {
     let best: AlignedColumn | null = null;
     let bestScore = 0.8;
-    for (const ac of added) {
-      if (merged.has(ac)) continue;
-      // Score only rows where either side has a value: two mostly-empty
-      // columns are "equal" on their blanks and would otherwise pair up.
-      let same = 0;
-      let total = 0;
-      for (let s = 0; s < matched.length; s += step) {
-        const k = matched[s];
-        const x = oldTable.rows[pairs[k]][rc.oldIndex] ?? null;
-        const y = newTable.rows[pairs[k + 1]][ac.newIndex] ?? null;
-        if ((x === null || x === '') && (y === null || y === '')) continue;
-        total++;
-        if (equal(x, y)) same++;
-      }
-      const score = total ? same / total : 0;
-      if (total >= Math.min(3, matched.length) && score >= bestScore) {
+    const consider = (ac: AlignedColumn | undefined) => {
+      if (!ac || merged.has(ac)) return;
+      const sc = score(rc, ac);
+      if (sc >= bestScore && (!best || sc > bestScore)) {
         best = ac;
-        bestScore = score;
+        bestScore = sc;
       }
-    }
+    };
+    consider(added[i]);
+    if (bestScore < 1) for (const ac of byPrint.get(fingerprint(oldTable, rc.oldIndex, 0)) ?? []) consider(ac);
+    if (bestScore < 1 && exhaustive) for (const ac of added) consider(ac);
     if (best) {
-      best.oldIndex = rc.oldIndex;
-      best.oldName = rc.name;
-      best.status = 'renamed';
-      merged.add(best);
+      const b = best as AlignedColumn;
+      b.oldIndex = rc.oldIndex;
+      b.oldName = rc.name;
+      b.status = 'renamed';
+      merged.add(b);
     }
-  }
+  });
   const mergedOld = new Set([...merged].map((m) => m.oldIndex));
   return columns.filter((c) => !(c.status === 'removed' && mergedOld.has(c.oldIndex)));
 }

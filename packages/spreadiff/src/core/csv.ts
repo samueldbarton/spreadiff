@@ -48,7 +48,10 @@ export function detectDelimiter(text: string): string {
 /** RFC 4180 parser. Single pass over char codes; no regex per field. */
 export function parseCsv(text: string, options: ParseCsvOptions = {}): Table {
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
-  const delim = (options.delimiter ?? detectDelimiter(text)).charCodeAt(0);
+  // Excel writes a "sep=;" first line to declare the delimiter.
+  const hint = /^sep=(.)\r?\n/.exec(text.slice(0, 8));
+  if (hint) text = text.slice(hint[0].length);
+  const delim = (options.delimiter ?? hint?.[1] ?? detectDelimiter(text)).charCodeAt(0);
   const QUOTE = 34;
   const CR = 13;
   const LF = 10;
@@ -79,12 +82,15 @@ export function parseCsv(text: string, options: ParseCsvOptions = {}): Table {
         i = q + 1;
         break;
       }
-      // Skip anything between the closing quote and the next delimiter.
+      // Text between the closing quote and the next delimiter (not RFC 4180,
+      // but common in hand-edited files) is kept, as Excel does.
+      const tail = i;
       while (i < len) {
         const c = text.charCodeAt(i);
         if (c === delim || c === LF || c === CR) break;
         i++;
       }
+      if (i > tail) field += text.slice(tail, i);
     } else {
       const start = i;
       while (i < len) {

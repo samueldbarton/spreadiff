@@ -251,7 +251,7 @@ export class DiffGrid<A = unknown> {
 
   /** Scroll an aligned row into view, expanding its collapsed region if needed. */
   scrollToRow(row: number, align: 'start' | 'center' | 'nearest' = 'center'): void {
-    if (!this.diff) return;
+    if (!this.diff || !(row >= 0 && row < this.diff.rowCount)) return;
     if (this.rows.displayOf[row] < 0) {
       const region = this.rows.regions.find((g) => row >= g.start && row < g.end);
       if (region) {
@@ -275,11 +275,19 @@ export class DiffGrid<A = unknown> {
     if (this.diff) this.relayout();
   }
 
-  select(row: number | null, columnIndex = 0): void {
+  /** Select a cell by aligned row and column index. Returns false (and changes nothing) when out of range. */
+  select(row: number | null, columnIndex = 0): boolean {
+    if (row !== null && !this.isCell(row, columnIndex)) return false;
     this.selected = row === null ? null : { row, col: columnIndex };
     this.options.onSelectionChange?.(row === null ? null : this.cellInfo(row, columnIndex));
     if (row !== null) this.scrollToRow(row, 'nearest');
     this.schedule();
+    return true;
+  }
+
+  private isCell(row: number, columnIndex: number): boolean {
+    const d = this.diff;
+    return !!d && Number.isInteger(row) && Number.isInteger(columnIndex) && row >= 0 && row < d.rowCount && columnIndex >= 0 && columnIndex < d.columns.length;
   }
 
   /** Re-read CSS variables (call after changing them programmatically). */
@@ -1154,6 +1162,8 @@ export class DiffGrid<A = unknown> {
     const max = w - CELL_PAD * 2;
     if (max <= 4) return;
     ctx.font = font;
+    // Never more than fits in a cell; also keeps huge cells out of the cache key.
+    if (s.length > 400) s = s.slice(0, 400);
     const nl = s.indexOf('\n');
     if (nl >= 0) s = s.slice(0, nl) + ' ↵';
     const key = `${font}|${max | 0}|${s}`;
@@ -1297,7 +1307,8 @@ export class DiffGrid<A = unknown> {
       if (e.key === 'c' && this.selected) {
         const info = this.cellInfo(this.selected.row, this.selected.col);
         const v = info.newValue !== undefined ? info.newValue : info.oldValue;
-        void navigator.clipboard?.writeText(formatCell(v ?? null));
+        // Copy the exact value, not the display-rounded one.
+        void navigator.clipboard?.writeText(typeof v === 'number' ? String(v) : formatCell(v ?? null));
         e.preventDefault();
       }
       return;
@@ -1420,6 +1431,7 @@ export class DiffGrid<A = unknown> {
 
   /** Everything about one cell of the diff. */
   cellInfo(row: number, columnIndex: number): CellInfo {
+    if (!this.isCell(row, columnIndex)) throw new RangeError(`No cell at row ${row}, column ${columnIndex}`);
     const diff = this.diff!;
     const column = diff.columns[columnIndex];
     const oi = diff.oldRows[row];

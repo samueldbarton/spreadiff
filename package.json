@@ -12,7 +12,8 @@
     "test": "npm test -w spreadiff",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "bench": "node bench/run.mjs",
-    "test:browser": "node bench/browser-test.mjs"
+    "test:browser": "node bench/browser-test.mjs",
+    "fuzz:render": "node bench/fuzz-render.mjs 3000"
   },
   "devDependencies": {
     "playwright": "^1.64.1"

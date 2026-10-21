@@ -146,7 +146,12 @@ export function App() {
     }
   }, []);
 
-  const diffFiles = (a: File, b: File) => void run_({ kind: 'files', a, b }, options, header, `Diffing ${a.name} → ${b.name}`);
+  const diffFiles = (a: File, b: File) => {
+    // A key column picked for the previous files may not exist in these.
+    const opts = Array.isArray(options.keys) ? { ...options, keys: 'auto' as const } : options;
+    if (opts !== options) setOptions(opts);
+    void run_({ kind: 'files', a, b }, opts, header, `Diffing ${a.name} → ${b.name}`);
+  };
 
   const loadSample = () => {
     setFiles([null, null]);

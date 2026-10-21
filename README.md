@@ -21,6 +21,7 @@ npm install
 npm run dev        # viewer at http://localhost:5173
 npm test           # library unit tests (vitest)
 npm run test:browser  # renderer tests in Chromium; needs `npx vite --port 5199` in apps/viewer
+npm run fuzz:render   # random operation sequences against the renderer (same server)
 npm run build      # library (tsc) + viewer (vite)
 ```
 

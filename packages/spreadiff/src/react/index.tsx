@@ -101,7 +101,7 @@ export const DiffGrid = forwardRef(function DiffGrid<A>(
       scrollToRow: (row, align) => viewRef.current?.scrollToRow(row, align),
       expandAll: () => viewRef.current?.expandAll(),
       collapseAll: () => viewRef.current?.collapseAll(),
-      select: (row, col) => viewRef.current?.select(row, col),
+      select: (row, col) => viewRef.current?.select(row, col) ?? false,
       refreshTheme: () => viewRef.current?.refreshTheme(),
       cellInfo: (row, col) => viewRef.current!.cellInfo(row, col),
     }),
