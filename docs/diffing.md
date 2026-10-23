@@ -63,6 +63,13 @@ named `A`, `B`, … and match by position. XLSX decides per sheet
 it holds numbers, dates or formulas, or when a formula reads one of its
 cells. A financial model's row 1 is usually a row of the model. Treating
 it as a header hid edits to it and broke the traces that run through it.
+Two exceptions keep ordinary tables named:
+- years next to labels (`Region | 2023 | 2024`) count as names, unless a
+  formula reads them;
+- a row that is data but mostly labels (`id | score | band | 0.4`, with
+  the 0.4 a parameter) still names the columns, so `keys: 'auto'` can
+  find `id`. The row also stays in the diff as data, so an edit to the
+  parameter shows.
 
 ## Step 2: rows
 

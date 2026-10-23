@@ -70,18 +70,87 @@ function makeComparer(o: Required<DiffOptions>): (a: CellValue, b: CellValue) =>
 }
 
 /**
- * A formula with relative A1 references rewritten as offsets from its own
- * cell (row, col: 0-based sheet coordinates), so a copied-down formula reads
- * the same in every row. For row identity only; not a full R1C1 converter.
+ * A 53-bit hash of a formula with its relative A1 references taken as
+ * offsets from its own cell (row, col: 0-based sheet coordinates), so a
+ * copied-down formula hashes the same in every row. For row identity only.
+ *
+ * References are found as /("[^"]*")|(\$?)([A-Z]{1,3})(\$?)(\d+)/g would
+ * find them, but nothing is allocated: building the relative text of every
+ * formula made diffs of formula-heavy sheets 4-7× slower. Two different
+ * formulas could share a hash. That would only make two rows with
+ * identical values in every column look alike to the row alignment;
+ * formulas are still compared exactly cell by cell afterwards.
  */
-function relativeFormula(f: string, row: number, col: number): string {
-  return f.replace(/("[^"]*")|(\$?)([A-Z]{1,3})(\$?)(\d+)/g, (all, str, cAbs, letters, rAbs, digits) => {
-    if (str) return all;
+export function relativeFormulaHash(f: string, row: number, col: number): number {
+  h1 = 0x811c9dc5;
+  h2 = 0x9e3779b9;
+  const n = f.length;
+  let i = 0;
+  while (i < n) {
+    const ch = f.charCodeAt(i);
+    if (ch === 34) {
+      // "…" string literal: hashed as is (an unclosed quote is just a character).
+      const close = f.indexOf('"', i + 1);
+      const end = close < 0 ? i + 1 : close + 1;
+      for (; i < end; i++) mix(f.charCodeAt(i));
+      continue;
+    }
+    const cAbs = ch === 36; // $
+    const j = cAbs ? i + 1 : i;
+    let run = 0;
+    while (j + run < n && isUpper(f.charCodeAt(j + run))) run++;
+    let k = j + run;
+    const next = k < n ? f.charCodeAt(k) : 0;
+    if (run === 0) {
+      mix(ch);
+      i++;
+      continue;
+    }
+    if (next !== 36 && !isDigit(next)) {
+      // No reference starts anywhere in this run of letters: hash it whole.
+      for (; i < k; i++) mix(f.charCodeAt(i));
+      continue;
+    }
+    if (run > 3) {
+      // Only the last three letters can start a column name (VLOOKUP1 → KUP1, as the regex finds it).
+      for (const stop = k - 3; i < stop; i++) mix(f.charCodeAt(i));
+      continue;
+    }
+    const rAbs = next === 36;
+    if (rAbs) k++;
+    let end = k;
+    let digits = 0;
+    while (end < n && isDigit(f.charCodeAt(end))) digits = digits * 10 + f.charCodeAt(end++) - 48;
+    if (end === k) {
+      mix(ch);
+      i++;
+      continue;
+    }
     let c = 0;
-    for (let i = 0; i < letters.length; i++) c = c * 26 + (letters.charCodeAt(i) - 64);
-    return `${cAbs ? `C${c}` : `C[${c - 1 - col}]`}${rAbs ? `R${digits}` : `R[${Number(digits) - 1 - row}]`}`;
-  });
+    for (let x = j; x < j + run; x++) c = c * 26 + (f.charCodeAt(x) - 64);
+    // A reference: kind marker, then absolute or relative column and row.
+    mix(0x10000 | (cAbs ? 1 : 0) | (rAbs ? 2 : 0));
+    mix(cAbs ? c : c - 1 - col);
+    mix(rAbs ? digits : digits - 1 - row);
+    if (rAbs) mix(end - k); // $007 and $7 read differently as text; relative rows compare by value
+    i = end;
+  }
+  return (h1 >>> 0) * 0x200000 + (h2 >>> 11);
 }
+
+// Hash state of relativeFormulaHash, outside it so no closure is made per call.
+let h1 = 0;
+let h2 = 0;
+function mix(x: number): void {
+  h1 = Math.imul(h1 ^ x, 0x01000193);
+  h2 = Math.imul(h2 ^ x, 0x5bd1e995);
+  h2 ^= h2 >>> 15;
+}
+
+const isUpper = (c: number) => c >= 65 && c <= 90;
+const isDigit = (c: number) => c >= 48 && c <= 57;
+
+
 
 /** Do two numbers agree to `digits` significant digits? */
 function sameDigits(a: number, b: number, digits: number): boolean {
@@ -535,20 +604,19 @@ function alignBySequence(
   // A row is its values plus how it computes them: `=A1+1` in row 2 and a
   // typed 2 are different rows even when both show 2. Formulas compare in
   // relative form (R[-1]C+1), so rows still match after an insert above.
-  const width = shared.length + 1;
+  // Keys per row: one per shared column, then (when either side has
+  // formulas) one more per column with its relative formula's hash, -1 for
+  // none.
+  const nv = shared.length;
+  const width = oldTable.formulas || newTable.formulas ? nv * 2 : nv;
   const oldKeys = new Array<Key>(oldTable.rows.length * width);
   const newKeys = new Array<Key>(newTable.rows.length * width);
-  const signature = (t: Table, r: number, side: 'oldIndex' | 'newIndex'): string => {
-    const fr = t.formulas?.[r];
-    if (!fr) return '';
+  const formulaKey = (t: Table, r: number, k: number, side: 'oldIndex' | 'newIndex'): number => {
+    const c = shared[k][side];
+    const f = t.formulas?.[r]?.[c];
+    if (!f) return -1;
     const origin = t.origin ?? { row: 1, col: 0 };
-    let sig = '';
-    for (let k = 0; k < shared.length; k++) {
-      const c = shared[k][side];
-      const f = fr[c];
-      if (f) sig += `${k}\u0001${relativeFormula(f, r + origin.row, c + origin.col)}\u0002`;
-    }
-    return sig;
+    return relativeFormulaHash(f, r + origin.row, c + origin.col);
   };
   const buckets = new Map<number, number[]>(); // hash → ids
   const repAt: number[] = []; // id → offset of its key values; old side ≥ 0, new side ~offset
@@ -562,7 +630,7 @@ function alignBySequence(
       const at = r * width;
       let h = 0x811c9dc5;
       for (let c = 0; c < width; c++) {
-        const k = c < width - 1 ? keyValue(row[shared[c][side]] ?? null, norm) : signature(table, r, side);
+        const k = c < nv ? keyValue(row[shared[c][side]] ?? null, norm) : formulaKey(table, r, c - nv, side);
         keys[at + c] = k;
         if (typeof k === 'number') {
           f64[0] = k === 0 ? 0 : k !== k ? NaN : k; // -0 and NaN hash like the Map would

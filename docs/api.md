@@ -297,7 +297,7 @@ From `spreadiff`, `spreadiff/core`, `spreadiff/xlsx`.
 
 | Field | Type | Default | |
 | --- | --- | --- | --- |
-| `header` | `boolean \| 'auto'` | `'auto'` | Whether each sheet's first non-empty row holds column names. `'auto'`: yes, unless it has numbers, dates or formulas, or a formula reads one of its cells; then columns are lettered, as suits a financial model |
+| `header` | `boolean \| 'auto'` | `'auto'` | Whether each sheet's first non-empty row holds column names. `'auto'`: yes, unless it has numbers (years next to labels excepted), dates or formulas, or a formula reads one of its cells. Then it's data, as suits a financial model, and columns are named from its labels if it's mostly labels, else lettered. See [Step 1: columns](diffing.md#step-1-columns) |
 | `sheets` | `string[]` | all | Only parse these sheets |
 | `name` | `string` | `'workbook.xlsx'` | Workbook name |
 | `computeMissing` | `boolean` | `true` | Compute formulas the file has no value for (files from openpyxl and other tools that don't calculate) |

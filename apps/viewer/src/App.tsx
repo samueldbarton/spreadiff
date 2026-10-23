@@ -344,7 +344,7 @@ export function App() {
                     </label>
                     <label className="field">
                       <span>First row</span>
-                      <select value={String(header)} title="Auto: column names, unless the row holds numbers, dates or formulas, or formulas read it" onChange={(e) => { const v = e.target.value === 'auto' ? 'auto' : e.target.value === 'true'; setHeader(v); rerun(options, v); }}>
+                      <select value={String(header)} title="Auto: column names, unless the row holds numbers (years aside), dates or formulas, or formulas read it" onChange={(e) => { const v = e.target.value === 'auto' ? 'auto' : e.target.value === 'true'; setHeader(v); rerun(options, v); }}>
                         <option value="auto">Auto</option>
                         <option value="true">Column names</option>
                         <option value="false">Data</option>

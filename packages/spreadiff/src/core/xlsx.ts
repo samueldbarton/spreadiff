@@ -16,10 +16,11 @@ import type { CellValue, Table, TableDefinition, Workbook } from './types.js';
 export interface ParseXlsxOptions {
   /**
    * Whether each sheet's first non-empty row holds column names.
-   * - `'auto'` (default): yes, unless the row has numbers, dates or
-   *   formulas in it, or a formula anywhere in the workbook reads one of
-   *   its cells. Then it's data, as in most financial models, and
-   *   columns are named by letter.
+   * - `'auto'` (default): yes, unless the row has numbers (other than
+   *   years next to labels), dates or formulas in it, or a formula
+   *   anywhere in the workbook reads one of its cells. Then it's data, as
+   *   in most financial models. If it is still mostly labels, they name
+   *   the columns; otherwise columns are named by letter.
    * - `true` / `false`: always / never.
    */
   header?: boolean | 'auto';
@@ -107,7 +108,7 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
 
   const header = options.header ?? 'auto';
   const headers = header === 'auto' ? detectHeaders(raws, names, tables) : raws.map(() => header);
-  const sheets = raws.map((r, i) => buildTable(r, headers[i]));
+  const sheets = raws.map((r, i) => buildTable(r, headers[i], header === 'auto'));
   const workbook: Workbook = {
     name: options.name ?? 'workbook.xlsx',
     sheets,
@@ -169,12 +170,25 @@ function detectHeaders(raws: RawSheet[], names: Record<string, string>, tables: 
   });
   if (!candidate.size) return result;
   const sheets = raws.map((r) => r.name);
+  // Only formulas that could read a candidate row need tokenizing: a
+  // reference to sheet row n spells it after a column letter or $ (A1, $B$1,
+  // A1:A9) or as a row range (1:1). Names and structured references can
+  // hide it, so formulas that may use them are always read. Tokenizing every
+  // formula made parsing 2× slower on a 10,000-formula model.
+  // A range covering row n starts at n or above, so every row number up to
+  // the lowest candidate counts; past 64 of them, read everything.
+  const top = Math.max(...[...candidate.values()].map((i) => raws[i].first + 1));
+  const rowNumbers = Array.from({ length: top }, (_, i) => i + 1).join('|');
+  const spells = top <= 64 ? new RegExp(`(?:[A-Za-z$](?:${rowNumbers})(?!\\d))|(?:(?:^|[^\\w.$])\\$?(?:${rowNumbers}):)`) : /./;
+  const nameList = Object.keys(names).map((n) => n.toUpperCase());
+  const mayHide = (f: string) => f.includes('[') || (nameList.length > 0 && (nameList.length > 64 || nameList.some((n) => f.toUpperCase().includes(n))));
   for (const r of raws) {
     for (let row = 0; row < r.formulaGrid.length && candidate.size; row++) {
       const fr = r.formulaGrid[row];
       if (!fr) continue;
       for (const f of fr) {
         if (!f) continue;
+        if (!spells.test(f) && !mayHide(f)) continue;
         for (const rg of formulaRefs(f, names, { tables, row, sheets }).ranges) {
           const key = (rg.sheet ?? r.name).toUpperCase();
           const i = candidate.get(key);
@@ -202,12 +216,17 @@ function headerLike(r: RawSheet): boolean {
   for (let c = r.minCol; c <= r.maxCol; c++) {
     const v = row?.[c];
     if (v === null || v === undefined || v === '') continue;
-    // Numbers, booleans and dates (years, months) make it a data row.
+    // Whole years next to labels are column names (Region | 2023 | 2024);
+    // a formula reading them still makes the row data (detectHeaders).
+    if (isYear(v)) continue;
+    // Other numbers, booleans and dates make it a data row.
     if (typeof v !== 'string' || ISO_DATE.test(v)) return false;
     n++;
   }
   return n > 0;
 }
+
+const isYear = (v: unknown) => typeof v === 'number' && Number.isInteger(v) && v >= 1900 && v <= 2100;
 
 /** Drop namespace prefixes (`<x:c>` → `<c>`), as written by e.g. the OpenXML SDK. */
 function stripPrefixes(xml: string): string {
@@ -532,7 +551,24 @@ function parseCells(name: string, xml: string, strings: string[], dateStyles: Se
   return { name, grid, formulaGrid, minCol, maxCol, first, arrays };
 }
 
-function buildTable(raw: RawSheet, header: boolean): Table {
+/**
+ * A first row of labels that 'auto' kept as data (formulas read it, or a
+ * parameter sits among the labels): mostly text, at least two labels.
+ */
+function labelRow(r: RawSheet): boolean {
+  const row = r.grid[r.first];
+  let text = 0;
+  let filled = 0;
+  for (let c = r.minCol; c <= r.maxCol; c++) {
+    const v = row?.[c];
+    if (v === null || v === undefined || v === '') continue;
+    filled++;
+    if (typeof v === 'string' && !ISO_DATE.test(v) && !r.formulaGrid[r.first]?.[c]) text++;
+  }
+  return text >= 2 && text * 2 >= filled;
+}
+
+function buildTable(raw: RawSheet, header: boolean, auto = false): Table {
   const { name, grid, formulaGrid, minCol, maxCol, first, arrays } = raw;
   if (maxCol < 0) return { name, columns: [], rows: [], formulas: [], origin: { row: 0, col: 0 } };
   const width = maxCol - minCol + 1;
@@ -541,9 +577,13 @@ function buildTable(raw: RawSheet, header: boolean): Table {
     for (let c = 0; c < width; c++) out[c] = src?.[minCol + c] ?? null;
     return out;
   };
+  // A row of labels kept as data still names the columns, so key detection
+  // and the grid see "id", "price" rather than A, B: it stays a data row too.
   const columns = header
     ? uniqueNames(dense(grid[first]).map((v) => (v === null ? '' : String(v))))
-    : Array.from({ length: width }, (_, c) => columnLabel(minCol + c));
+    : auto && labelRow(raw)
+      ? uniqueNames(dense(grid[first]).map((v, c) => (typeof v === 'string' && v.trim() && !formulaGrid[first]?.[minCol + c] ? v : columnLabel(minCol + c))))
+      : Array.from({ length: width }, (_, c) => columnLabel(minCol + c));
   const start = header ? first + 1 : first;
   const rows: CellValue[][] = [];
   // Formulas are always present (sparse) for XLSX, so a formula replaced by

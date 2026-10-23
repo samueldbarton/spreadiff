@@ -56,9 +56,11 @@ describe('header row detection', () => {
     expect(wb.sheets[0].rows[0]).toEqual(['rate', 0.05]);
   });
 
-  it('treats row 1 as data when it holds numbers (years across the top)', () => {
-    const wb = parseXlsx(xlsx([{ name: 'S', data: row(1, str('A1', 'line'), num('B1', 2025), num('C1', 2026)) + row(2, str('A2', 'rev'), num('B2', 1), num('C2', 2)) }]));
-    expect(wb.sheets[0].columns).toEqual(['A', 'B', 'C']);
+  it('treats years across the top as names, unless a formula reads them', () => {
+    const plain = parseXlsx(xlsx([{ name: 'S', data: row(1, str('A1', 'line'), num('B1', 2025), num('C1', 2026)) + row(2, str('A2', 'rev'), num('B2', 1), num('C2', 2)) }]));
+    expect(plain.sheets[0].columns).toEqual(['line', '2025', '2026']);
+    const read = parseXlsx(xlsx([{ name: 'S', data: row(1, str('A1', 'line'), num('B1', 2025), num('C1', 2026)) + row(2, str('A2', 'age'), num('B2', 0, '2030-B1'), num('C2', 0, '2030-C1')) }]));
+    expect(read.sheets[0].origin).toEqual({ row: 0, col: 0 }); // the years are inputs: row 1 is data
   });
 
   it('sees references from other sheets, including 3-D ones', () => {
@@ -250,5 +252,41 @@ describe('hosted use: packed traces of real files', () => {
       }
     });
     if (after === 'stale.xlsx') expect(tr2.stats.stale).toBeGreaterThan(0);
+  });
+});
+
+describe('row identity: relative formula hash', () => {
+  it('is the same down a copied column, across digit boundaries, and differs otherwise', async () => {
+    const { relativeFormulaHash: h } = await import('../src/core/diff');
+    const down = new Set(Array.from({ length: 2000 }, (_, i) => h(`=B${i + 2}*C${i + 2}+$D$1`, i + 1, 4)));
+    expect(down.size).toBe(1);
+    expect(h('=A3+1', 3, 0)).not.toBe(h('=A1+2', 1, 0)); // the case that needs it: same shape of value, different formula
+    expect(h('=A1', 1, 0)).not.toBe(h('=$A$1', 1, 0));
+    expect(h('=$A$7', 9, 0)).not.toBe(h('=$A$007', 9, 0));
+    expect(h('="B2"&A1', 0, 0)).not.toBe(h('="B3"&A2', 1, 0)); // text in quotes isn't a reference
+    expect(h('=$$A1', 0, 0)).toBe(h('=$$A2', 1, 0)); // the second $ starts the reference, as the regex reads it
+    expect(h('=VLOOKUP(A2,T,2)', 1, 1)).toBe(h('=VLOOKUP(A3,T,2)', 2, 1));
+  });
+});
+
+describe("header: 'auto' on data sheets (no regression from header: true)", () => {
+  it('keeps year column names', () => {
+    const wb = parseXlsx(xlsx([{ name: 'S', data: row(1, str('A1', 'Region'), num('B1', 2023), num('C1', 2024)) + row(2, str('A2', 'EMEA'), num('B2', 1), num('C2', 2)) }]));
+    expect(wb.sheets[0].columns).toEqual(['Region', '2023', '2024']);
+    expect(wb.sheets[0].rows).toHaveLength(1);
+  });
+
+  it('names columns from a label row it keeps as data, so keys still work', () => {
+    // A parameter (J1-style) among the labels, read by every formula: row 1 must stay data.
+    const sheet = (t: number) =>
+      row(1, str('A1', 'id'), str('B1', 'score'), str('C1', 'band'), num('D1', t)) +
+      [2, 3, 4].map((r) => row(r, num(`A${r}`, r * 10), num(`B${r}`, r / 10), str(`C${r}`, r % 2 ? 'high' : 'low'), num(`D${r}`, 0))).join('');
+    const a = parseXlsx(xlsx([{ name: 'S', data: sheet(0.25) }]));
+    expect(a.sheets[0].columns).toEqual(['id', 'score', 'band', 'D']);
+    expect(a.sheets[0].origin).toEqual({ row: 0, col: 0 });
+    const b = parseXlsx(xlsx([{ name: 'S', data: sheet(0.35) }]));
+    const d = diffWorkbooks(a, b).sheets[0].diff;
+    expect(d.keyColumns).toEqual(['id']);
+    expect(d.stats.cellsChanged).toBe(1); // the parameter edit is visible
   });
 });
