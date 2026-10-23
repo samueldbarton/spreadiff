@@ -69,6 +69,7 @@ export function unpackTable(p: PackedTable): Table {
 export type PackedTableDiff = Omit<TableDiff, 'oldTable' | 'newTable'> & { oldTable: PackedTable; newTable: PackedTable };
 export interface PackedWorkbookDiff {
   sheets: { name: string; status: WorkbookDiff['sheets'][number]['status']; diff: PackedTableDiff }[];
+  names?: WorkbookDiff['names'];
 }
 
 /** Pack a workbook diff; returns the message and the buffers to transfer. */
@@ -82,6 +83,7 @@ export function packWorkbookDiff(d: WorkbookDiff): { packed: PackedWorkbookDiff;
       transfer.push(s.diff.oldRows.buffer as ArrayBuffer, s.diff.newRows.buffer as ArrayBuffer, s.diff.status.buffer as ArrayBuffer);
       return { name: s.name, status: s.status, diff: { ...s.diff, oldTable, newTable } };
     }),
+    names: d.names,
   };
   return { packed, transfer };
 }
@@ -93,5 +95,6 @@ export function unpackWorkbookDiff(p: PackedWorkbookDiff): WorkbookDiff {
       status: s.status,
       diff: { ...s.diff, oldTable: unpackTable(s.diff.oldTable), newTable: unpackTable(s.diff.newTable) },
     })),
+    names: p.names,
   };
 }

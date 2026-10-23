@@ -56,7 +56,15 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
     if (!path || !files[path]) return;
     sheets.push(parseSheet(name, text(path), strings, dateStyles, date1904, options.header ?? true));
   });
-  return { name: options.name ?? 'workbook.xlsx', sheets };
+  // Defined names (TaxRate → Inputs!$B$2) let formula tracing see through them.
+  const names: Record<string, string> = {};
+  eachElement(workbookXml, 'definedName', (a, body) => {
+    const name = attr(a, 'name');
+    // Workbook-scoped only; skip built-ins like _xlnm.Print_Area.
+    if (!name || !body || name.startsWith('_xlnm.') || attr(a, 'localSheetId') !== undefined) return;
+    names[decode(name)] = decode(body);
+  });
+  return { name: options.name ?? 'workbook.xlsx', sheets, ...(Object.keys(names).length ? { names } : {}) };
 }
 
 /** Drop namespace prefixes (`<x:c>` → `<c>`), as written by e.g. the OpenXML SDK. */

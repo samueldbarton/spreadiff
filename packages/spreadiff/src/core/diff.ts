@@ -1,3 +1,4 @@
+import { canonicalFormula } from './formula.js';
 import { alignSequences } from './sequence.js';
 import {
   ROW_STATUS,
@@ -68,30 +69,118 @@ function makeComparer(o: Required<DiffOptions>): (a: CellValue, b: CellValue) =>
 /** Diff two tables: align columns, align rows, mark changed cells. */
 export function diffTables(oldTable: Table, newTable: Table, options: DiffOptions = {}): TableDiff {
   const o: Required<DiffOptions> = { ...DEFAULTS, ...options };
+  const aligned = alignTables(oldTable, newTable, o);
+  return compareAligned(aligned, formulaKeyer([aligned], 0));
+}
+
+/** Rows and columns matched; cells not yet compared. */
+interface Aligned {
+  oldTable: Table;
+  newTable: Table;
+  columns: AlignedColumn[];
+  pairs: number[];
+  keyColumns: string[];
+  o: Required<DiffOptions>;
+}
+
+function alignTables(oldTable: Table, newTable: Table, o: Required<DiffOptions>): Aligned {
   const norm = makeNormalizer(o);
   const equal = makeComparer(o);
-
   let columns = alignColumns(oldTable.columns, newTable.columns);
   const shared = columns.filter((c) => c.oldIndex >= 0 && c.newIndex >= 0);
-
-  // ---- Row alignment ---------------------------------------------------
   const keyColumns = resolveKeys(oldTable, newTable, shared, o, norm);
   const pairs: number[] = []; // [old, new, …]; -1 for the missing side
-  if (keyColumns.length) {
-    alignByKey(oldTable, newTable, columns, keyColumns, norm, pairs);
-  } else {
-    alignBySequence(oldTable, newTable, shared, norm, equal, o.rowSimilarity, pairs);
-  }
-
-  // ---- Column renames --------------------------------------------------
+  if (keyColumns.length) alignByKey(oldTable, newTable, columns, keyColumns, norm, pairs);
+  else alignBySequence(oldTable, newTable, shared, norm, equal, o.rowSimilarity, pairs);
   if (o.detectRenames) columns = detectRenames(columns, oldTable, newTable, pairs, equal);
+  return { oldTable, newTable, columns, pairs, keyColumns, o };
+}
 
-  // ---- Cell comparison -------------------------------------------------
+type Side = 'old' | 'new';
+/** Canonical form of a formula on one side, for "same meaning?" comparisons. */
+type FormulaKeyer = (side: Side, formula: string) => string;
+
+/**
+ * Canonicalize references through the alignment: a reference becomes the
+ * aligned row/column it points at, so `=B5*C5` (old) and `=B6*C6` (new,
+ * after a row was inserted above) compare equal.
+ */
+function formulaKeyer(sheets: Aligned[], self: number): FormulaKeyer {
+  type Axis = { map: Int32Array; next: Int32Array; prev: Int32Array };
+  type SheetMap = { rows: Axis; cols: Axis; origin: { row: number; col: number } };
+  // `next[i]` / `prev[i]`: nearest index ≥ / ≤ i that exists on both sides
+  // (or -1). Lets a range that grew only by inserted rows compare equal.
+  const axis = (map: Int32Array, survives: (i: number) => boolean): Axis => {
+    const n = map.length;
+    const next = new Int32Array(n + 1).fill(-1);
+    const prev = new Int32Array(n).fill(-1);
+    for (let i = n - 1; i >= 0; i--) next[i] = survives(i) ? i : next[i + 1];
+    for (let i = 0, last = -1; i < n; i++) prev[i] = last = survives(i) ? i : last;
+    return { map, next, prev };
+  };
+  const maps: Record<Side, SheetMap[]> = { old: [], new: [] };
+  const byName: Record<Side, Map<string, number>> = { old: new Map(), new: new Map() };
+  sheets.forEach((a, idx) => {
+    for (const side of ['old', 'new'] as const) {
+      const table = side === 'old' ? a.oldTable : a.newTable;
+      const own = side === 'old' ? 0 : 1;
+      const rows = new Int32Array(table.rows.length).fill(-1);
+      const both = new Uint8Array(table.rows.length);
+      for (let k = 0; k < a.pairs.length; k += 2) {
+        const r = a.pairs[k + own];
+        if (r < 0) continue;
+        rows[r] = k / 2;
+        both[r] = a.pairs[k + 1 - own] >= 0 ? 1 : 0;
+      }
+      const cols = new Int32Array(table.columns.length).fill(-1);
+      const colBoth = new Uint8Array(table.columns.length);
+      a.columns.forEach((c, ci) => {
+        const j = side === 'old' ? c.oldIndex : c.newIndex;
+        if (j < 0) return;
+        cols[j] = ci;
+        colBoth[j] = c.oldIndex >= 0 && c.newIndex >= 0 ? 1 : 0;
+      });
+      maps[side][idx] = {
+        rows: axis(rows, (i) => both[i] === 1),
+        cols: axis(cols, (j) => colBoth[j] === 1),
+        origin: table.origin ?? { row: 1, col: 0 },
+      };
+      byName[side].set(table.name.toUpperCase(), idx);
+    }
+  });
+  /** One axis of a reference, in aligned terms. Multi-cell spans snap inward to surviving rows. */
+  const span = (v0: number, v1: number, origin: number, ax: Axis, tag: string) => {
+    if (v0 < 0) return '*';
+    const n = ax.map.length;
+    const one = (i: number) => (i < 0 ? `${tag}h${i}` : i >= n ? `${tag}e${i - n}` : `${tag}${ax.map[i]}`);
+    let i0 = v0 - origin;
+    let i1 = v1 - origin;
+    if (i1 > i0) {
+      const a = i0 >= 0 && i0 < n ? ax.next[i0] : -1;
+      const b = i1 >= 0 && i1 < n ? ax.prev[i1] : -1;
+      if (a >= 0 && a <= i1) i0 = a;
+      if (b >= 0 && b >= i0) i1 = b;
+    }
+    return `${one(i0)}:${one(i1)}`;
+  };
+  return (side, formula) =>
+    canonicalFormula(formula, (rg) => {
+      const idx = rg.sheet === null ? self : byName[side].get(rg.sheet.toUpperCase());
+      if (idx === undefined) return `?${rg.sheet!.toUpperCase()}!${rg.r0},${rg.c0}:${rg.r1},${rg.c1}`;
+      const m = maps[side][idx];
+      return `${idx}!${span(rg.r0, rg.r1, m.origin.row, m.rows, 'r')}|${span(rg.c0, rg.c1, m.origin.col, m.cols, 'c')}`;
+    });
+}
+
+function compareAligned(a: Aligned, keyer: FormulaKeyer): TableDiff {
+  const { oldTable, newTable, columns, pairs, keyColumns, o } = a;
+  const equal = makeComparer(o);
   const rowCount = pairs.length / 2;
   const oldRows = new Int32Array(rowCount);
   const newRows = new Int32Array(rowCount);
   const status = new Uint8Array(rowCount);
   const changedCells = new Map<number, Uint8Array>();
+  const formulaChanged = new Map<number, Uint8Array>();
   const cmpCols = columns
     .map((c, i) => ({ c, i }))
     .filter(({ c }) => c.oldIndex >= 0 && c.newIndex >= 0);
@@ -125,19 +214,27 @@ export function diffTables(oldTable: Table, newTable: Table, options: DiffOption
       stats.rowsRemoved++;
       continue;
     }
-    const a = oldTable.rows[oi];
-    const b = newTable.rows[ni];
+    const x = oldTable.rows[oi];
+    const y = newTable.rows[ni];
     let mask: Uint8Array | null = null;
     for (const { c, i } of cmpCols) {
-      let same = equal(a[c.oldIndex] ?? null, b[c.newIndex] ?? null);
-      if (same && checkFormulas) {
-        same = (of![oi]?.[c.oldIndex] ?? null) === (nf![ni]?.[c.newIndex] ?? null);
+      const sameValue = equal(x[c.oldIndex] ?? null, y[c.newIndex] ?? null);
+      let formulaDiffers = false;
+      if (checkFormulas) {
+        const fo = of![oi]?.[c.oldIndex] ?? null;
+        const fn = nf![ni]?.[c.newIndex] ?? null;
+        if (fo !== fn) formulaDiffers = fo === null || fn === null || keyer('old', fo) !== keyer('new', fn);
       }
-      if (!same) {
+      if (!sameValue || formulaDiffers) {
         mask ??= new Uint8Array(columns.length);
         mask[i] = 1;
         c.changes++;
         stats.cellsChanged++;
+        if (formulaDiffers) {
+          let fm = formulaChanged.get(r);
+          if (!fm) formulaChanged.set(r, (fm = new Uint8Array(columns.length)));
+          fm[i] = 1;
+        }
       }
     }
     if (mask) {
@@ -154,48 +251,36 @@ export function diffTables(oldTable: Table, newTable: Table, options: DiffOption
     else if (c.status === 'removed') stats.columnsRemoved++;
     else if (c.status === 'renamed') stats.columnsRenamed++;
   }
-
-  return {
-    oldTable,
-    newTable,
-    columns,
-    rowCount,
-    oldRows,
-    newRows,
-    status,
-    changedCells,
-    keyColumns,
-    stats,
-    options: o,
-  };
+  return { oldTable, newTable, columns, rowCount, oldRows, newRows, status, changedCells, formulaChanged, keyColumns, stats, options: o };
 }
 
 /** Diff every sheet of two workbooks, pairing sheets by name. */
 export function diffWorkbooks(oldBook: Workbook, newBook: Workbook, options: DiffOptions = {}): WorkbookDiff {
-  const sheets: SheetDiff[] = [];
+  const o: Required<DiffOptions> = { ...DEFAULTS, ...options };
+  const empty = (name: string): Table => ({ name, columns: [], rows: [] });
   const oldByName = new Map(oldBook.sheets.map((s) => [s.name, s]));
   const newNames = new Set(newBook.sheets.map((s) => s.name));
-  const empty = (name: string): Table => ({ name, columns: [], rows: [] });
   // Single-sheet workbooks (e.g. CSV vs. CSV with different names) pair positionally.
   const positional = oldBook.sheets.length === 1 && newBook.sheets.length === 1;
+  const plan: { name: string; status: SheetDiff['status'] | null; old: Table; new: Table }[] = [];
   for (const ns of newBook.sheets) {
     const os = positional ? oldBook.sheets[0] : oldByName.get(ns.name);
-    if (!os) {
-      const d = diffTables(empty(ns.name), ns, options);
-      sheets.push({ name: ns.name, status: 'added', diff: d });
-      continue;
-    }
-    const d = diffTables(os, ns, options);
-    sheets.push({ name: ns.name, status: hasChanges(d) ? 'modified' : 'equal', diff: d });
+    plan.push({ name: ns.name, status: os ? null : 'added', old: os ?? empty(ns.name), new: ns });
   }
   if (!positional) {
     oldBook.sheets.forEach((os, i) => {
       if (newNames.has(os.name)) return;
-      const d = diffTables(os, empty(os.name), options);
-      sheets.splice(Math.min(i, sheets.length), 0, { name: os.name, status: 'removed', diff: d });
+      plan.splice(Math.min(i, plan.length), 0, { name: os.name, status: 'removed', old: os, new: empty(os.name) });
     });
   }
-  return { sheets };
+  // Align everything first, so formula references into other sheets can be
+  // compared through those sheets' alignments.
+  const aligned = plan.map((p) => alignTables(p.old, p.new, o));
+  const sheets: SheetDiff[] = plan.map((p, i) => {
+    const d = compareAligned(aligned[i], formulaKeyer(aligned, i));
+    return { name: p.name, status: p.status ?? (hasChanges(d) ? 'modified' : 'equal'), diff: d };
+  });
+  return { sheets, names: oldBook.names || newBook.names ? { old: oldBook.names, new: newBook.names } : undefined };
 }
 
 export function hasChanges(d: TableDiff): boolean {
@@ -376,21 +461,40 @@ function alignBySequence(
   ids.clear();
   const matches = alignSequences(a, b);
 
+  // Formula results change *because* inputs did, so a row's identity is its
+  // constants: computed cells (formula on both sides) don't count against
+  // similarity. Otherwise editing one price splits its row into remove + add.
+  const of = oldTable.formulas;
+  const nf = newTable.formulas;
   const similarity = (oi: number, ni: number) => {
-    if (shared.length === 0) return 0;
     const x = oldTable.rows[oi];
     const y = newTable.rows[ni];
     let same = 0;
-    for (const c of shared) if (equal(x[c.oldIndex] ?? null, y[c.newIndex] ?? null)) same++;
-    return same / shared.length;
+    let total = 0;
+    for (const c of shared) {
+      if (of?.[oi]?.[c.oldIndex] && nf?.[ni]?.[c.newIndex]) continue;
+      total++;
+      if (equal(x[c.oldIndex] ?? null, y[c.newIndex] ?? null)) same++;
+    }
+    if (total === 0) {
+      // Only formulas: fall back to comparing results.
+      for (const c of shared) {
+        total++;
+        if (equal(x[c.oldIndex] ?? null, y[c.newIndex] ?? null)) same++;
+      }
+    }
+    return total ? same / total : 0;
   };
 
   // Pair up removed/added rows in each gap between matches as modifications.
   const gap = (o0: number, o1: number, n0: number, n1: number) => {
     let nj = n0;
+    // One row out, one row in, at the same place: almost always an edit.
+    // Pair it if anything at all still matches.
+    const floor = o1 - o0 === 1 && n1 - n0 === 1 ? Math.min(threshold, Number.MIN_VALUE) : threshold;
     for (let oi = o0; oi < o1; oi++) {
       let best = -1;
-      let bestScore = threshold;
+      let bestScore = floor;
       const end = Math.min(n1, nj + PAIRING_WINDOW);
       for (let j = nj; j < end; j++) {
         const s = similarity(oi, j);

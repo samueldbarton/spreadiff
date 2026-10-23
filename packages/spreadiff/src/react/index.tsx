@@ -115,4 +115,4 @@ export const DiffGrid = forwardRef(function DiffGrid<A>(
   );
 }) as <A = unknown>(props: DiffGridProps<A> & { ref?: React.Ref<DiffGridHandle> }) => ReactNode;
 
-export type { CellAnnotation, CellInfo, DiffGridOptions, DiffLayout } from '../render/DiffGrid.js';
+export type { CellAnnotation, CellDisplay, CellInfo, DiffGridOptions, DiffLayout, TraceContext } from '../render/DiffGrid.js';

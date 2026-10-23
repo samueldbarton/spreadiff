@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { diffText, formatCell, numericDelta, toUnifiedCsv, unpackWorkbookDiff, type DiffOptions, type WorkbookDiff } from 'spreadiff';
-import { DiffGrid, type CellInfo, type DiffGridHandle, type DiffLayout } from 'spreadiff/react';
+import { diffText, formatCell, numericDelta, toUnifiedCsv, traceWorkbook, unpackWorkbookDiff, type CellRef, type DiffOptions, type WorkbookDiff } from 'spreadiff';
+import { DiffGrid, type CellDisplay, type CellInfo, type DiffGridHandle, type DiffLayout } from 'spreadiff/react';
+import { CodeView } from './CodeView';
 import { GlideDiff } from './GlideDiff';
-import { sampleWorkbooks } from './samples';
+import { sampleModel, sampleWorkbooks } from './samples';
+import { TracePanel, type TraceView } from './TracePanel';
 import type { Req } from './worker';
 import DiffWorker from './worker?worker';
 
 type Theme = 'system' | 'light' | 'dark';
-type Renderer = 'spreadiff' | 'glide';
+type Renderer = 'spreadiff' | 'code' | 'glide';
 
 interface Loaded {
   result: WorkbookDiff;
@@ -71,7 +73,7 @@ function readTheme(): Theme {
 }
 
 /** What produced the current diff, so option changes can re-run it. */
-type Source = { kind: 'files'; a: File; b: File } | { kind: 'sample' } | { kind: 'synthetic'; rows: number };
+type Source = { kind: 'files'; a: File; b: File } | { kind: 'sample' } | { kind: 'model' } | { kind: 'synthetic'; rows: number };
 
 function usePrefersDark(theme: Theme) {
   const [sys, setSys] = useState(() => matchMedia('(prefers-color-scheme: dark)').matches);
@@ -100,6 +102,10 @@ export function App() {
   const [header, setHeader] = useState(true);
   const [selected, setSelected] = useState<CellInfo | null>(null);
   const [showOptions, setShowOptions] = useState(false);
+  const [display, setDisplay] = useState<CellDisplay>('stacked');
+  const [panel, setPanel] = useState(true);
+  const [traceView, setTraceView] = useState<TraceView>('outputs');
+  const [pending, setPending] = useState<CellRef | null>(null);
   const source = useRef<Source | null>(null);
   const loadToken = useRef(0);
   const gridRef = useRef<DiffGridHandle>(null);
@@ -124,8 +130,8 @@ export function App() {
       if (src.kind === 'files') {
         const [x, y] = await Promise.all([src.a.arrayBuffer(), src.b.arrayBuffer()]);
         r = await run({ type: 'files', old: { name: src.a.name, data: x }, new: { name: src.b.name, data: y }, options: opts, header: hdr }, [x, y]);
-      } else if (src.kind === 'sample') {
-        const { old, new: next } = sampleWorkbooks();
+      } else if (src.kind === 'sample' || src.kind === 'model') {
+        const { old, new: next } = src.kind === 'model' ? sampleModel() : sampleWorkbooks();
         r = await run({ type: 'books', old, new: next, options: opts });
       } else {
         r = await run({ type: 'synthetic', rows: src.rows, cols: 12, options: opts });
@@ -158,6 +164,11 @@ export function App() {
     void run_({ kind: 'sample' }, options, header, 'Diffing sample workbooks');
   };
 
+  const loadModel = () => {
+    setFiles([null, null]);
+    void run_({ kind: 'model' }, options, header, 'Diffing financial model');
+  };
+
   const loadSynthetic = (rows: number) => {
     setFiles([null, null]);
     void run_({ kind: 'synthetic', rows }, options, header, `Generating and diffing ${fmt(rows)} rows`);
@@ -174,6 +185,28 @@ export function App() {
     setSheet(i);
   };
 
+  // Formula tracing, when any sheet has formulas (cheap: no evaluation).
+  const trace = useMemo(() => {
+    if (!loaded || !loaded.result.sheets.some((s) => s.diff.newTable.formulas || s.diff.oldTable.formulas)) return null;
+    return traceWorkbook(loaded.result);
+  }, [loaded]);
+
+  // Jump to a cell from the trace panel (possibly on another sheet).
+  const pick = (ref: CellRef) => {
+    if (ref.sheet !== sheet) pickSheet(ref.sheet);
+    setRenderer((r) => (r === 'glide' ? 'spreadiff' : r));
+    setPending(ref);
+  };
+  useEffect(() => {
+    if (!pending || pending.sheet !== sheet) return;
+    const id = requestAnimationFrame(() => {
+      gridRef.current?.select(pending.row, pending.col);
+      setPending(null);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [pending, sheet, loaded]);
+  const selectedRef: CellRef | null = selected ? { sheet, row: selected.row, col: selected.columnIndex } : null;
+
   const setFile = (i: 0 | 1, f: File) => {
     const next: [File | null, File | null] = [...files] as [File | null, File | null];
     next[i] = f;
@@ -182,6 +215,7 @@ export function App() {
   };
 
   const sheets = loaded?.result.sheets ?? [];
+  const traceCtx = useMemo(() => (trace && loaded ? { trace, workbook: loaded.result, sheet } : undefined), [trace, loaded, sheet]);
   const current = sheets[sheet];
   const diff = current?.diff;
   const stats = diff?.stats;
@@ -247,6 +281,15 @@ export function App() {
             <Toggle checked={collapse} onChange={setCollapse} label="Collapse unchanged" />
             <Toggle checked={changedColsOnly} onChange={setChangedColsOnly} label="Changed columns only" />
             <label className="select">
+              <span>Cells</span>
+              <select value={display} onChange={(e) => setDisplay(e.target.value as CellDisplay)}>
+                <option value="stacked">Old over new</option>
+                <option value="new">New only</option>
+                <option value="delta">New + Δ</option>
+                <option value="inline">Old → new</option>
+              </select>
+            </label>
+            <label className="select">
               <span>Match rows by</span>
               <select
                 value={Array.isArray(options.keys) ? options.keys[0] : options.keys}
@@ -288,7 +331,8 @@ export function App() {
               <button className="btn icon" title="Next change (n)" onClick={() => gridRef.current?.nextChange()} disabled={renderer !== 'spreadiff'}>↓</button>
             </div>
             <button className="btn ghost" onClick={exportCsv} title="daff-style highlighter CSV">Export</button>
-            <Segmented value={renderer} onChange={setRenderer} options={[['spreadiff', 'spreadiff'], ['glide', 'Glide']]} title="Renderer" />
+            <Segmented value={renderer} onChange={setRenderer} options={[['spreadiff', 'Grid'], ['code', 'Code'], ['glide', 'Glide']]} title="Renderer: canvas grid, code-style HTML (spreadiff/lite), or Glide Data Grid" />
+            {trace && <Toggle checked={panel} onChange={setPanel} label="Trace" />}
           </div>
 
           {sheets.length > 1 && (
@@ -307,24 +351,33 @@ export function App() {
             </nav>
           )}
 
-          <main className="grid-wrap">
-            {renderer === 'spreadiff' ? (
-              <DiffGrid
-                key={`${loaded.names.join()}:${sheet}`}
-                ref={gridRef}
-                diff={diff}
-                layout={layout}
-                collapseUnchanged={collapse}
-                hideUnchangedColumns={changedColsOnly}
-                theme={theme}
-                onSelectionChange={setSelected}
-                style={{ position: 'absolute', inset: 0 }}
-              />
-            ) : (
-              <GlideDiff diff={diff} dark={dark} />
+          <div className="work">
+            <main className="grid-wrap">
+              {renderer === 'spreadiff' ? (
+                <DiffGrid
+                  key={`${loaded.names.join()}:${sheet}`}
+                  ref={gridRef}
+                  diff={diff}
+                  layout={layout}
+                  collapseUnchanged={collapse}
+                  hideUnchangedColumns={changedColsOnly}
+                  cellDisplay={display}
+                  trace={traceCtx}
+                  theme={theme}
+                  onSelectionChange={setSelected}
+                  style={{ position: 'absolute', inset: 0 }}
+                />
+              ) : renderer === 'code' ? (
+                <CodeView diff={diff} layout={layout} display={display} changedOnly={changedColsOnly} trace={trace ?? undefined} sheet={sheet} />
+              ) : (
+                <GlideDiff diff={diff} dark={dark} />
+              )}
+              {busy && <div className="busy">{busy}…</div>}
+            </main>
+            {trace && panel && (
+              <TracePanel wb={loaded.result} trace={trace} sheet={sheet} selected={selectedRef} view={traceView} onView={setTraceView} onPick={pick} />
             )}
-            {busy && <div className="busy">{busy}…</div>}
-          </main>
+          </div>
 
           <footer className="statusbar">
             {selected ? <Inspector cell={selected} /> : <span className="hint">Click a cell to inspect · <kbd>n</kbd>/<kbd>p</kbd> next/prev change · <kbd>u</kbd>/<kbd>s</kbd> unified/split · arrows move</span>}
@@ -335,7 +388,7 @@ export function App() {
           </footer>
         </>
       ) : (
-        <Landing busy={busy} error={error} files={files} setFile={setFile} loadSample={loadSample} loadSynthetic={loadSynthetic} />
+        <Landing busy={busy} error={error} files={files} setFile={setFile} loadSample={loadSample} loadModel={loadModel} loadSynthetic={loadSynthetic} />
       )}
       {error && loaded && <div className="toast" onClick={() => setError(null)}>{error}</div>}
     </div>
@@ -348,6 +401,7 @@ function Landing(props: {
   files: [File | null, File | null];
   setFile: (i: 0 | 1, f: File) => void;
   loadSample: () => void;
+  loadModel: () => void;
   loadSynthetic: (rows: number) => void;
 }) {
   return (
@@ -363,7 +417,8 @@ function Landing(props: {
         <DropZone side="new" file={props.files[1]} onFile={(f) => props.setFile(1, f)} />
       </div>
       <div className="cta">
-        <button className="btn primary" onClick={props.loadSample}>Try a sample workbook</button>
+        <button className="btn primary" onClick={props.loadModel}>Try a financial model</button>
+        <button className="btn" onClick={props.loadSample}>Inventory workbook</button>
         <button className="btn" onClick={() => props.loadSynthetic(100_000)}>Stress test · 100k rows</button>
         <button className="btn" onClick={() => props.loadSynthetic(1_000_000)}>1M rows</button>
       </div>
@@ -441,10 +496,13 @@ function Inspector({ cell }: { cell: CellInfo }) {
   const before = formatCell(cell.oldValue ?? null);
   const after = formatCell(cell.newValue ?? null);
   const delta = cell.changed ? numericDelta(cell.oldValue ?? null, cell.newValue ?? null) : null;
-  const spans = cell.changed && before.length + after.length < 4000 ? diffText(before, after) : null;
+  // Character highlights help in text; in numbers they're noise.
+  const numeric = typeof cell.oldValue === 'number' && typeof cell.newValue === 'number';
+  const spans = cell.changed && !numeric && before.length + after.length < 4000 ? diffText(before, after) : null;
   return (
     <div className="inspector">
       <span className={`badge ${cell.status}`}>{cell.status}</span>
+      {cell.kind && <span className={`kchip k-${cell.kind}`}>{cell.kind === 'computed' ? 'downstream' : cell.kind}</span>}
       <b>{cell.column.name}</b>
       {cell.changed ? (
         <span className="vals">
@@ -462,7 +520,12 @@ function Inspector({ cell }: { cell: CellInfo }) {
       ) : (
         <span className="vals">{(cell.newValue !== undefined ? after : before) || '∅'}</span>
       )}
-      {(cell.oldFormula || cell.newFormula) && <code>{cell.oldFormula ?? '—'} → {cell.newFormula ?? '—'}</code>}
+      {(cell.oldFormula || cell.newFormula) &&
+        (cell.oldFormula === cell.newFormula || cell.kind === 'computed' ? (
+          <code>ƒ {cell.newFormula ?? cell.oldFormula}</code>
+        ) : (
+          <code>{cell.oldFormula ?? '—'} → {cell.newFormula ?? '—'}</code>
+        ))}
     </div>
   );
 }

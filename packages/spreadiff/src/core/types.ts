@@ -24,6 +24,8 @@ export interface Table {
 export interface Workbook {
   name: string;
   sheets: Table[];
+  /** Defined names (`TaxRate` → `Inputs!$B$2`), used to resolve formula references. */
+  names?: Record<string, string>;
 }
 
 export type RowStatus = 'equal' | 'added' | 'removed' | 'modified';
@@ -99,6 +101,12 @@ export interface TableDiff {
   status: Uint8Array;
   /** Changed-cell bitmask per modified row, keyed by aligned row index. */
   changedCells: Map<number, Uint8Array>;
+  /**
+   * Cells whose formula changed in meaning (subset of `changedCells`).
+   * References are compared by the aligned cells they point at, so formulas
+   * that merely shifted because rows were inserted above don't count.
+   */
+  formulaChanged: Map<number, Uint8Array>;
   /** Key columns used for matching, empty when aligned by sequence. */
   keyColumns: string[];
   stats: DiffStats;
@@ -116,4 +124,6 @@ export interface SheetDiff {
 
 export interface WorkbookDiff {
   sheets: SheetDiff[];
+  /** Defined names of the old and new workbooks, for formula tracing. */
+  names?: { old?: Record<string, string>; new?: Record<string, string> };
 }

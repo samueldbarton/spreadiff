@@ -130,6 +130,96 @@ is projected through a `<slot>`, so your page CSS styles it.
 | --- | --- | --- |
 | ![](docs/split.png) | ![](docs/dark.png) | ![](docs/annotations.png) |
 
+## Tracing downstream changes
+
+Most changes in a model aren't edits. They're formula results that moved
+*because* something upstream was edited. spreadiff classifies every changed
+cell into one of these:
+
+| Kind | Meaning | Shown as |
+| --- | --- | --- |
+| `input` | A typed value was edited | green/red |
+| `formula` | A formula was edited | green/red + `ƒ` |
+| `computed` | Same formula, new result: a downstream change | **amber** |
+| `added` / `removed` | A row or column feeding a formula appeared or disappeared | row tint |
+
+`traceWorkbook(diff)` then finds each computed change's **root causes** and
+each edit's **impacts**:
+- It parses formula references: A1 refs, ranges, whole rows/columns, other sheets, defined names.
+- It walks the dependency graph forward from each edit, only through cells whose value actually changed. If an intermediate result didn't move, the change stopped there.
+
+`INDIRECT`/`OFFSET`, `NOW()`/`RAND()` and external links are flagged rather than guessed.
+
+```ts
+import { diffWorkbooks, parseXlsx, traceWorkbook } from 'spreadiff';
+const diff = diffWorkbooks(parseXlsx(a), parseXlsx(b));
+const trace = traceWorkbook(diff);
+trace.get({ sheet: 0, row: 5, col: 1 });
+// { kind: 'computed', causes: [{ sheet: 2, row: 0, col: 1 }, …], causeCount: 5, … }
+grid.setOptions({ trace: { trace, workbook: diff, sheet: 0 } });
+```
+
+Formulas are compared by what they **point at**, not by their text. When a
+row is inserted above, `=B5*C5` becomes `=B6*C6`, and that isn't flagged.
+A `SUM(D2:D5)` that grew to `D2:D6` only because a row was added is
+`computed`, with "row added" as its cause. A range that was really edited is
+still a formula change.
+
+The viewer shows the trace six ways. Pick the ones that fit:
+
+1. **Amber downstream cells** in the grid: always on, needs no trace.
+2. **Tooltip**: "changed because of 6 edits", with each cause's Δ and %.
+3. **Focus on select**: outlines the cell's causes (solid), computed parents (dotted) and impacts (dashed), and dims the rest.
+4. **Outputs panel**: the end results that changed, each with its drivers as chips. Answers "what happened to the bottom line?"
+5. **Impact panel**: each edit, and what it moved.
+6. **Why? panel**: a collapsible cause tree for the selected cell.
+
+| Outputs + amber cells | Why? tree + focus | Tooltip |
+| --- | --- | --- |
+| ![](docs/options/1-stacked.png) | ![](docs/options/10-why-tree.png) | ![](docs/options/11-tooltip.png) |
+
+Limits:
+- Nothing is evaluated: values come from the files' cached results. So there's no "how much of the +12% came from price vs. units" attribution; that would need a formula engine.
+- Sheet-scoped names and structured table refs (`Table1[Col]`) aren't resolved; they're marked dynamic.
+
+## Showing a change: four cell displays
+
+`cellDisplay` sets how a changed cell reads. Any mode can use absolute and %
+deltas, and they work in both layouts.
+
+| `stacked` (old over new) | `new` (new only) | `delta` (new + Δ, %) | `inline` (old → new) |
+| --- | --- | --- | --- |
+| ![](docs/options/1-stacked.png) | ![](docs/options/2-new-only.png) | ![](docs/options/3-new-delta.png) | ![](docs/options/4-inline.png) |
+
+## spreadiff/lite: code-review style, no canvas
+
+`spreadiff/lite` renders a diff to an HTML string (or aligned plain text). It
+uses no DOM APIs, so it runs on a server, in an email or in a PR comment:
+
+- **`split`**: side by side like a code review. One row per line, line numbers on both sides, hunk separators, and character-level highlights inside changed text.
+- **`unified`**: a −/+ line pair per modified row, like `git diff`.
+
+```ts
+import { diffTables, parseCsv, renderHTML, renderText, LITE_CSS } from 'spreadiff/lite';
+const html = `<style>${LITE_CSS}</style>` + renderHTML(diffTables(a, b), { layout: 'split', display: 'delta' });
+console.log(renderText(diffTables(a, b)));   // for terminals / markdown
+```
+
+| Lite split | Lite unified |
+| --- | --- |
+| ![](docs/options/6-code-split.png) | ![](docs/options/7-code-unified.png) |
+
+Bundle sizes (`node bench/size.mjs`, esbuild, minified):
+
+| Entry | min | gzip |
+| --- | --- | --- |
+| `spreadiff/lite`: diff + CSV + HTML/text renderer | 27.2 KB | **10.5 KB** |
+| `spreadiff/core`: + XLSX + tracing | 36.7 KB | 15.5 KB |
+| `spreadiff`: + canvas `DiffGrid` | 83.2 KB | 30.2 KB |
+
+Lite shows only changes plus context (capped by `maxRows`). It's for reviewing
+edits; for scrolling a million-row sheet, use `DiffGrid`.
+
 ## Performance
 
 `node bench/run.mjs` (needs `vite preview` running) loads synthetic CSV pairs

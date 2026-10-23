@@ -116,3 +116,49 @@ export function syntheticCsv(rows: number, cols: number, seed = 1): { old: strin
   }
   return { old: a.join('\n'), new: b.join('\n'), changes };
 }
+
+/**
+ * A small financial model with real formula dependencies, for tracing:
+ *   Inputs:  Price, COGS %, Tax rate (named TaxRate)
+ *   Revenue: units × price → revenue, × COGS % → cogs, → gross
+ *   Summary: totals, tax, net, margin
+ * The new version raises the price, revises EMEA units, gives APAC its own
+ * COGS formula, adds LATAM and raises the tax rate. Everything else that
+ * changes is downstream.
+ */
+export function sampleModel(): { old: Workbook; new: Workbook } {
+  type V = { price: number; cogs: number; tax: number; regions: [string, number, number | null][] };
+  const build = (v: V, name: string): Workbook => {
+    const inputs: Table = {
+      name: 'Inputs', columns: ['assumption', 'value', 'note'], origin: { row: 1, col: 0 },
+      rows: [['Price', v.price, 'per unit'], ['COGS %', v.cogs, 'of revenue'], ['Tax rate', v.tax, 'named TaxRate']],
+      formulas: [[null, null, null], [null, null, null], [null, null, null]],
+    };
+    const rev: Table = { name: 'Revenue', columns: ['region', 'units', 'price', 'revenue', 'cogs', 'gross'], origin: { row: 1, col: 0 }, rows: [], formulas: [] };
+    v.regions.forEach(([region, units, ownCogs], i) => {
+      const r = i + 2;
+      const revenue = units * v.price;
+      const cogs = revenue * (ownCogs ?? v.cogs);
+      rev.rows.push([region, units, v.price, revenue, round(cogs), round(revenue - cogs)]);
+      rev.formulas!.push([null, null, '=Inputs!$B$2', `=B${r}*C${r}`, ownCogs === null ? `=D${r}*Inputs!$B$3` : `=D${r}*${ownCogs}`, `=D${r}-E${r}`]);
+    });
+    const last = v.regions.length + 1;
+    const totRev = rev.rows.reduce((s, r) => s + (r[3] as number), 0);
+    const totCogs = round(rev.rows.reduce((s, r) => s + (r[4] as number), 0));
+    const gross = round(totRev - totCogs);
+    const tax = round(gross * v.tax);
+    const net = round(gross - tax);
+    const summary: Table = {
+      name: 'Summary', columns: ['line', 'value'], origin: { row: 1, col: 0 },
+      rows: [['Revenue', totRev], ['COGS', totCogs], ['Gross profit', gross], ['Tax', tax], ['Net income', net], ['Net margin', Math.round((net / totRev) * 10000) / 10000]],
+      formulas: [[null, `=SUM(Revenue!D2:D${last})`], [null, `=SUM(Revenue!E2:E${last})`], [null, '=B2-B3'], [null, '=B4*TaxRate'], [null, '=B4-B5'], [null, '=B6/B2']],
+    };
+    return { name, sheets: [summary, rev, inputs], names: { TaxRate: 'Inputs!$B$4' } };
+  };
+  const round = (x: number) => Math.round(x * 100) / 100;
+  const regions: [string, number, number | null][] = [['NA', 2400, null], ['EMEA', 1200, null], ['APAC', 900, null], ['ANZ', 300, null]];
+  return {
+    old: build({ price: 49, cogs: 0.38, tax: 0.21, regions }, 'model-v1.xlsx'),
+    new: build({ price: 52, cogs: 0.38, tax: 0.25, regions: [['NA', 2400, null], ['EMEA', 1350, null], ['APAC', 900, 0.42], ['ANZ', 300, null], ['LATAM', 450, null]] }, 'model-v2.xlsx'),
+  };
+}
