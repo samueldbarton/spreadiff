@@ -69,11 +69,12 @@ the repository.
   Above 5,000 results it showed nothing.
 - The viewer serves its own fonts instead of loading Google Fonts.
 - `PackedTable.formulas` is packed rather than nested arrays.
-- `spreadiff/core` is 37.4 KB gzip, up from 16.1, almost all of it the
-  formula engine. `spreadiff/lite` is unchanged in scope (11.8 KB).
+- `spreadiff/core` is 37.9 KB gzip, up from 16.1, almost all of it the
+  formula engine. `spreadiff/lite` is unchanged in scope (12.0 KB).
 - `parseXlsx` defaults to `header: 'auto'`: a first row with numbers,
   dates or formulas, or one that formulas read, is data rather than
-  column names.
+  column names. Years next to labels still count as names, and a row
+  of labels kept as data still names the columns.
 - Numbers compare to 15 significant digits by default, so Excel's
   17-digit and LibreOffice's 15-digit writes of the same result are equal.
 - The grid no longer draws a corner triangle on changed cells; the
@@ -105,6 +106,15 @@ the repository.
 
 ### Fixed
 
+- Regressions found by comparing with 0.1.0, fixed before release:
+  - diffs of formula-heavy XLSX sheets were 4–7× slower (row identity
+    built and hashed each formula's relative text; now an
+    allocation-free hash, checked against the old form on 2 million
+    formulas);
+  - `header: 'auto'` named columns `A`, `B`, … on sheets with years
+    across the top, or with a parameter among the labels, losing key
+    matching (on the 90,000-formula test model the diff fell back to
+    sequence alignment and took 4× longer).
 - `WorkbookTrace.parents()` built the old workbook's whole formula graph
   on first use, about 1.7 s at 300,000 formulas, which froze the page on
   the first click in focus mode. It now reads just that cell's references.

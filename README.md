@@ -29,7 +29,7 @@ and what drove each one.*
 - **A canvas grid.** It's virtualized and themed with CSS variables, in
   unified or split layouts. There are four ways to show a changed cell,
   plus annotations, keyboard navigation and a change minimap.
-- **A lightweight HTML renderer.** `spreadiff/lite` is 11.8 KB gzip and
+- **A lightweight HTML renderer.** `spreadiff/lite` is 12.0 KB gzip and
   uses no DOM APIs, so it runs on a server. It renders a code-review style
   side-by-side diff.
 - **Worker support.** Parse and diff off the main thread. Results come back
@@ -76,9 +76,9 @@ const html = `<style>${LITE_CSS}</style>` + renderHTML(diff, { layout: 'split' }
 
 | Import | Contents | min + gzip |
 | --- | --- | --- |
-| `spreadiff/lite` | Diff engine, CSV parser, HTML and text renderers | 11.8 KB |
-| `spreadiff/core` | + XLSX reader, formula engine and tracing | 37.4 KB |
-| `spreadiff` | + canvas `DiffGrid` | 52.6 KB |
+| `spreadiff/lite` | Diff engine, CSV parser, HTML and text renderers | 12.0 KB |
+| `spreadiff/core` | + XLSX reader, formula engine and tracing | 37.9 KB |
+| `spreadiff` | + canvas `DiffGrid` | 53.1 KB |
 | `spreadiff/react` | React component for `DiffGrid` | + React |
 | `spreadiff/worker` | Parse and diff in a Web Worker | |
 

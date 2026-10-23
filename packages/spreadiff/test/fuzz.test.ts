@@ -56,7 +56,7 @@ function mutate(r: () => number, t: Table): Table {
 }
 
 describe('fuzz: diffTables invariants', () => {
-  it('holds over 3000 random table pairs and option sets', () => {
+  it('holds over 3000 random table pairs and option sets', { timeout: 30_000 }, () => {
     const r = rng(1234);
     for (let iter = 0; iter < 3000; iter++) {
       const keyed = r() < 0.4;

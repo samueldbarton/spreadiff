@@ -16,9 +16,9 @@ new DiffGrid({ layout: 'split', cellDisplay: 'delta' }).render({ diff, container
 
 | Import | Contents | min + gzip |
 | --- | --- | --- |
-| `spreadiff/lite` | Diff engine, CSV parser, HTML and text renderers. No DOM APIs | 11.8 KB |
-| `spreadiff/core` | + XLSX reader, formula engine and tracing | 37.4 KB |
-| `spreadiff` | + canvas `DiffGrid` | 52.6 KB |
+| `spreadiff/lite` | Diff engine, CSV parser, HTML and text renderers. No DOM APIs | 12.0 KB |
+| `spreadiff/core` | + XLSX reader, formula engine and tracing | 37.9 KB |
+| `spreadiff` | + canvas `DiffGrid` | 53.1 KB |
 | `spreadiff/react` | React component for `DiffGrid` (React 18+) | + React |
 | `spreadiff/worker` | Parse and diff in a Web Worker | |
 

@@ -254,7 +254,7 @@ traces on the main thread.
 | Links to other workbooks | Not followed | `unexplained: 'dynamic'` |
 | Sheet-scoped names | Not resolved | References; `dynamic` |
 | Huge changes (> 300,000 formulas affected, or 2,000,000 evaluations) | Recalculation stops | `trace.truncated`; references for the rest |
-| First row holds inputs, not column names | Detected: a first row that formulas read, or that holds numbers, is data | Edits to it are traced like any other cell |
+| First row holds inputs, not column names | Detected: a first row that formulas read, or that holds numbers other than year labels, is data (its labels still name the columns) | Edits to it are traced like any other cell |
 
 ## Showing it
 
