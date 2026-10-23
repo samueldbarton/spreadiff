@@ -26,6 +26,13 @@ the repository.
   tools that don't calculate) are computed on parsing
   (`computeMissingValues`, `ParseXlsxOptions.computeMissing`,
   `Workbook.computedValues`).
+- **Tracing in the worker.** `createDiffWorker` takes `{ trace: true }`
+  (`WorkerSettings`) and resolves with the trace too, so recalculation
+  never blocks the page. `packWorkbookTrace` / `unpackWorkbookTrace` send
+  it as typed arrays, parents included. The viewer traces in its worker.
+- `npm run test:hosted`: the packed library in a fresh, statically served
+  Vite app and the viewer's production build. Real `.xlsx` fixtures are
+  checked against LibreOffice's answers, with outside network blocked.
 - `npm run bench:trace`: checks tracing against LibreOffice on generated
   models and real Excel files from the Apache POI test corpus. Results
   are in [Tracing → How it was tested](docs/tracing.md#how-it-was-tested).
@@ -52,7 +59,17 @@ the repository.
 
 ### Changed
 
-- `spreadiff/core` is 36.3 KB gzip, up from 16.1, almost all of it the
+- `parseFile`, the worker and the viewer default to `header: 'auto'`. The
+  viewer passed `true`, which hid row-1 inputs in financial models even
+  after the parser learned to detect them. The viewer's toggle is now a
+  three-way "First row" setting.
+- The viewer's Outputs panel lists end results largest relative change
+  first, 100 at a time, with up to 8 drivers each. It had drawn every
+  result: 47,854 DOM nodes and an 845 ms freeze on a 3,632-result model.
+  Above 5,000 results it showed nothing.
+- The viewer serves its own fonts instead of loading Google Fonts.
+- `PackedTable.formulas` is packed rather than nested arrays.
+- `spreadiff/core` is 37.4 KB gzip, up from 16.1, almost all of it the
   formula engine. `spreadiff/lite` is unchanged in scope (11.8 KB).
 - `parseXlsx` defaults to `header: 'auto'`: a first row with numbers,
   dates or formulas, or one that formulas read, is data rather than
@@ -88,6 +105,9 @@ the repository.
 
 ### Fixed
 
+- `WorkbookTrace.parents()` built the old workbook's whole formula graph
+  on first use, about 1.7 s at 300,000 formulas, which froze the page on
+  the first click in focus mode. It now reads just that cell's references.
 - A tooltip too tall to fit above or below its cell was placed partly
   outside the grid, cutting off its title. It now takes the roomier side
   and stays inside.

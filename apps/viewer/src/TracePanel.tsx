@@ -100,6 +100,9 @@ interface Props {
   onPick: (ref: CellRef) => void;
 }
 
+const OUTPUTS_PAGE = 100;
+const MAX_DRIVERS = 8;
+
 export function TracePanel({ wb, trace, sheet, selected, view, onView, onPick }: Props) {
   // Root edits (inputs, formula edits, structural), biggest blast radius first.
   const roots = useMemo(() => {
@@ -113,17 +116,29 @@ export function TracePanel({ wb, trace, sheet, selected, view, onView, onPick }:
     return out.sort((a, b) => b.t.impactCount - a.t.impactCount);
   }, [wb, trace]);
 
-  // End results: changed computed cells that no other changed cell reads.
+  // End results: changed computed cells that no other changed cell reads,
+  // largest relative change first (non-numeric changes last).
   const outputs = useMemo(() => {
     const computed: CellRef[] = [];
     wb.sheets.forEach((s, si) => {
       const cols = s.diff.columns.length;
       for (const [k, t] of trace.sheet(si)) if (t.kind === 'computed') computed.push({ sheet: si, row: Math.floor(k / cols), col: k % cols });
     });
-    if (computed.length > 5000) return null;
     const feeds = new Set<string>();
     for (const r of computed) for (const p of trace.parents(r)) feeds.add(`${p.sheet}:${p.row}:${p.col}`);
-    return computed.filter((r) => !feeds.has(`${r.sheet}:${r.row}:${r.col}`));
+    const size = (r: CellRef) => {
+      const d = wb.sheets[r.sheet].diff;
+      const c = d.columns[r.col];
+      const oi = d.oldRows[r.row];
+      const ni = d.newRows[r.row];
+      const dl = numericDelta(oi >= 0 && c.oldIndex >= 0 ? d.oldTable.rows[oi][c.oldIndex] ?? null : null, ni >= 0 && c.newIndex >= 0 ? d.newTable.rows[ni][c.newIndex] ?? null : null);
+      return !dl ? -1 : dl.ratio === null ? Infinity : Math.abs(dl.ratio);
+    };
+    return computed
+      .filter((r) => !feeds.has(`${r.sheet}:${r.row}:${r.col}`))
+      .map((r) => ({ r, size: size(r) }))
+      .sort((a, b) => b.size - a.size)
+      .map((x) => x.r);
   }, [wb, trace]);
 
   return (
@@ -151,12 +166,14 @@ export function TracePanel({ wb, trace, sheet, selected, view, onView, onPick }:
 }
 
 /** "What happened to the bottom line?" — end results, each with its drivers. */
-function Outputs({ wb, trace, outputs, sheet, onPick }: { wb: WorkbookDiff; trace: WorkbookTrace; outputs: CellRef[] | null; sheet: number; onPick: (r: CellRef) => void }) {
-  if (!outputs) return <p className="tp-empty">Too many downstream changes to summarize.</p>;
+function Outputs({ wb, trace, outputs, sheet, onPick }: { wb: WorkbookDiff; trace: WorkbookTrace; outputs: CellRef[]; sheet: number; onPick: (r: CellRef) => void }) {
+  // Thousands of cards would cost the page seconds; show a page at a time.
+  const [limit, setLimit] = useState(OUTPUTS_PAGE);
   if (!outputs.length) return <p className="tp-empty">No formula results changed.</p>;
   return (
     <ul className="tp-list">
-      {outputs.map((r) => {
+      {outputs.length > OUTPUTS_PAGE && <li className="tp-muted">{outputs.length.toLocaleString()} end results, largest relative change first</li>}
+      {outputs.slice(0, limit).map((r) => {
         const d = describe(wb, trace, r);
         const t = trace.get(r)!;
         return (
@@ -173,9 +190,10 @@ function Outputs({ wb, trace, outputs, sheet, onPick }: { wb: WorkbookDiff; trac
               {t.causes
                 .map((c, i) => ({ c, share: t.contributions?.[i] ?? null }))
                 .sort((x, y) => Math.abs(y.share ?? 0) - Math.abs(x.share ?? 0))
+                .slice(0, MAX_DRIVERS)
                 .map(({ c, share }) => {
                   const cd = describe(wb, trace, c);
-                  const shareText = typeof share === 'number' && share !== 0 ? `${share > 0 ? '+' : '−'}${formatCell(Number(Math.abs(share).toPrecision(12)))}` : null;
+                  const shareText = typeof share === 'number' && share !== 0 ? `${share > 0 ? '+' : '−'}${formatCell(Number(Math.abs(share).toPrecision(4)))}` : null;
                   return (
                     <button
                       key={`${c.sheet}:${c.row}:${c.col}`}
@@ -191,12 +209,19 @@ function Outputs({ wb, trace, outputs, sheet, onPick }: { wb: WorkbookDiff; trac
                     </button>
                   );
                 })}
-              {t.causeCount > t.causes.length && <span className="tp-muted">+{t.causeCount - t.causes.length}</span>}
+              {t.causeCount > Math.min(t.causes.length, MAX_DRIVERS) && <span className="tp-muted">+{t.causeCount - Math.min(t.causes.length, MAX_DRIVERS)}</span>}
               {t.unexplained && <span className="tp-muted">{t.unexplained === 'volatile' ? 'volatile function' : t.unexplained === 'dynamic' ? 'dynamic reference' : 'unknown cause'}</span>}
             </div>
           </li>
         );
       })}
+      {outputs.length > limit && (
+        <li>
+          <button className="btn ghost small" onClick={() => setLimit(limit + OUTPUTS_PAGE)}>
+            Show {Math.min(OUTPUTS_PAGE, outputs.length - limit)} more of {(outputs.length - limit).toLocaleString()}
+          </button>
+        </li>
+      )}
     </ul>
   );
 }

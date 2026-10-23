@@ -1,13 +1,28 @@
 import type { DiffOptions, WorkbookDiff } from '../core/types.js';
+import type { TraceOptions, WorkbookTrace } from '../core/trace.js';
 import type { WorkerRequest } from './worker.js';
-import { unpackWorkbookDiff } from '../core/transfer.js';
+import { unpackWorkbookDiff, unpackWorkbookTrace } from '../core/transfer.js';
 
 /** What a worker diff resolves to. */
 export interface WorkerDiffResult {
   /** The diff, unpacked and ready to render. */
   result: WorkbookDiff;
-  /** Milliseconds spent inside the worker parsing both files and diffing them. */
-  timings: { parse: number; diff: number };
+  /** The trace of `result`, when `settings.trace` asked for one and the files have formulas. */
+  trace?: WorkbookTrace;
+  /** Milliseconds spent inside the worker parsing both files, diffing them and tracing (0 when not asked). */
+  timings: { parse: number; diff: number; trace: number };
+}
+
+/** Per-request settings for {@link DiffWorker} beyond the diff options. */
+export interface WorkerSettings {
+  /** Whether the first row holds column names. Default `'auto'`; see `ParseFileOptions.header`. */
+  header?: boolean | 'auto';
+  /**
+   * Trace downstream changes in the worker too: `true` or `TraceOptions`.
+   * Recalculating can take seconds on a large model; this keeps it off the
+   * main thread. Default false.
+   */
+  trace?: boolean | TraceOptions;
 }
 
 /** A file's name (used to pick the parser) and bytes. */
@@ -21,9 +36,9 @@ export interface FileData {
 /** A client for the diff worker, from {@link createDiffWorker}. Methods can be destructured. */
 export interface DiffWorker {
   /** Read two `File`s (from an `<input>` or drop), then parse and diff them in the worker. */
-  diffFiles(oldFile: File, newFile: File, options?: DiffOptions, parse?: { header?: boolean }): Promise<WorkerDiffResult>;
+  diffFiles(oldFile: File, newFile: File, options?: DiffOptions, settings?: WorkerSettings): Promise<WorkerDiffResult>;
   /** Parse and diff two files' bytes in the worker. The buffers are transferred, not copied. */
-  diffBuffers(oldData: FileData, newData: FileData, options?: DiffOptions, parse?: { header?: boolean }): Promise<WorkerDiffResult>;
+  diffBuffers(oldData: FileData, newData: FileData, options?: DiffOptions, settings?: WorkerSettings): Promise<WorkerDiffResult>;
   /** Stop the worker. Pending requests reject. */
   terminate(): void;
 }
@@ -55,7 +70,10 @@ export function createDiffWorker(worker: Worker): DiffWorker {
     if (!p) return;
     pending.delete(e.data.id);
     if (e.data.error) p.reject(new Error(e.data.error));
-    else p.resolve({ result: unpackWorkbookDiff(e.data.packed), timings: e.data.timings });
+    else {
+      const result = unpackWorkbookDiff(e.data.packed);
+      p.resolve({ result, trace: e.data.trace ? unpackWorkbookTrace(e.data.trace, result) : undefined, timings: e.data.timings });
+    }
   };
   // A crashed worker (e.g. out of memory on a huge file) never replies;
   // fail every pending request instead of leaving them hanging forever.
@@ -69,9 +87,9 @@ export function createDiffWorker(worker: Worker): DiffWorker {
   };
   worker.onmessageerror = () => failAll('Diff worker sent an unreadable message');
 
-  const diffBuffers: DiffWorker['diffBuffers'] = (oldData, newData, options, parse) => {
+  const diffBuffers: DiffWorker['diffBuffers'] = (oldData, newData, options, settings) => {
     const id = ++seq;
-    const msg: WorkerRequest = { id, old: oldData, new: newData, options, parse };
+    const msg: WorkerRequest = { id, old: oldData, new: newData, options, parse: { header: settings?.header }, trace: settings?.trace };
     return new Promise((resolve, reject) => {
       pending.set(id, { resolve, reject });
       worker.postMessage(msg, [oldData.data, newData.data]);
@@ -80,9 +98,9 @@ export function createDiffWorker(worker: Worker): DiffWorker {
   // Closures, not `this`: the methods keep working when destructured.
   return {
     diffBuffers,
-    async diffFiles(oldFile, newFile, options, parse) {
+    async diffFiles(oldFile, newFile, options, settings) {
       const [a, b] = await Promise.all([oldFile.arrayBuffer(), newFile.arrayBuffer()]);
-      return diffBuffers({ name: oldFile.name, data: a }, { name: newFile.name, data: b }, options, parse);
+      return diffBuffers({ name: oldFile.name, data: a }, { name: newFile.name, data: b }, options, settings);
     },
     terminate() {
       worker.terminate();

@@ -51,12 +51,14 @@ but it isn't tested here.
 
 | Method | |
 | --- | --- |
-| `diffFiles(oldFile, newFile, options?, parse?)` | Read, parse and diff two `File`s |
-| `diffBuffers({ name, data }, { name, data }, options?, parse?)` | Same, from `ArrayBuffer`s. The buffers are **transferred**: unusable afterwards in the calling thread |
+| `diffFiles(oldFile, newFile, options?, settings?)` | Read, parse and diff two `File`s |
+| `diffBuffers({ name, data }, { name, data }, options?, settings?)` | Same, from `ArrayBuffer`s. The buffers are **transferred**: unusable afterwards in the calling thread |
 | `terminate()` | Stop the worker; pending requests reject |
 
 - `options` are [diff options](diffing.md#options-at-a-glance).
-- `parse` is `{ header?: boolean }` (default: the first row is a header).
+- `settings` is [`WorkerSettings`](api.md#workersettings):
+  - `header`: `'auto'` (the default) detects whether row 1 holds column names or data. `true` or `false` forces it.
+  - `trace`: also trace downstream changes in the worker (below).
 - Methods are plain functions, so destructuring them works:
   `const { diffFiles } = createDiffWorker(w)`.
 
@@ -94,6 +96,59 @@ matters here: numbers travel in the typed array, strings don't.
 
 ## Formula traces
 
-`traceWorkbook` returns an object with methods, which can't be posted
-between threads. Run it on the page after the diff arrives. It doesn't
-evaluate formulas, so it's fast: see [Tracing → Cost](tracing.md#cost).
+Tracing recalculates the formulas around each change. That takes 0.2–0.4 s
+for a 10,000-formula model and several seconds for 300,000 formulas
+([Tracing → Cost](tracing.md#cost)), which would freeze the page. Ask the
+worker to do it:
+
+```ts
+import { createDiffWorker } from 'spreadiff/worker';
+import { DiffGrid } from 'spreadiff';
+declare const oldFile: File, newFile: File, container: HTMLElement;
+
+const differ = createDiffWorker(
+  new Worker(new URL('spreadiff/worker/worker.js', import.meta.url), { type: 'module' }),
+);
+const { result, trace } = await differ.diffFiles(oldFile, newFile, {}, { trace: true });
+
+new DiffGrid({ trace: trace && { trace, workbook: result, sheet: 0 } }).render({ diff: result.sheets[0].diff, container });
+```
+
+`trace` is `undefined` when neither file has formulas. Pass
+[`TraceOptions`](api.md#traceoptions) instead of `true` to set budgets.
+
+A trace is an object with methods, which can't be posted as is. The worker
+sends it packed (`packWorkbookTrace`): every cell's trace as typed arrays,
+plus the parent list of every downstream and formula-edit cell, computed
+in the worker. `parents()` of any other cell returns `[]`. The client
+unpacks it with `unpackWorkbookTrace`. With your own worker, do the same:
+
+```ts
+import { packWorkbookDiff, packWorkbookTrace, traceWorkbook, unpackWorkbookDiff, unpackWorkbookTrace, type WorkbookDiff } from 'spreadiff/core';
+declare const result: WorkbookDiff;
+
+// In the worker:
+const traced = packWorkbookTrace(traceWorkbook(result), result);
+const diff = packWorkbookDiff(result);
+// postMessage({ diff: diff.packed, trace: traced.packed }, [...diff.transfer, ...traced.transfer]);
+
+// On the page:
+const page = unpackWorkbookDiff(diff.packed);
+const trace = unpackWorkbookTrace(traced.packed, page);
+```
+
+Measured in Chromium on the production viewer (`npm run test:hosted`):
+
+| Workbook | Longest main-thread stall, tracing in the worker | Tracing on the page instead |
+| --- | --- | --- |
+| 10,000 formulas, 83 downstream changes | 35–60 ms | 222–238 ms |
+| 90,000 formulas, 3,632 downstream | 130–175 ms | |
+| 40,000-formula chain, every cell downstream | 240–480 ms | |
+| 300,000 formulas, 11,903 downstream | 350–680 ms | |
+
+What's left of the stall on big files is the page's share of the work:
+decoding the message, building the grid and the first render. It happens
+once, while the files load.
+
+Everything runs in the browser. Nothing calls a server, and LibreOffice
+was only used to produce the expected answers the tests check against.

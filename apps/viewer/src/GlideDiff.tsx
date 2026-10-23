@@ -21,7 +21,7 @@ export function GlideDiff({ diff, dark }: { diff: TableDiff; dark: boolean }) {
       textDark: palette.fg,
       textHeader: palette.fg,
       borderColor: palette.border,
-      fontFamily: 'Inter, system-ui, sans-serif',
+      fontFamily: "'Inter Variable', Inter, system-ui, sans-serif",
       baseFontStyle: '13px',
       headerFontStyle: '600 12px',
     }),

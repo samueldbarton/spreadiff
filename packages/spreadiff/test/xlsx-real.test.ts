@@ -3,7 +3,7 @@
 // builds the XML the way that application writes it.
 import { zipSync, strToU8 } from 'fflate';
 import { describe, expect, it } from 'vitest';
-import { diffWorkbooks, formulaRefs, parseXlsx, structuredRange, traceWorkbook, type TableDefinition } from '../src/core';
+import { diffWorkbooks, formulaRefs, packWorkbookDiff, packWorkbookTrace, parseFile, parseXlsx, structuredRange, traceWorkbook, unpackWorkbookDiff, unpackWorkbookTrace, type TableDefinition } from '../src/core';
 
 interface SheetSpec {
   name: string;
@@ -178,5 +178,77 @@ describe('row pairing in model sheets', () => {
     const sheet = (x: number) => [1, 2, 3, 4].map((r) => row(r, num(`A${r}`, x * r, r === 1 ? undefined : `A${r - 1}+${x}`))).join('');
     const d = diffWorkbooks(parseXlsx(xlsx([{ name: 'S', data: sheet(1) }]), { header: false }), parseXlsx(xlsx([{ name: 'S', data: sheet(2) }]), { header: false }));
     expect(d.sheets[0].diff.stats).toMatchObject({ rowsModified: 4, rowsAdded: 0, rowsRemoved: 0 });
+  });
+});
+
+describe('hosted use: worker hand-off', () => {
+  // Inputs in row 1 (read by formulas), a chain of formulas, and a SUM over a range.
+  const book = (price: number, qty: number) =>
+    xlsx([
+      {
+        name: 'Model',
+        data:
+          row(1, num('A1', price), num('B1', qty)) +
+          row(2, num('A2', price * qty, 'A1*B1'), num('B2', price * qty * 1.1, 'A2*1.1')) +
+          row(3, num('A3', price * qty * 2.1, 'SUM(A2:B2)')),
+      },
+    ]);
+
+  it('parseFile defaults to header detection, as parseXlsx does', () => {
+    const wb = parseFile('m.xlsx', book(10, 3));
+    expect(wb.sheets[0].origin).toEqual({ row: 0, col: 0 }); // row 1 holds inputs: it's data
+    expect(parseFile('m.xlsx', book(10, 3), { header: true }).sheets[0].origin).toEqual({ row: 1, col: 0 });
+  });
+
+  it('a packed trace answers exactly like the original after structured cloning', () => {
+    const d = diffWorkbooks(parseFile('a.xlsx', book(10, 3)), parseFile('b.xlsx', book(12, 3)));
+    const tr = traceWorkbook(d);
+    expect(tr.stats.computed).toBe(3);
+    // What a worker does: pack, post (structured clone), unpack.
+    const packedTrace = structuredClone(packWorkbookTrace(tr, d).packed);
+    const { packed } = packWorkbookDiff(d);
+    const d2 = unpackWorkbookDiff(structuredClone(packed));
+    const tr2 = unpackWorkbookTrace(packedTrace, d2);
+    expect(tr2.stats).toEqual(tr.stats);
+    expect(tr2.truncated).toBe(tr.truncated);
+    expect([...tr2.sheet(0)]).toEqual([...tr.sheet(0)]);
+    const width = d.sheets[0].diff.columns.length;
+    for (const [k, t] of tr.sheet(0)) {
+      const ref = { sheet: 0, row: Math.floor(k / width), col: k % width };
+      expect(tr2.get(ref)).toEqual(t);
+      if (t.kind === 'computed') expect(tr2.parents(ref)).toEqual(tr.parents(ref));
+    }
+    // The SUM's parents are the two changed cells it reads.
+    expect(tr2.parents({ sheet: 0, row: 2, col: 0 })).toHaveLength(2);
+  });
+});
+
+describe('hosted use: packed traces of real files', () => {
+  const dir = new URL('../../../test/hosted/fixtures/', import.meta.url);
+  it.each([
+    ['three_statement', 'new.xlsx'],
+    ['three_statement', 'stale.xlsx'],
+    ['budget', 'new.xlsx'],
+    ['Tables', 'new.xlsx'],
+    ['61652', 'new.xlsx'],
+  ])('%s / %s round-trips every trace and parent list', async (name, after) => {
+    const { readFileSync } = await import('node:fs');
+    const read = (f: string) => parseXlsx(new Uint8Array(readFileSync(new URL(`${name}/${f}`, dir))));
+    const d = diffWorkbooks(read('old.xlsx'), read(after));
+    const tr = traceWorkbook(d);
+    const { packed: pt } = packWorkbookTrace(tr, d);
+    const d2 = unpackWorkbookDiff(structuredClone(packWorkbookDiff(d).packed));
+    const tr2 = unpackWorkbookTrace(structuredClone(pt), d2);
+    expect(tr2.stats).toEqual(tr.stats);
+    d.sheets.forEach((s, si) => {
+      expect([...tr2.sheet(si)]).toEqual([...tr.sheet(si)]);
+      const width = s.diff.columns.length;
+      for (const [k, t] of tr.sheet(si)) {
+        if (t.kind !== 'computed') continue;
+        const ref = { sheet: si, row: Math.floor(k / width), col: k % width };
+        expect(tr2.parents(ref)).toEqual(tr.parents(ref));
+      }
+    });
+    if (after === 'stale.xlsx') expect(tr2.stats.stale).toBeGreaterThan(0);
   });
 });

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { applyRecalculation, diffText, formatCell, numericDelta, toUnifiedCsv, traceWorkbook, unpackWorkbookDiff, type CellRef, type DiffOptions, type WorkbookDiff } from 'spreadiff';
+import { applyRecalculation, diffText, formatCell, numericDelta, toUnifiedCsv, unpackWorkbookDiff, unpackWorkbookTrace, type CellRef, type DiffOptions, type WorkbookDiff, type WorkbookTrace } from 'spreadiff';
 import { DiffGrid, type CellDisplay, type CellInfo, type DiffGridHandle, type DiffLayout } from 'spreadiff/react';
 import { CodeView } from './CodeView';
 import { Icon } from './Icon';
@@ -14,8 +14,10 @@ type Renderer = 'spreadiff' | 'code' | 'glide';
 
 interface Loaded {
   result: WorkbookDiff;
+  /** Traced in the worker, when the files have formulas. */
+  trace: WorkbookTrace | null;
   names: [string, string];
-  timings: { parse: number; diff: number; transfer: number };
+  timings: { parse: number; diff: number; trace: number; transfer: number };
 }
 
 // One long-lived worker; requests are matched by id. If it dies (e.g. out
@@ -51,10 +53,11 @@ function run(req: DistributiveOmit<Req, 'id'>, transfer: Transferable[] = []): P
       inflight.delete(id);
       if (e.data.error) return reject(new Error(e.data.error));
       const result = unpackWorkbookDiff(e.data.packed);
+      const trace = e.data.trace ? unpackWorkbookTrace(e.data.trace, result) : null;
       const total = performance.now() - t0;
-      const { parse, diff } = e.data.timings;
+      const { parse, diff, trace: traced } = e.data.timings;
       // "transfer" = pack in worker + postMessage + unpack on main thread.
-      resolve({ result, names: e.data.names, timings: { parse, diff, transfer: Math.max(0, total - parse - diff) } });
+      resolve({ result, trace, names: e.data.names, timings: { parse, diff, trace: traced, transfer: Math.max(0, total - parse - diff - traced) } });
     };
     w.addEventListener('message', onMessage);
     w.postMessage({ ...req, id }, transfer);
@@ -100,7 +103,7 @@ export function App() {
   const [theme, setTheme] = useState<Theme>(readTheme);
   const [renderer, setRenderer] = useState<Renderer>('spreadiff');
   const [options, setOptions] = useState<DiffOptions>({ keys: 'auto', trimWhitespace: true, ignoreCase: false, numericTolerance: 0 });
-  const [header, setHeader] = useState(true);
+  const [header, setHeader] = useState<boolean | 'auto'>('auto');
   const [selected, setSelected] = useState<CellInfo | null>(null);
   const [showOptions, setShowOptions] = useState(false);
   const [display, setDisplay] = useState<CellDisplay>('stacked');
@@ -119,7 +122,7 @@ export function App() {
     } catch {}
   }, [theme]);
 
-  const run_ = useCallback(async (src: Source, opts: DiffOptions, hdr: boolean, label: string) => {
+  const run_ = useCallback(async (src: Source, opts: DiffOptions, hdr: boolean | 'auto', label: string) => {
     // Only the latest request may update the UI; an older one finishing
     // later (or failing) must not overwrite it.
     const token = ++loadToken.current;
@@ -186,11 +189,8 @@ export function App() {
     setSheet(i);
   };
 
-  // Formula tracing, when any sheet has formulas: recalculates around each change.
-  const trace = useMemo(() => {
-    if (!loaded || !loaded.result.sheets.some((s) => s.diff.newTable.formulas || s.diff.oldTable.formulas)) return null;
-    return traceWorkbook(loaded.result);
-  }, [loaded]);
+  // Formula tracing, done in the worker when any sheet has formulas.
+  const trace = loaded?.trace ?? null;
   // Stale results in the new file: show what recalculating gives, unless asked for the saved values.
   const [savedValues, setSavedValues] = useState(false);
   const shown = useMemo(() => (loaded && trace && !savedValues ? applyRecalculation(loaded.result, trace) : loaded?.result ?? null), [loaded, trace, savedValues]);
@@ -316,7 +316,7 @@ export function App() {
               <button className={`btn ${showOptions ? 'on' : ''}`} onClick={() => setShowOptions((v) => !v)} aria-expanded={showOptions}>
                 <Icon name="sliders" />
                 Options
-                {(changedColsOnly || options.ignoreCase || options.trimWhitespace === false || !header || options.numericTolerance || options.keys !== 'auto') && <span className="pip" title="Some options differ from the defaults" />}
+                {(changedColsOnly || options.ignoreCase || options.trimWhitespace === false || header !== 'auto' || options.numericTolerance || options.keys !== 'auto') && <span className="pip" title="Some options differ from the defaults" />}
               </button>
               {showOptions && (
                 <>
@@ -343,6 +343,14 @@ export function App() {
                       </select>
                     </label>
                     <label className="field">
+                      <span>First row</span>
+                      <select value={String(header)} title="Auto: column names, unless the row holds numbers, dates or formulas, or formulas read it" onChange={(e) => { const v = e.target.value === 'auto' ? 'auto' : e.target.value === 'true'; setHeader(v); rerun(options, v); }}>
+                        <option value="auto">Auto</option>
+                        <option value="true">Column names</option>
+                        <option value="false">Data</option>
+                      </select>
+                    </label>
+                    <label className="field">
                       <span>Numbers equal within</span>
                       <select value={String(options.numericTolerance ?? 0)} onChange={(e) => rerun({ ...options, numericTolerance: Number(e.target.value) })}>
                         {['0', '0.000001', '0.001', '0.01', '0.5', '1'].map((v) => (
@@ -353,7 +361,6 @@ export function App() {
                     <hr />
                     <Toggle checked={!!options.ignoreCase} onChange={(v) => rerun({ ...options, ignoreCase: v })} label="Ignore case" />
                     <Toggle checked={options.trimWhitespace !== false} onChange={(v) => rerun({ ...options, trimWhitespace: v })} label="Trim whitespace" />
-                    <Toggle checked={header} onChange={(v) => { setHeader(v); rerun(options, v); }} label="First row is header" />
                     <hr className="tight" />
                     <button className="btn ghost small left" onClick={exportCsv} title="daff-style highlighter CSV">
                       <Icon name="download" />
@@ -443,7 +450,7 @@ export function App() {
             {selected ? <Inspector cell={selected} /> : <span className="hint">Click a cell to inspect · <kbd>n</kbd> <kbd>p</kbd> next / previous change · <kbd>u</kbd> <kbd>s</kbd> unified / split · arrows move</span>}
             <div className="spacer" />
             <span className="timing">
-              {fmt(diff.oldTable.rows.length)} → {fmt(diff.newTable.rows.length)} rows · {diff.columns.length} cols · {source.current?.kind === 'synthetic' ? 'generate + parse' : 'parse'} {ms(loaded.timings.parse)} · diff {ms(loaded.timings.diff)} · transfer {ms(loaded.timings.transfer)}
+              {fmt(diff.oldTable.rows.length)} → {fmt(diff.newTable.rows.length)} rows · {diff.columns.length} cols · {source.current?.kind === 'synthetic' ? 'generate + parse' : 'parse'} {ms(loaded.timings.parse)} · diff {ms(loaded.timings.diff)}{loaded.trace ? ` · trace ${ms(loaded.timings.trace)}` : ''} · transfer {ms(loaded.timings.transfer)}
             </span>
           </footer>
         </>

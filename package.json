@@ -18,7 +18,8 @@
     "docs:check": "node scripts/docs-check.mjs",
     "docs:screenshots": "node scripts/screenshots.mjs",
     "test:bundle": "node scripts/test-bundling.mjs",
-    "bench:trace": "node bench/trace-eval/run.mjs"
+    "bench:trace": "node bench/trace-eval/run.mjs",
+    "test:hosted": "node scripts/test-hosted.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.25.10",

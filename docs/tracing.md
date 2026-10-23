@@ -204,12 +204,41 @@ The engine check's misses were all expected:
 - floating-point noise in trigonometry;
 - one locale-specific file whose formulas Excel only reads in Polish.
 
-All of them fail calibration, so none of them can produce a wrong answer.
-They fall back to references instead.
+In these files all of them failed calibration and fell back to
+references. That is not a guarantee: calibration checks a sample of each
+formula shape (up to 8 cells), so a shape that is right on its sample and
+wrong elsewhere would get through.
 
 Two real bugs surfaced in the corpus and are fixed: the header-row and
 row-pairing problems listed below. Run it yourself with
 `npm run bench:trace` (needs LibreOffice and Python's openpyxl).
+
+### In a browser, hosted
+
+LibreOffice only produced the answers. spreadiff itself runs entirely in
+the page: the engine is plain TypeScript, with no server, no WebAssembly
+and no `eval`. `npm run test:hosted` checks the hosted setup itself:
+- **The library, as a site would use it.** It packs the npm package and
+  builds a fresh Vite app with it. The build is served as plain static
+  files, and Chromium blocks every request outside the page's origin.
+  19 of the cases above are committed as fixtures (`test/hosted/fixtures`),
+  with LibreOffice's answers. Each is parsed, diffed and traced in the
+  library's worker, then compared cell by cell.
+- **The viewer's production build.** Files are uploaded through its file
+  inputs, and the test checks the trace panel, banners and contributions.
+
+| In Chromium | Result |
+| --- | --- |
+| Changed cells found, with the right kind | 2,016 of 2,016 |
+| Downstream cells with exactly LibreOffice's causes | **1,955 of 1,955** scored |
+| Stale files: values after recalculation equal LibreOffice's | 1,843 of 1,843 |
+| Files without values: computed values equal LibreOffice's | 12,665 of 12,665 |
+| Requests outside the page | 0 |
+
+How long tracing blocks the page is in [Workers → Formula
+traces](workers.md#formula-traces). In short, it runs in the worker; the
+page pays 35–75 ms for typical models, against about 230 ms when it
+traces on the main thread.
 
 ## Failure cases
 

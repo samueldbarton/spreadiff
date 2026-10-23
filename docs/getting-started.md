@@ -23,8 +23,8 @@ esbuild, Rollup) and an ES2022 target. React 18+ is needed only for
 | Import | Use it for | Size (min+gzip) |
 | --- | --- | --- |
 | `spreadiff/lite` | Diff + CSV + an HTML/text renderer. No canvas or DOM APIs, so it runs on servers too | 11.8 KB |
-| `spreadiff/core` | The diff engine, CSV and XLSX parsers, formula tracing. No rendering | 36.3 KB |
-| `spreadiff` | Everything in core plus the canvas `DiffGrid` | 51.5 KB |
+| `spreadiff/core` | The diff engine, CSV and XLSX parsers, formula tracing. No rendering | 37.4 KB |
+| `spreadiff` | Everything in core plus the canvas `DiffGrid` | 52.6 KB |
 | `spreadiff/react` | The `DiffGrid` React component | + React |
 | `spreadiff/worker` | Parse and diff in a Web Worker | small client + worker |
 

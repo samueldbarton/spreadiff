@@ -312,33 +312,46 @@ function clip(
   return { sheet, r0, r1, c0, c1 };
 }
 
-/** Static formula graph of one side, from formula references. */
-function staticGraph(diff: WorkbookDiff, side: Side): Graph {
+/** A side's formula references, one cell at a time: precedents (clipped to the sheets) and flags, or null for a non-formula cell. */
+function refReader(diff: WorkbookDiff, side: Side) {
   const tables = diff.sheets.map((s) => (side === 'old' ? s.diff.oldTable : s.diff.newTable));
   const byName = new Map(tables.map((t, i) => [t.name.toUpperCase(), i]));
   const names = side === 'old' ? diff.names?.old : diff.names?.new;
   const tableDefs = side === 'old' ? diff.tables?.old : diff.tables?.new;
   const sheetNames = tables.map((t) => t.name);
+  return {
+    tables,
+    read(s: number, r: number, c: number): { rects: Rect[]; dynamic: boolean; volatile: boolean } | null {
+      const formula = tables[s]?.formulas?.[r]?.[c];
+      if (!formula) return null;
+      const origin = tables[s].origin ?? { row: 1, col: 0 };
+      const refs = formulaRefs(formula, names, { tables: tableDefs, row: r + origin.row, sheets: sheetNames });
+      const rects: Rect[] = [];
+      for (const rg of refs.ranges) {
+        const rect = clip(rg, s, byName, tables);
+        if (rect) rects.push(rect);
+      }
+      return { rects, dynamic: refs.dynamic, volatile: refs.volatile };
+    },
+  };
+}
+
+/** Static formula graph of one side, from formula references. */
+function staticGraph(diff: WorkbookDiff, side: Side): Graph {
+  const reader = refReader(diff, side);
   const precedents = new Map<number, Rect[]>();
   const flags = new Map<number, { dynamic: boolean; volatile: boolean }>();
-  tables.forEach((t, s) => {
+  reader.tables.forEach((t, s) => {
     const f = t.formulas;
     if (!f) return;
-    const origin = t.origin ?? { row: 1, col: 0 };
     for (let r = 0; r < f.length; r++) {
       const row = f[r];
       if (!row) continue;
       for (let c = 0; c < row.length; c++) {
-        const formula = row[c];
-        if (!formula) continue;
-        const refs = formulaRefs(formula, names, { tables: tableDefs, row: r + origin.row, sheets: sheetNames });
+        const refs = reader.read(s, r, c);
+        if (!refs) continue;
         const id = cellId(s, r, c);
-        const rects: Rect[] = [];
-        for (const rg of refs.ranges) {
-          const rect = clip(rg, s, byName, tables);
-          if (rect) rects.push(rect);
-        }
-        precedents.set(id, rects);
+        precedents.set(id, refs.rects);
         if (refs.dynamic || refs.volatile) flags.set(id, { dynamic: refs.dynamic, volatile: refs.volatile });
       }
     }
@@ -431,6 +444,7 @@ export function traceWorkbook(diff: WorkbookDiff, options: TraceOptions = {}): W
   const staticNew = staticGraph(diff, 'new');
   let staticOld: Graph | null = null;
   const oldGraph = () => (staticOld ??= staticGraph(diff, 'old'));
+  let oldReader: ReturnType<typeof refReader> | null = null;
   diff.sheets.forEach((s, si) => {
     const d = s.diff;
     for (const [k, t] of traces[si]) {
@@ -576,6 +590,18 @@ export function traceWorkbook(diff: WorkbookDiff, options: TraceOptions = {}): W
     if ((r.trace.kind === 'added' || r.trace.kind === 'removed') && r.trace.impactCount) traces[r.ref.sheet].set(key(r.ref), r.trace);
   }
 
+  // Added/removed rows per sheet, found once: parents() checks big ranges against them.
+  const structural: number[][] = [];
+  const structuralRows = (si: number) => {
+    let rows = structural[si];
+    if (!rows) {
+      rows = structural[si] = [];
+      const d = maps[si].diff;
+      for (let row = 0; row < d.rowCount; row++) if (d.status[row] === ROW_STATUS.added || d.status[row] === ROW_STATUS.removed) rows.push(row);
+    }
+    return rows;
+  };
+
   return {
     get: (ref) => traces[ref.sheet]?.get(key(ref)),
     sheet: (i) => traces[i] ?? new Map(),
@@ -600,8 +626,9 @@ export function traceWorkbook(diff: WorkbookDiff, options: TraceOptions = {}): W
       for (const side of ['new', 'old'] as const) {
         const id = sideId(side, ref);
         if (id === null) continue;
-        const g = side === 'new' ? newGraph : oldGraph();
-        for (const rc of g.precedents.get(id) ?? []) {
+        // The old side's whole graph is only built when removed cells need it; one cell's references are enough here.
+        const rects = side === 'new' ? newGraph.precedents.get(id) : staticOld ? staticOld.precedents.get(id) : (oldReader ??= refReader(diff, 'old')).read(idSheet(id), idRow(id), idCol(id))?.rects;
+        for (const rc of rects ?? []) {
           const area = (rc.r1 - rc.r0 + 1) * (rc.c1 - rc.c0 + 1);
           const target = maps[rc.sheet].diff;
           if (area <= 4096) {
@@ -618,9 +645,8 @@ export function traceWorkbook(diff: WorkbookDiff, options: TraceOptions = {}): W
             const c = idCol(cid);
             if (r >= rc.r0 && r <= rc.r1 && c >= rc.c0 && c <= rc.c1) add(cand);
           }
-          for (let row = 0; row < target.rowCount && out.length < 200; row++) {
-            const st = target.status[row];
-            if (st !== ROW_STATUS.added && st !== ROW_STATUS.removed) continue;
+          for (const row of structuralRows(rc.sheet)) {
+            if (out.length >= 200) break;
             const sr = side === 'new' ? target.newRows[row] : target.oldRows[row];
             if (sr < rc.r0 || sr > rc.r1) continue;
             for (let col = 0; col < target.columns.length; col++) {

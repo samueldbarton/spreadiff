@@ -77,8 +77,8 @@ const html = `<style>${LITE_CSS}</style>` + renderHTML(diff, { layout: 'split' }
 | Import | Contents | min + gzip |
 | --- | --- | --- |
 | `spreadiff/lite` | Diff engine, CSV parser, HTML and text renderers | 11.8 KB |
-| `spreadiff/core` | + XLSX reader, formula engine and tracing | 36.3 KB |
-| `spreadiff` | + canvas `DiffGrid` | 51.5 KB |
+| `spreadiff/core` | + XLSX reader, formula engine and tracing | 37.4 KB |
+| `spreadiff` | + canvas `DiffGrid` | 52.6 KB |
 | `spreadiff/react` | React component for `DiffGrid` | + React |
 | `spreadiff/worker` | Parse and diff in a Web Worker | |
 

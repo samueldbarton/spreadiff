@@ -238,7 +238,7 @@ Throws for legacy `.xls` files and for files named `.xlsx` that aren't zips.
 
 | Field | Type | Default | |
 | --- | --- | --- | --- |
-| `header` | `boolean` | `true` | First (non-empty) row holds column names |
+| `header` | `boolean \| 'auto'` | `'auto'` | First (non-empty) row holds column names. XLSX: see `ParseXlsxOptions.header`; CSV treats `'auto'` as `true` |
 | `delimiter` | `string` | detected | CSV delimiter |
 
 ### parseCsv
@@ -756,9 +756,16 @@ Wrap a module `Worker` running `spreadiff/worker/worker.js`.
 
 | Member | |
 | --- | --- |
-| `diffFiles(oldFile, newFile, options?, parse?)` | Read, parse and diff two `File`s |
-| `diffBuffers(old: FileData, new: FileData, options?, parse?)` | Same from bytes; buffers are transferred |
+| `diffFiles(oldFile, newFile, options?, settings?)` | Read, parse and diff two `File`s |
+| `diffBuffers(old: FileData, new: FileData, options?, settings?)` | Same from bytes; buffers are transferred |
 | `terminate()` | Stop the worker; pending requests reject |
+
+### WorkerSettings
+
+| Field | Type | Default | |
+| --- | --- | --- | --- |
+| `header` | `boolean \| 'auto'` | `'auto'` | Whether the first row holds column names; see `ParseFileOptions.header` |
+| `trace` | `boolean \| TraceOptions` | `false` | Also trace downstream changes in the worker. See [Workers → Formula traces](workers.md#formula-traces) |
 
 ### FileData
 
@@ -766,14 +773,16 @@ Wrap a module `Worker` running `spreadiff/worker/worker.js`.
 
 ### WorkerDiffResult
 
-`{ result: WorkbookDiff; timings: { parse: number; diff: number } }`:
-timings in milliseconds, measured inside the worker.
+`{ result: WorkbookDiff; trace?: WorkbookTrace; timings: { parse, diff, trace } }`:
+`trace` when `settings.trace` asked for it and the files have formulas;
+timings in milliseconds, measured inside the worker (`trace` is 0 when not
+asked).
 
 ### WorkerRequest
 
 The message format of `spreadiff/worker/worker.js`:
-`{ id, old: FileData, new: FileData, options?, parse? }`. Replies are
-`{ id, packed: PackedWorkbookDiff, timings }` or `{ id, error }`. Only
+`{ id, old: FileData, new: FileData, options?, parse?, trace? }`. Replies are
+`{ id, packed: PackedWorkbookDiff, trace?: PackedWorkbookTrace, timings }` or `{ id, error }`. Only
 needed if you drive the worker yourself.
 
 ### packWorkbookDiff
@@ -812,13 +821,48 @@ Decode one table.
 
 ### PackedTable
 
-`{ name, columns, width, height, types: Uint8Array, numbers: Float64Array, strings: string, formulas?, origin? }`:
+`{ name, columns, width, height, types: Uint8Array, numbers: Float64Array, strings: string, formulas?, origin?, header?, arrays? }`:
 cell types (0 null, 1 string, 2 number, 3 true, 4 false) and numbers
-row-major, strings joined by U+0000.
+row-major, strings joined by U+0000. `formulas` is packed the same way:
+`{ lengths: Int32Array, width, cells: Float64Array, text }`, the position
+of each formula and their text joined. Nested arrays of 300,000 formula
+strings took 150–330 ms to structured-clone; packed, 10–23 ms.
 
 ### PackedWorkbookDiff
 
 A `WorkbookDiff` whose tables are `PackedTable`s.
+
+### packWorkbookTrace
+
+```ts signature
+packWorkbookTrace(trace: WorkbookTrace, diff: WorkbookDiff): { packed: PackedWorkbookTrace; transfer: ArrayBuffer[] }
+```
+
+Encode a trace of `diff` for `postMessage(packed, transfer)`. The parent
+lists of downstream and formula-edit cells are computed here, so
+`parents()` of other cells is `[]` after unpacking.
+
+### unpackWorkbookTrace
+
+```ts signature
+unpackWorkbookTrace(p: PackedWorkbookTrace, diff: WorkbookDiff): WorkbookTrace
+```
+
+Rebuild the trace on the other side. `diff` is the unpacked diff it was
+made for.
+
+### PackedWorkbookTrace
+
+`{ sheets: PackedSheetTrace[], parents, stats, truncated }`.
+
+### PackedSheetTrace
+
+One sheet's traces as typed arrays: `keys`, `codes` (kind, method,
+unexplained, has contributions), `counts` (cause and impact counts),
+offsets `causeAt` / `impactAt` / `contribAt` into `refs` (sheet, row, col
+triples) and `contributions` (NaN for null), plus `stale` values by
+index. Structured-cloning one object per traced cell cost about 200 ms per
+40,000 cells.
 
 ---
 
