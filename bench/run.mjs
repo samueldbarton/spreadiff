@@ -49,7 +49,7 @@ for (const rows of SIZES) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });
   await page.goto(URL);
   // The viewer has two generated stress tests; other sizes aren't wired up.
-  const label = { 100000: 'Stress test', 1000000: '1M rows' }[rows];
+  const label = { 100000: '100k rows', 1000000: '1M rows' }[rows];
   if (!label) throw new Error(`SIZES: only 100000 and 1000000 are supported, got ${rows}`);
   await page.getByText(label).first().click();
   await page.waitForSelector('.timing', { timeout: 180_000 });

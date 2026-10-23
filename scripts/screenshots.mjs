@@ -102,9 +102,9 @@ try {
   const app = await browser.newPage({ viewport: { width: 1440, height: 820 }, deviceScaleFactor: 2, colorScheme: 'light' });
   app.on('pageerror', (e) => errors.push(e.message));
   await app.goto(`http://localhost:${PORT}/`);
-  await app.getByText('Try a financial model').click();
+  await app.getByText('Financial model').click();
   await app.waitForSelector('.timing');
-  await app.locator('label.select', { hasText: 'Cells' }).locator('select').selectOption('delta');
+  await app.getByRole('radio', { name: 'Δ %' }).click();
   await app.waitForTimeout(600);
   await app.screenshot({ path: join(OUT, 'viewer.png') });
   console.log('  docs/images/viewer.png');

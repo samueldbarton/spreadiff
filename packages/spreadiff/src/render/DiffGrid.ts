@@ -1194,7 +1194,8 @@ export class DiffGrid<A = unknown> {
         this.text(newText, x, cy, w, align, font, t.fg);
       }
     }
-    // Formula edits get an ƒ in the corner; computed cells a thin amber edge.
+    // A mark in the corner says what kind of change this is: ƒ for a formula
+    // edit, an amber notch for a downstream result. Colour alone isn't enough.
     if (kind === 'formula' && p.side !== 'old') {
       ctx.font = `italic 600 ${t.fontSize - 3}px ${t.fontFamily}`;
       ctx.fillStyle = t.formula;
@@ -1202,7 +1203,12 @@ export class DiffGrid<A = unknown> {
       ctx.fillText('ƒ', x + 3, y + 8);
     } else if (computed && p.side !== 'old') {
       ctx.fillStyle = t.computed;
-      ctx.fillRect(x, y, 2, h);
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + 6, y);
+      ctx.lineTo(x, y + 6);
+      ctx.closePath();
+      ctx.fill();
     }
   }
 
@@ -1243,8 +1249,13 @@ export class DiffGrid<A = unknown> {
       const numW = (p.gutter - BAR_WIDTH - 16) / 2;
       if (oi >= 0) this.text(String(oi + offOld), p.x + BAR_WIDTH, cy, numW, 'right', mono, numColor);
       if (ni >= 0) this.text(String(ni + offNew), p.x + BAR_WIDTH + numW, cy, numW, 'right', mono, numColor);
-      const sign = status === ROW_STATUS.added ? '+' : status === ROW_STATUS.removed ? '−' : status === ROW_STATUS.modified ? '~' : '';
-      if (sign) {
+      const sign = status === ROW_STATUS.added ? '+' : status === ROW_STATUS.removed ? '−' : '';
+      if (status === ROW_STATUS.modified) {
+        ctx.fillStyle = accent!;
+        ctx.beginPath();
+        ctx.arc(p.x + p.gutter - 9, cy - 0.5, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (sign) {
         ctx.font = `600 ${t.fontSize}px ${t.monoFontFamily}`;
         ctx.fillStyle = accent!;
         ctx.textAlign = 'center';
@@ -1398,8 +1409,8 @@ export class DiffGrid<A = unknown> {
       ctx.font = `600 ${t.fontSize - 3}px ${t.fontFamily}`;
       const bw = Math.max(18, ctx.measureText(label).width + 10);
       const bx = x + w - CELL_PAD - bw + 4;
-      ctx.fillStyle = mixAlpha(t.modified, 0.16);
-      roundRect(ctx, bx, cy - 8, bw, 16, 8);
+      ctx.fillStyle = mixAlpha(t.modified, t.dark ? 0.16 : 0.1);
+      roundRect(ctx, bx, cy - 7.5, bw, 15, 7.5);
       ctx.fill();
       ctx.fillStyle = t.modified;
       ctx.textAlign = 'center';

@@ -53,7 +53,7 @@ Props are the [options](#options) plus `diff`, `className` and `style`. The
 
 | `layout: 'unified'` | `layout: 'split'` |
 | --- | --- |
-| One grid. A changed cell shows old and new together. Two row-number gutters (old, new) and a `+` `−` `~` marker per row | Old on the left, new on the right, rows aligned and scrolled together. Rows and columns that exist on one side only are hatched on the other |
+| One grid. A changed cell shows old and new together. Two row-number gutters (old, new) and a `+`, `−` or dot marker per row | Old on the left, new on the right, rows aligned and scrolled together. Rows and columns that exist on one side only are hatched on the other |
 | ![](images/grid-unified.png) | ![](images/grid-split.png) |
 
 For a code-review-style split view rendered as HTML instead of canvas, see
@@ -74,8 +74,9 @@ themselves for the active display. When a delta still doesn't fit, it
 shortens to the % change, then to the absolute change.
 
 In every display:
-- downstream (computed) changes are **amber**, and formula edits carry an
-  `ƒ` ([Tracing](tracing.md));
+- downstream (computed) changes are **amber**, with a notch in the top-left
+  corner, and formula edits carry an `ƒ` there ([Tracing](tracing.md)). The
+  marks keep the kinds apart without relying on colour;
 - the hover popover always shows the full old → new, a character-level
   diff for text, and the Δ for numbers.
 

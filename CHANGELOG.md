@@ -30,6 +30,15 @@ the repository.
 
 ### Changed
 
+- Downstream (computed) cells are quieter: a lighter amber tint, and a
+  corner notch instead of a left bar, so they read as secondary to edits.
+  The dark-mode amber no longer turns olive. Modified rows show a dot in
+  the gutter instead of `~`, and column change counts are subtler.
+- The viewer's toolbar is regrouped: layout and cell display as segmented
+  controls, matching and comparison settings in one Options popover, and
+  the change summary beside the sheet tabs. The landing page has sample
+  cards and clearer drop zones.
+
 - Unkeyed row alignment hashes rows instead of building a string per row:
   3–5× faster (0.85–0.93 s → 0.22–0.36 s at 100k rows; 10–14.5 s → 2.9–5.0 s
   at 1M, in Node).

@@ -134,9 +134,9 @@ tree-shaken):
 
 | Entry | min | gzip | Contents |
 | --- | --- | --- | --- |
-| `spreadiff/lite` | 28.3 KB | **11.1 KB** | Diff engine, CSV parser, HTML/text renderer |
+| `spreadiff/lite` | 28.4 KB | **11.1 KB** | Diff engine, CSV parser, HTML/text renderer |
 | `spreadiff/core` | 37.8 KB | 16.1 KB | + XLSX reader, formula tracing |
-| `spreadiff` | 84.0 KB | 30.7 KB | + canvas `DiffGrid` |
+| `spreadiff` | 84.2 KB | 30.7 KB | + canvas `DiffGrid` |
 
 The XLSX reader uses [fflate](https://github.com/101arrowz/fflate), which is
 counted in `core`. `spreadiff/react` adds a thin wrapper on top of

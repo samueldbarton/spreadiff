@@ -36,8 +36,8 @@ export const STYLE = /* css */ `
   --sdi-removed-fg: var(--sd-removed-fg, color-mix(in srgb, var(--sdi-removed) 70%, var(--sdi-fg)));
   --sdi-selection: var(--sd-selection, var(--sdi-modified));
   /* Downstream (computed) changes: same formula, new result. */
-  --sdi-computed: var(--sd-computed, light-dark(#d97706, #fbbf24));
-  --sdi-computed-emphasis: var(--sd-computed-emphasis, light-dark(color-mix(in srgb, var(--sdi-computed) 20%, var(--sdi-bg)), color-mix(in srgb, var(--sdi-computed) 24%, var(--sdi-bg))));
+  --sdi-computed: var(--sd-computed, light-dark(#e08a00, #f5b83d));
+  --sdi-computed-emphasis: var(--sd-computed-emphasis, light-dark(color-mix(in srgb, var(--sdi-computed) 13%, var(--sdi-bg)), color-mix(in srgb, var(--sdi-computed) 15%, var(--sdi-bg))));
   /* Formula edits. */
   --sdi-formula: var(--sd-formula, light-dark(#7c3aed, #a78bfa));
   --sdi-dim: var(--sd-dim, color-mix(in srgb, var(--sdi-bg) 62%, transparent));

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { diffText, formatCell, numericDelta, toUnifiedCsv, traceWorkbook, unpackWorkbookDiff, type CellRef, type DiffOptions, type WorkbookDiff } from 'spreadiff';
 import { DiffGrid, type CellDisplay, type CellInfo, type DiffGridHandle, type DiffLayout } from 'spreadiff/react';
 import { CodeView } from './CodeView';
+import { Icon } from './Icon';
 import { GlideDiff } from './GlideDiff';
 import { sampleModel, sampleWorkbooks } from './samples';
 import { TracePanel, type TraceView } from './TracePanel';
@@ -244,6 +245,15 @@ export function App() {
 
   const keyChoices = useMemo(() => diff?.columns.filter((c) => c.oldIndex >= 0 && c.newIndex >= 0).map((c) => c.name) ?? [], [diff]);
 
+  const keyLabel = diff ? (diff.keyColumns.length ? diff.keyColumns.join(' + ') : 'row order') : '';
+  const columnSummary = stats
+    ? [
+        stats.columnsAdded && plural(stats.columnsAdded, 'column') + ' added',
+        stats.columnsRemoved && plural(stats.columnsRemoved, 'column') + ' removed',
+        stats.columnsRenamed && plural(stats.columnsRenamed, 'column') + ' renamed',
+      ].filter(Boolean)
+    : [];
+
   return (
     <div className="app">
       <header className="topbar">
@@ -254,89 +264,118 @@ export function App() {
         {loaded && (
           <div className="files">
             <FileChip side="old" name={loaded.names[0]} onPick={files[0] && files[1] ? (f) => setFile(0, f) : undefined} />
-            <span className="arrow">→</span>
+            <Icon name="arrow-right" className="arrow" />
             <FileChip side="new" name={loaded.names[1]} onPick={files[0] && files[1] ? (f) => setFile(1, f) : undefined} />
           </div>
         )}
         <div className="spacer" />
-        {stats && (
-          <div className="stats" aria-label="Change summary">
-            {stats.rowsAdded > 0 && <span className="stat added">+{fmt(stats.rowsAdded)} <small>rows</small></span>}
-            {stats.rowsRemoved > 0 && <span className="stat removed">−{fmt(stats.rowsRemoved)} <small>rows</small></span>}
-            {stats.cellsChanged > 0 && <span className="stat modified">~{fmt(stats.cellsChanged)} <small>cells</small></span>}
-            {stats.columnsAdded + stats.columnsRemoved + stats.columnsRenamed > 0 && (
-              <span className="stat neutral">
-                {[stats.columnsAdded && `+${stats.columnsAdded}`, stats.columnsRemoved && `−${stats.columnsRemoved}`, stats.columnsRenamed && `${stats.columnsRenamed} renamed`].filter(Boolean).join(' ')} <small>cols</small>
-              </span>
-            )}
-          </div>
+        {loaded && (
+          <button className="btn ghost small" onClick={() => { setLoaded(null); setFiles([null, null]); source.current = null; }} title="Compare other files">
+            New diff
+          </button>
         )}
-        <Segmented value={theme} onChange={setTheme} options={[['system', 'Auto'], ['light', 'Light'], ['dark', 'Dark']]} />
+        <Segmented
+          value={theme}
+          onChange={setTheme}
+          label="Theme"
+          options={[['system', <Icon name="monitor" />, 'Match system'], ['light', <Icon name="sun" />, 'Light'], ['dark', <Icon name="moon" />, 'Dark']]}
+        />
       </header>
 
       {loaded && diff ? (
         <>
           <div className="toolbar">
-            <Segmented value={layout} onChange={setLayout} options={[['unified', 'Unified'], ['split', 'Split']]} />
+            <Segmented
+              value={layout}
+              onChange={setLayout}
+              label="Layout"
+              options={[['unified', <><Icon name="unified" /><span className="label">Unified</span></>, 'Unified: one grid, old and new together (u)'], ['split', <><Icon name="split" /><span className="label">Split</span></>, 'Split: old and new side by side (s)']]}
+            />
+            <Segmented
+              value={display}
+              onChange={setDisplay}
+              label="Changed cells"
+              options={[
+                ['stacked', 'Stacked', 'Old value over new'],
+                ['new', 'New', 'New value only'],
+                ['delta', 'Δ %', 'New value with absolute and percent change'],
+                ['inline', 'Inline', 'Old → new on one line'],
+              ]}
+            />
+            <span className="divider" />
             <Toggle checked={collapse} onChange={setCollapse} label="Collapse unchanged" />
-            <Toggle checked={changedColsOnly} onChange={setChangedColsOnly} label="Changed columns only" />
-            <label className="select">
-              <span>Cells</span>
-              <select value={display} onChange={(e) => setDisplay(e.target.value as CellDisplay)}>
-                <option value="stacked">Old over new</option>
-                <option value="new">New only</option>
-                <option value="delta">New + Δ</option>
-                <option value="inline">Old → new</option>
-              </select>
-            </label>
-            <label className="select">
-              <span>Match rows by</span>
-              <select
-                value={Array.isArray(options.keys) ? options.keys[0] : options.keys}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  rerun({ ...options, keys: v === 'auto' || v === 'none' ? v : [v] });
-                }}
-              >
-                <option value="auto">Auto{diff.keyColumns.length && options.keys === 'auto' ? ` (${diff.keyColumns.join(', ')})` : ' (order)'}</option>
-                <option value="none">Row order</option>
-                {keyChoices.map((k) => (
-                  <option key={k} value={k}>{k}</option>
-                ))}
-              </select>
-            </label>
+            <div className="spacer" />
+            <div className="joined" role="group" aria-label="Changes">
+              <button className="btn icon" title="Previous change (p)" aria-label="Previous change" onClick={() => gridRef.current?.prevChange()} disabled={renderer !== 'spreadiff'}><Icon name="up" /></button>
+              <button className="btn icon" title="Next change (n)" aria-label="Next change" onClick={() => gridRef.current?.nextChange()} disabled={renderer !== 'spreadiff'}><Icon name="down" /></button>
+            </div>
             <div className="popover-wrap">
-              <button className="btn ghost" onClick={() => setShowOptions((v) => !v)} aria-expanded={showOptions}>
-                Options ▾
+              <button className={`btn ${showOptions ? 'on' : ''}`} onClick={() => setShowOptions((v) => !v)} aria-expanded={showOptions}>
+                <Icon name="sliders" />
+                Options
+                {(changedColsOnly || options.ignoreCase || options.trimWhitespace === false || !header || options.numericTolerance || options.keys !== 'auto') && <span className="pip" title="Some options differ from the defaults" />}
               </button>
               {showOptions && (
-                <div className="popover" onMouseLeave={() => setShowOptions(false)}>
-                  <Toggle checked={!!options.ignoreCase} onChange={(v) => rerun({ ...options, ignoreCase: v })} label="Ignore case" />
-                  <Toggle checked={options.trimWhitespace !== false} onChange={(v) => rerun({ ...options, trimWhitespace: v })} label="Trim whitespace" />
-                  <Toggle checked={header} onChange={(v) => { setHeader(v); rerun(options, v); }} label="First row is header" />
-                  <label className="select">
-                    <span>Numeric tolerance</span>
-                    <select value={String(options.numericTolerance ?? 0)} onChange={(e) => rerun({ ...options, numericTolerance: Number(e.target.value) })}>
-                      {['0', '0.000001', '0.001', '0.01', '0.5', '1'].map((v) => (
-                        <option key={v} value={v}>{v === '0' ? 'Exact' : `± ${v}`}</option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
+                <>
+                  <div className="popover-scrim" onClick={() => setShowOptions(false)} />
+                  <div className="popover" role="dialog" aria-label="Options">
+                    <span className="popover-title">View</span>
+                    <Toggle checked={changedColsOnly} onChange={setChangedColsOnly} label="Changed columns only" />
+                    <hr />
+                    <span className="popover-title">Matching</span>
+                    <label className="field">
+                      <span>Match rows by</span>
+                      <select
+                        value={Array.isArray(options.keys) ? options.keys[0] : options.keys}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          rerun({ ...options, keys: v === 'auto' || v === 'none' ? v : [v] });
+                        }}
+                      >
+                        <option value="auto">Auto{diff.keyColumns.length && options.keys === 'auto' ? ` (${diff.keyColumns.join(', ')})` : ' (order)'}</option>
+                        <option value="none">Row order</option>
+                        {keyChoices.map((k) => (
+                          <option key={k} value={k}>{k}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Numbers equal within</span>
+                      <select value={String(options.numericTolerance ?? 0)} onChange={(e) => rerun({ ...options, numericTolerance: Number(e.target.value) })}>
+                        {['0', '0.000001', '0.001', '0.01', '0.5', '1'].map((v) => (
+                          <option key={v} value={v}>{v === '0' ? 'Exact' : `± ${v}`}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <hr />
+                    <Toggle checked={!!options.ignoreCase} onChange={(v) => rerun({ ...options, ignoreCase: v })} label="Ignore case" />
+                    <Toggle checked={options.trimWhitespace !== false} onChange={(v) => rerun({ ...options, trimWhitespace: v })} label="Trim whitespace" />
+                    <Toggle checked={header} onChange={(v) => { setHeader(v); rerun(options, v); }} label="First row is header" />
+                    <hr className="tight" />
+                    <button className="btn ghost small left" onClick={exportCsv} title="daff-style highlighter CSV">
+                      <Icon name="download" />
+                      Export diff as CSV
+                    </button>
+                  </div>
+                </>
               )}
             </div>
-            <div className="spacer" />
-            <div className="nav">
-              <button className="btn icon" title="Previous change (p)" onClick={() => gridRef.current?.prevChange()} disabled={renderer !== 'spreadiff'}>↑</button>
-              <button className="btn icon" title="Next change (n)" onClick={() => gridRef.current?.nextChange()} disabled={renderer !== 'spreadiff'}>↓</button>
-            </div>
-            <button className="btn ghost" onClick={exportCsv} title="daff-style highlighter CSV">Export</button>
-            <Segmented value={renderer} onChange={setRenderer} options={[['spreadiff', 'Grid'], ['code', 'Code'], ['glide', 'Glide']]} title="Renderer: canvas grid, code-style HTML (spreadiff/lite), or Glide Data Grid" />
-            {trace && <Toggle checked={panel} onChange={setPanel} label="Trace" />}
+            <span className="divider" />
+            <Segmented
+              value={renderer}
+              onChange={setRenderer}
+              label="Renderer"
+              options={[['spreadiff', 'Grid', 'Canvas grid'], ['code', 'Code', 'Code-review HTML (spreadiff/lite)'], ['glide', 'Glide', 'Glide Data Grid, for comparison']]}
+            />
+            {trace && (
+              <button className={`btn icon ${panel ? 'on' : ''}`} onClick={() => setPanel((v) => !v)} aria-pressed={panel} title={panel ? 'Hide trace panel' : 'Show trace panel'} aria-label="Trace panel">
+                <Icon name="panel" />
+              </button>
+            )}
           </div>
 
-          {sheets.length > 1 && (
-            <nav className="tabs" role="tablist">
+          <div className="sheetbar">
+            <nav className="tabs" role="tablist" aria-label="Sheets">
               {sheets.map((s, i) => {
                 const st = s.diff.stats;
                 const n = st.rowsAdded + st.rowsRemoved + st.rowsModified;
@@ -349,7 +388,17 @@ export function App() {
                 );
               })}
             </nav>
-          )}
+            {stats && (
+              <div className="summary" aria-label="Change summary">
+                {stats.rowsAdded > 0 && <span className="sum added"><b>+{fmt(stats.rowsAdded)}</b> {stats.rowsAdded === 1 ? 'row' : 'rows'}</span>}
+                {stats.rowsRemoved > 0 && <span className="sum removed"><b>−{fmt(stats.rowsRemoved)}</b> {stats.rowsRemoved === 1 ? 'row' : 'rows'}</span>}
+                {stats.cellsChanged > 0 && <span className="sum modified"><b>{fmt(stats.cellsChanged)}</b> {stats.cellsChanged === 1 ? 'cell' : 'cells'} changed</span>}
+                {columnSummary.length > 0 && <span className="sum">{columnSummary.join(' · ')}</span>}
+                {stats.rowsAdded + stats.rowsRemoved + stats.cellsChanged + columnSummary.length === 0 && <span className="sum">No changes</span>}
+                <span className="sum faint" title="How rows were matched (change it under Options)">matched by {keyLabel}</span>
+              </div>
+            )}
+          </div>
 
           <div className="work">
             <main className="grid-wrap">
@@ -372,7 +421,7 @@ export function App() {
               ) : (
                 <GlideDiff diff={diff} dark={dark} />
               )}
-              {busy && <div className="busy">{busy}…</div>}
+              {busy && <div className="busy"><span className="spinner" />{busy}…</div>}
             </main>
             {trace && panel && (
               <TracePanel wb={loaded.result} trace={trace} sheet={sheet} selected={selectedRef} view={traceView} onView={setTraceView} onPick={pick} />
@@ -380,7 +429,7 @@ export function App() {
           </div>
 
           <footer className="statusbar">
-            {selected ? <Inspector cell={selected} /> : <span className="hint">Click a cell to inspect · <kbd>n</kbd>/<kbd>p</kbd> next/prev change · <kbd>u</kbd>/<kbd>s</kbd> unified/split · arrows move</span>}
+            {selected ? <Inspector cell={selected} /> : <span className="hint">Click a cell to inspect · <kbd>n</kbd> <kbd>p</kbd> next / previous change · <kbd>u</kbd> <kbd>s</kbd> unified / split · arrows move</span>}
             <div className="spacer" />
             <span className="timing">
               {fmt(diff.oldTable.rows.length)} → {fmt(diff.newTable.rows.length)} rows · {diff.columns.length} cols · {source.current?.kind === 'synthetic' ? 'generate + parse' : 'parse'} {ms(loaded.timings.parse)} · diff {ms(loaded.timings.diff)} · transfer {ms(loaded.timings.transfer)}
@@ -395,6 +444,8 @@ export function App() {
   );
 }
 
+const plural = (n: number, word: string) => `${fmt(n)} ${word}${n === 1 ? '' : 's'}`;
+
 function Landing(props: {
   busy: string | null;
   error: string | null;
@@ -406,25 +457,42 @@ function Landing(props: {
 }) {
   return (
     <div className="landing">
-      <h1>Diff spreadsheets, beautifully.</h1>
-      <p className="lede">
-        Drop two versions of a CSV, TSV or XLSX file. Rows are matched by key or by order, columns by name (renames
-        detected), and every changed cell is shown old-over-new. Rendered on canvas; handles millions of cells.
-      </p>
+      <div className="hero">
+        <h1>Diff spreadsheets, beautifully.</h1>
+        <p className="lede">
+          Compare two versions of a CSV, TSV or XLSX file. Rows match by key or by order, columns by name, and in
+          workbooks with formulas every changed result is traced back to the edits that caused it.
+        </p>
+      </div>
       <div className="drops">
         <DropZone side="old" file={props.files[0]} onFile={(f) => props.setFile(0, f)} />
-        <div className="drops-arrow">→</div>
+        <div className="drops-arrow"><Icon name="arrow-right" /></div>
         <DropZone side="new" file={props.files[1]} onFile={(f) => props.setFile(1, f)} />
       </div>
-      <div className="cta">
-        <button className="btn primary" onClick={props.loadModel}>Try a financial model</button>
-        <button className="btn" onClick={props.loadSample}>Inventory workbook</button>
-        <button className="btn" onClick={() => props.loadSynthetic(100_000)}>Stress test · 100k rows</button>
-        <button className="btn" onClick={() => props.loadSynthetic(1_000_000)}>1M rows</button>
+      <div className="samples">
+        <span className="samples-label">Or try a sample</span>
+        <div className="cta">
+          <button className="sample primary" onClick={props.loadModel}>
+            <b>Financial model</b>
+            <span>Formulas across three sheets, with downstream changes traced</span>
+          </button>
+          <button className="sample" onClick={props.loadSample}>
+            <b>Inventory workbook</b>
+            <span>Keyed rows, a renamed column, added and removed rows</span>
+          </button>
+          <button className="sample" onClick={() => props.loadSynthetic(100_000)}>
+            <b>100k rows</b>
+            <span>Generated, 12 columns</span>
+          </button>
+          <button className="sample" onClick={() => props.loadSynthetic(1_000_000)}>
+            <b>1M rows</b>
+            <span>Takes a few seconds to generate</span>
+          </button>
+        </div>
       </div>
-      {props.busy && <p className="busy-inline">{props.busy}…</p>}
+      {props.busy && <p className="busy-inline"><span className="spinner" />{props.busy}…</p>}
       {props.error && <p className="error">{props.error}</p>}
-      <p className="privacy">Files never leave your browser. Parsing and diffing run in a Web Worker.</p>
+      <p className="privacy"><Icon name="lock" />Files never leave your browser. Parsing and diffing run in a Web Worker.</p>
     </div>
   );
 }
@@ -456,9 +524,12 @@ function DropZone({ side, file, onFile }: { side: 'old' | 'new'; file: File | nu
       role="button"
       tabIndex={0}
     >
-      <span className="drop-label">{side === 'old' ? 'Before' : 'After'}</span>
-      <span className="drop-name">{file ? file.name : 'Drop a file or click to choose'}</span>
-      <span className="drop-hint">.csv · .tsv · .xlsx</span>
+      <span className="drop-icon"><Icon name={file ? 'file' : 'upload'} /></span>
+      <span className="drop-text">
+        <span className="drop-label">{side === 'old' ? 'Before' : 'After'}</span>
+        <span className="drop-name">{file ? file.name : 'Drop a file, or click to choose'}</span>
+        <span className="drop-hint">CSV, TSV or XLSX</span>
+      </span>
       <input ref={input} type="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm" hidden onChange={(e) => {
         const f = e.target.files?.[0];
         e.target.value = ''; // so choosing the same file again still fires
@@ -530,12 +601,21 @@ function Inspector({ cell }: { cell: CellInfo }) {
   );
 }
 
-function Segmented<T extends string>({ value, onChange, options, title }: { value: T; onChange: (v: T) => void; options: [T, string][]; title?: string }) {
+/** Options are `[value, content, description]`; the description is the tooltip and, for icon-only content, the label. */
+function Segmented<T extends string>({ value, onChange, options, label }: { value: T; onChange: (v: T) => void; options: [T, ReactNode, string?][]; label: string }) {
   return (
-    <div className="segmented" role="radiogroup" title={title}>
-      {options.map(([v, label]) => (
-        <button key={v} role="radio" aria-checked={v === value} className={v === value ? 'on' : ''} onClick={() => onChange(v)}>
-          {label}
+    <div className="segmented" role="radiogroup" aria-label={label}>
+      {options.map(([v, content, description]) => (
+        <button
+          key={v}
+          role="radio"
+          aria-checked={v === value}
+          aria-label={typeof content === 'string' ? undefined : description}
+          title={description}
+          className={v === value ? 'on' : ''}
+          onClick={() => onChange(v)}
+        >
+          {content}
         </button>
       ))}
     </div>

@@ -240,7 +240,7 @@ export function renderHTML(diff: TableDiff, options: LiteOptions = {}): string {
         out += `<tr class="sdl-r sdl-modified sdl-plus"${kindSummary(r)}><td class="sdl-ln"></td><td class="sdl-ln">${ni + offNew}</td><td class="sdl-sign">+</td>${cells(r, 'unified', 'new')}</tr>`;
         continue;
       }
-      const sign = st === ROW_STATUS.added ? '+' : st === ROW_STATUS.removed ? '−' : st === ROW_STATUS.modified ? '~' : '';
+      const sign = st === ROW_STATUS.added ? '+' : st === ROW_STATUS.removed ? '−' : st === ROW_STATUS.modified ? '•' : '';
       out += `<tr class="sdl-r sdl-${statusName(st)}"${kindSummary(r)}><td class="sdl-ln">${oi >= 0 ? oi + offOld : ''}</td><td class="sdl-ln">${ni >= 0 ? ni + offNew : ''}</td><td class="sdl-sign">${sign}</td>${cells(r, 'unified', st === ROW_STATUS.removed ? 'old' : 'merged')}</tr>`;
     }
   }
@@ -334,7 +334,7 @@ export const LITE_CSS = /* css */ `
   --_add: var(--sd-added, light-dark(#0dbe4e, #5ecc71));
   --_del: var(--sd-removed, light-dark(#ff2e3f, #ff6762));
   --_mod: var(--sd-modified, light-dark(#009fff, #69b1ff));
-  --_cmp: var(--sd-computed, light-dark(#d97706, #fbbf24));
+  --_cmp: var(--sd-computed, light-dark(#e08a00, #f5b83d));
   --_fx: var(--sd-formula, light-dark(#7c3aed, #a78bfa));
   color-scheme: light dark;
   overflow: auto;
@@ -359,16 +359,17 @@ export const LITE_CSS = /* css */ `
 .sdl .sdl-added .sdl-sign { color: var(--_add); }
 .sdl .sdl-removed .sdl-sign, .sdl .sdl-minus .sdl-sign { color: var(--_del); }
 .sdl .sdl-plus .sdl-sign { color: var(--_add); }
+.sdl .sdl-modified:not(.sdl-minus):not(.sdl-plus) .sdl-sign { color: var(--_mod); }
 .sdl .sdl-modified > td:first-child { box-shadow: inset 3px 0 var(--_mod); }
 .sdl .sdl-modified[data-computed-only] > td:first-child { box-shadow: inset 3px 0 var(--_cmp); }
 .sdl .sdl-c-old { background: color-mix(in srgb, var(--_del) 14%, var(--_bg)); }
 .sdl .sdl-c-new { background: color-mix(in srgb, var(--_add) 16%, var(--_bg)); }
 .sdl .sdl-c-old[data-kind="computed"] { background: var(--_panel); color: var(--_muted); }
-.sdl .sdl-c-new[data-kind="computed"] { background: color-mix(in srgb, var(--_cmp) 20%, var(--_bg)); }
+.sdl .sdl-c-new[data-kind="computed"] { background: color-mix(in srgb, var(--_cmp) 13%, var(--_bg)); }
 .sdl .sdl-c-new[data-kind="formula"]::before { content: "ƒ"; color: var(--_fx); font-style: italic; font-weight: 700; margin-right: 6px; }
 .sdl mark { background: color-mix(in srgb, var(--_add) 38%, transparent); color: inherit; border-radius: 2px; }
 .sdl .sdl-c-old mark { background: color-mix(in srgb, var(--_del) 34%, transparent); }
-.sdl [data-kind="computed"] mark { background: color-mix(in srgb, var(--_cmp) 40%, transparent); }
+.sdl [data-kind="computed"] mark { background: color-mix(in srgb, var(--_cmp) 30%, transparent); }
 .sdl .sdl-c-old[data-kind="computed"] mark { background: transparent; }
 .sdl s { color: var(--_muted); text-decoration-color: color-mix(in srgb, var(--_del) 70%, transparent); }
 .sdl .sdl-arrow { color: var(--_muted); margin: 0 6px; }
