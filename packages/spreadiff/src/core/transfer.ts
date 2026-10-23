@@ -1,27 +1,39 @@
 import type { CellValue, Table, TableDiff, WorkbookDiff } from './types.js';
 
 /**
- * Compact, transferable encoding of tables for crossing a worker boundary.
- * Structured-cloning `CellValue[][]` costs one allocation per cell (seconds
- * for millions of cells); this sends one type array, one number array and one
- * joined string, which move in milliseconds.
+ * Compact encoding of a {@link Table} for crossing a worker boundary.
+ * Structured-cloning `CellValue[][]` allocates one object per cell; this
+ * sends two typed arrays (transferable, zero-copy) and one joined string.
+ * Measured at 1M rows × 12 columns: 11.2 s → 2.2 s end to end, most of
+ * the remainder being the unpack on the receiving side.
  */
 export interface PackedTable {
+  /** `Table.name`. */
   name: string;
+  /** `Table.columns`. */
   columns: string[];
+  /** Number of columns. */
   width: number;
+  /** Number of rows. */
   height: number;
-  /** 0 null, 1 string, 2 number, 3 true, 4 false, row-major. */
+  /** Cell types, row-major: 0 null, 1 string, 2 number, 3 true, 4 false. */
   types: Uint8Array;
+  /** Numeric cell values, row-major (0 for non-numbers). */
   numbers: Float64Array;
-  /** String cells joined by U+0000, in row-major order. */
+  /** String cell values joined by U+0000, in row-major order. U+0000 inside values becomes U+FFFD. */
   strings: string;
+  /** `Table.formulas`, unchanged. */
   formulas?: (string | null)[][];
+  /** `Table.origin`, unchanged. */
   origin?: { row: number; col: number };
 }
 
 const SEP = '\u0000';
 
+/**
+ * Encode a table for `postMessage`: typed arrays you can transfer plus one
+ * joined string, instead of one object per cell. See {@link unpackTable}.
+ */
 export function packTable(t: Table): PackedTable {
   const width = t.columns.length;
   const height = t.rows.length;
@@ -46,6 +58,7 @@ export function packTable(t: Table): PackedTable {
   return { name: t.name, columns: t.columns, width, height, types, numbers, strings: parts.join(SEP), formulas: t.formulas, origin: t.origin };
 }
 
+/** Decode a table encoded by {@link packTable}. */
 export function unpackTable(p: PackedTable): Table {
   const strs = p.strings.length || p.types.includes(1) ? p.strings.split(SEP) : [];
   let s = 0;
@@ -66,9 +79,13 @@ export function unpackTable(p: PackedTable): Table {
   return t;
 }
 
+/** A {@link TableDiff} whose tables are packed with {@link packTable}. */
 export type PackedTableDiff = Omit<TableDiff, 'oldTable' | 'newTable'> & { oldTable: PackedTable; newTable: PackedTable };
+/** A {@link WorkbookDiff} with packed tables, from {@link packWorkbookDiff}. */
 export interface PackedWorkbookDiff {
+  /** Sheets, as in `WorkbookDiff.sheets`, with packed tables. */
   sheets: { name: string; status: WorkbookDiff['sheets'][number]['status']; diff: PackedTableDiff }[];
+  /** Defined names, as in `WorkbookDiff.names`. */
   names?: WorkbookDiff['names'];
 }
 
@@ -88,6 +105,7 @@ export function packWorkbookDiff(d: WorkbookDiff): { packed: PackedWorkbookDiff;
   return { packed, transfer };
 }
 
+/** Decode a workbook diff encoded by {@link packWorkbookDiff}. */
 export function unpackWorkbookDiff(p: PackedWorkbookDiff): WorkbookDiff {
   return {
     sheets: p.sheets.map((s) => ({

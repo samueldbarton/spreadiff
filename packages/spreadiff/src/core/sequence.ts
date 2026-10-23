@@ -15,7 +15,13 @@ export type Matches = number[];
 /** Total Myers work budget per bisection, in diagonal steps. */
 const WORK_BUDGET = 40_000_000;
 
-export function alignSequences(a: Int32Array, b: Int32Array): Matches {
+/**
+ * Longest-common-subsequence alignment of two integer sequences: returns
+ * matched index pairs, increasing in both. Optimal (Myers) for small edit
+ * distances; falls back to patience anchoring when the work budget runs out,
+ * which stays near-linear but may not be minimal.
+ */
+export function alignSequences(a: Int32Array, b: Int32Array): number[] {
   const out: Matches = [];
   diffRange(a, b, 0, a.length, 0, b.length, out);
   return out;

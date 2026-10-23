@@ -4,11 +4,21 @@ import { parseFile } from '../core/file.js';
 import { packWorkbookDiff } from '../core/transfer.js';
 import type { DiffOptions } from '../core/types.js';
 
+/**
+ * A request to the diff worker (`spreadiff/worker/worker.js`). Normally sent
+ * for you by {@link createDiffWorker}. Replies are `{ id, packed, timings }`
+ * or `{ id, error }`.
+ */
 export interface WorkerRequest {
+  /** Echoed back in the reply, to match it to the request. */
   id: number;
+  /** The old file. */
   old: { name: string; data: ArrayBuffer };
+  /** The new file. */
   new: { name: string; data: ArrayBuffer };
+  /** Diff options. */
   options?: DiffOptions;
+  /** Parse options: whether the first row is a header (default true). */
   parse?: { header?: boolean };
 }
 

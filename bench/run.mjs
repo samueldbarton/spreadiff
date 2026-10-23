@@ -1,5 +1,6 @@
 // Benchmark: pipeline timings + scroll smoothness, spreadiff vs Glide Data Grid.
 // Usage: (cd apps/viewer && npx vite build && npx vite preview --port 4173) & node bench/run.mjs
+// Env: URL (default http://localhost:4173/), SIZES (default 100000,1000000), CHROMIUM.
 import { chromium } from 'playwright';
 import { writeFileSync, mkdirSync } from 'node:fs';
 
@@ -20,6 +21,7 @@ async function scrollBench(page, renderer) {
       el.scrollTop = 0;
       await new Promise((r) => setTimeout(r, 300));
       const times = [];
+      const slow = [];
       let last = performance.now();
       let long = 0;
       const obs = new PerformanceObserver((l) => (long += l.getEntries().length));
@@ -30,13 +32,14 @@ async function scrollBench(page, renderer) {
         await new Promise((r) => requestAnimationFrame(r));
         const now = performance.now();
         times.push(now - last);
+        if (now - last > 50) slow.push([i, Math.round(now - last)]); // which frame, and how long
         last = now;
       }
       obs.disconnect();
       times.sort((a, b) => a - b);
       const q = (p) => times[Math.min(times.length - 1, Math.floor(p * times.length))];
       const mem = performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1e6) : null;
-      return { p50: q(0.5), p95: q(0.95), max: times[times.length - 1], over25: times.filter((t) => t > 25).length, longTasks: long, heapMB: mem };
+      return { slow, p50: q(0.5), p95: q(0.95), max: times[times.length - 1], over25: times.filter((t) => t > 25).length, longTasks: long, heapMB: mem };
     },
     { renderer, frames: SCROLL_FRAMES },
   );
@@ -45,13 +48,10 @@ async function scrollBench(page, renderer) {
 for (const rows of SIZES) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });
   await page.goto(URL);
-  const label = rows >= 1e6 ? '1M rows' : rows >= 1e5 ? 'Stress test' : null;
-  if (label) await page.getByText(label).first().click();
-  else {
-    // Custom size via the module worker: reuse the 100k button path with a URL hook.
-    await page.evaluate(() => {});
-    await page.getByText('Stress test').first().click();
-  }
+  // The viewer has two generated stress tests; other sizes aren't wired up.
+  const label = { 100000: 'Stress test', 1000000: '1M rows' }[rows];
+  if (!label) throw new Error(`SIZES: only 100000 and 1000000 are supported, got ${rows}`);
+  await page.getByText(label).first().click();
   await page.waitForSelector('.timing', { timeout: 180_000 });
   const timing = (await page.textContent('.timing')).trim();
   // Fair comparison: spreadiff draws every row too.
@@ -62,10 +62,9 @@ for (const rows of SIZES) {
   await page.waitForSelector('.dvn-scroller', { timeout: 60_000 });
   await page.waitForTimeout(500);
   const gl = await scrollBench(page, 'glide');
-  results.push({ rows: rows >= 1e6 ? 1_000_000 : 100_000, timing, spreadiff: sd, glide: gl });
+  results.push({ rows, timing, spreadiff: sd, glide: gl });
   console.log(JSON.stringify(results[results.length - 1]));
   await page.close();
-  if (!label) break;
 }
 await browser.close();
 mkdirSync('bench/results', { recursive: true });

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>spreadiff screenshot scenes</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <style>
+      html, body { margin: 0; background: Canvas; color-scheme: light dark; font: 13px Inter, system-ui, sans-serif; }
+      #stage { width: 1120px; height: 520px; overflow: hidden; border-radius: 10px; border: 1px solid color-mix(in srgb, CanvasText 12%, Canvas); margin: 16px; position: relative; }
+      #stage.auto { height: auto; max-height: none; }
+      .note { margin: 6px 12px 8px 96px; padding: 8px 12px; border-radius: 8px; font-size: 12px; background: color-mix(in srgb, #8b5cf6 10%, Canvas); border: 1px solid color-mix(in srgb, #8b5cf6 30%, Canvas); }
+      .note b { color: #8b5cf6; }
+    </style>
+  </head>
+  <body>
+    <div id="stage"></div>
+    <script type="module" src="/src/shots.ts"></script>
+  </body>
+</html>

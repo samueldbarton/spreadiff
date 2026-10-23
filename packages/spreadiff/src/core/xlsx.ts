@@ -10,14 +10,27 @@ import { unzipSync, strFromU8 } from 'fflate';
 import { columnLabel, uniqueNames } from './csv.js';
 import type { CellValue, Table, Workbook } from './types.js';
 
+/** Options for {@link parseXlsx}. */
 export interface ParseXlsxOptions {
   /** Treat each sheet's first non-empty row as column names. Default true. */
   header?: boolean;
   /** Only parse these sheets (by name). */
   sheets?: string[];
+  /** Name for the resulting workbook (default `workbook.xlsx`). */
   name?: string;
 }
 
+/**
+ * Read an `.xlsx` / `.xlsm` file into a {@link Workbook}.
+ *
+ * Reads cached values (formulas aren't evaluated), formula text (shared
+ * formulas are expanded per cell), dates (from the cell's number format),
+ * booleans, errors (as `#DIV/0!` strings), rich text and workbook-scoped
+ * defined names. Each sheet is trimmed to its used range; `origin` records
+ * where it starts. Styles, merged cells and charts are ignored.
+ *
+ * Throws if the data isn't a zip with `xl/workbook.xml`.
+ */
 export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOptions = {}): Workbook {
   const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
   const files = unzipSync(bytes, {

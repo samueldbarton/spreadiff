@@ -22,97 +22,140 @@ import {
 } from './layout.js';
 import { resolveTheme, STYLE, type Theme } from './theme.js';
 
+/**
+ * - `unified`: one grid; changed cells show old and new together (see {@link CellDisplay}).
+ * - `split`: old on the left, new on the right, rows aligned; missing rows and columns are hatched.
+ */
 export type DiffLayout = 'unified' | 'split';
 
+/** A note attached to a row (and optionally a cell) of the diff. */
 export interface CellAnnotation<A = unknown> {
-  /** Aligned row index (`0 … diff.rowCount - 1`). */
+  /** Aligned row index (`0 … diff.rowCount - 1`). The annotation renders below this row. */
   row: number;
-  /** Column name to mark with a corner indicator. Optional. */
+  /** Column name to mark with a corner triangle. Optional. */
   column?: string;
+  /** Your payload, passed back to `renderAnnotation`. */
   data: A;
 }
 
+/** Everything about one cell of the diff, as passed to event callbacks and returned by `cellInfo()`. */
 export interface CellInfo {
   /** Aligned row index. */
   row: number;
+  /** The aligned column. */
   column: AlignedColumn;
+  /** Index into `diff.columns`. */
   columnIndex: number;
+  /** Status of the row. */
   status: RowStatus;
+  /** True when this cell changed (in a modified row). */
   changed: boolean;
+  /** Row index in the old table, or -1. */
   oldRow: number;
+  /** Row index in the new table, or -1. */
   newRow: number;
+  /** Old value; `undefined` when the row or column doesn't exist in the old table. */
   oldValue: CellValue | undefined;
+  /** New value; `undefined` when the row or column doesn't exist in the new table. */
   newValue: CellValue | undefined;
+  /** Old formula text, `null` if none, `undefined` if the cell doesn't exist on that side. */
   oldFormula?: string | null;
+  /** New formula text, `null` if none, `undefined` if the cell doesn't exist on that side. */
   newFormula?: string | null;
-  /** input / formula / computed, when the cell changed. */
+  /** For changed cells: `input`, `formula` or `computed` (from the trace when attached). */
   kind?: ChangeKind;
-  /** Root causes and impacts, when a trace is attached. */
+  /** The cell's trace (causes, impacts), when a `trace` is attached and the cell changed. */
   trace?: CellTrace;
 }
 
 /**
  * How a changed cell shows its change:
- *  - `stacked`  old value struck through above the new one (taller rows)
- *  - `new`      just the new value on a tinted background
- *  - `delta`    the new value, with the absolute and % change beneath it
- *  - `inline`   `old → new` on one line
+ * - `stacked`: old value struck through above the new one (modified rows are taller).
+ * - `new`: just the new value on a tinted background.
+ * - `delta`: the new value, with the absolute and % change beneath it
+ *   (or `was …` for text). Modified rows are taller.
+ * - `inline`: `old → new` on one line.
  */
 export type CellDisplay = 'stacked' | 'new' | 'delta' | 'inline';
 
-/** A trace of the whole workbook, plus which sheet of it this grid shows. */
+/** A workbook trace, plus which sheet of the workbook a grid shows. */
 export interface TraceContext {
+  /** From {@link traceWorkbook}. */
   trace: WorkbookTrace;
+  /** The workbook diff the trace was made from. Used to label causes on other sheets. */
   workbook: WorkbookDiff;
+  /** Index of the grid's sheet in `workbook.sheets`. */
   sheet: number;
 }
 
+/** Options for {@link DiffGrid}. All are optional and can be changed later with `setOptions`. */
 export interface DiffGridOptions<A = unknown> {
-  /** `unified` (one grid, old/new stacked in changed cells) or `split` (side by side). */
+  /** `unified` or `split`. Default `unified`. */
   layout?: DiffLayout;
-  /** Collapse runs of unchanged rows into expandable separators. Default true. */
+  /** Collapse runs of unchanged rows into separators that expand on click. Default true. */
   collapseUnchanged?: boolean;
-  /** Unchanged rows kept around each change when collapsing. Default 2. */
+  /** Unchanged rows kept visible around each change when collapsing. Default 2. */
   context?: number;
-  /** Hide columns with no changes (key columns stay). Default false. */
+  /** Hide columns with no changed cells. Key, added, removed and renamed columns stay. Default false. */
   hideUnchangedColumns?: boolean;
-  /** Columns pinned to the left. `'keys'` pins the diff's key columns. Default `'keys'`. */
+  /**
+   * Columns pinned to the left while scrolling horizontally. `'keys'` (default)
+   * moves the diff's key columns to the front and pins them; a number pins
+   * that many leading columns.
+   */
   frozenColumns?: number | 'keys';
   /**
-   * Added to the 0-based row index for display. Defaults to the table's
-   * `origin` (real sheet row numbers), or 2 (1-based, after a header row).
+   * Added to a 0-based row index to get the displayed row number. Defaults
+   * to the table's `origin`, so numbers match the spreadsheet (2 for the
+   * first data row under a header).
    */
   rowNumberOffset?: number;
-  /** Force a color scheme. Default follows the page (`system`). */
+  /** `system` (default) follows the page's `prefers-color-scheme`; `light` / `dark` force one. */
   theme?: 'system' | 'light' | 'dark';
-  /** Change overview strip on the right edge. Default true. */
+  /** Change overview strip on the right edge; click it to jump. Default true. */
   minimap?: boolean;
-  /** Old → new popover when hovering a changed cell. Default true. */
+  /** Popover with old → new, character diff, Δ and trace when hovering a changed cell. Default true. */
   tooltips?: boolean;
-  /** Fixed widths for columns, by name. */
+  /** Fixed widths in CSS pixels, by column name. Other columns size to their content. */
   columnWidths?: Record<string, number>;
+  /** Notes to show below rows. Keep the array referentially stable; a new array re-renders all of them. */
   annotations?: CellAnnotation<A>[];
-  /** Render a full-width element below an annotated row. */
+  /**
+   * Render an annotation's content. The element is placed in the light DOM
+   * (projected into the grid through a `<slot>`), so your page CSS styles
+   * it, and spans the grid's width below its row. Its height is measured and
+   * tracked as it resizes.
+   */
   renderAnnotation?: (annotation: CellAnnotation<A>) => HTMLElement | null | undefined;
+  /** Called on pointer down on a cell (after selecting it). */
   onCellClick?: (cell: CellInfo, event: MouseEvent) => void;
+  /** Called when the pointer enters a cell, with `null` when it leaves the cells. */
   onCellHover?: (cell: CellInfo | null) => void;
+  /** Called whenever the selected cell changes: click, keyboard, `nextChange()`, `select()`. */
   onSelectionChange?: (cell: CellInfo | null) => void;
   /** How changed cells show old vs. new. Default `stacked`. */
   cellDisplay?: CellDisplay;
   /**
-   * Color changes that are formula results of other changes (downstream)
-   * amber, apart from edited inputs. Default true.
+   * Color downstream changes (formula results that changed because
+   * something upstream did) amber, and mark formula edits with `ƒ`. Works
+   * without a trace. Default true.
    */
   highlightComputed?: boolean;
-  /** Attach a trace to show root causes in tooltips and on selection. */
+  /** Attach a workbook trace: tooltips list causes and impacts, and selection can focus them. */
   trace?: TraceContext;
-  /** When a traced cell is selected, outline its causes/impacts and dim the rest. Default true. */
+  /**
+   * When a traced cell is selected: outline its causes (solid), computed
+   * parents (dotted) and impacts (dashed) on this sheet, and dim the rest.
+   * Default true.
+   */
   traceFocus?: boolean;
 }
 
+/** Arguments to `DiffGrid.render`. */
 export interface DiffGridRenderProps {
+  /** The diff to show. */
   diff: TableDiff;
-  /** Element to render into. The grid fills it; give it a height. */
+  /** Element to render into. The grid fills it, so give it a size (e.g. a height). */
   container: HTMLElement;
 }
 
@@ -143,14 +186,28 @@ interface PaneGeometry {
 }
 
 /**
- * A canvas-rendered, virtualized spreadsheet diff.
+ * A canvas-rendered, virtualized spreadsheet diff. Only the visible cells
+ * are drawn, so size doesn't matter; the grid fills its container.
  *
  * ```ts
+ * import { DiffGrid, diffTables, parseCsv } from 'spreadiff';
+ * declare const before: string, after: string, container: HTMLElement;
+ *
  * const grid = new DiffGrid({ layout: 'split' });
- * grid.render({ diff: diffTables(before, after), container });
+ * grid.render({ diff: diffTables(parseCsv(before), parseCsv(after)), container });
+ * grid.nextChange(); // select and scroll to the first change
+ * // later:
+ * grid.cleanUp();
  * ```
+ *
+ * Keyboard (when the grid has focus): `n`/`j` next change, `p`/`k`
+ * previous, arrow keys move the selection, ⌘/Ctrl+C copies the selected
+ * value, Esc clears the selection. Tab moves focus out of the grid.
  */
 export class DiffGrid<A = unknown> {
+  /**
+   * The element the grid renders into its container (it holds the shadow root). Style its size from outside if needed.
+   */
   readonly host: HTMLElement;
   private options: DiffGridOptions<A>;
   private diff: TableDiff | null = null;
@@ -221,6 +278,7 @@ export class DiffGrid<A = unknown> {
 
   // ---- Public API ------------------------------------------------------
 
+  /** Mount into `container` (first call, or a new container) and show `diff`. */
   render({ diff, container }: DiffGridRenderProps): void {
     if (this.container !== container) {
       this.detach();
@@ -231,6 +289,9 @@ export class DiffGrid<A = unknown> {
     this.setDiff(diff);
   }
 
+  /**
+   * Show a different diff. Resets scroll, selection, expanded regions and resized columns. A no-op for the same diff.
+   */
   setDiff(diff: TableDiff): void {
     if (this.diff === diff) return;
     this.diff = diff;
@@ -274,20 +335,25 @@ export class DiffGrid<A = unknown> {
     }
   }
 
+  /** The current options. */
   getOptions(): Readonly<DiffGridOptions<A>> {
     return this.options;
   }
 
-  /** Scroll to the next block of changes. Returns false at the end. */
+  /**
+   * Select the first changed cell of the next block of changed rows and
+   * scroll to it. Returns false when there is no further change.
+   */
   nextChange(): boolean {
     return this.jumpChange(1);
   }
 
+  /** Like `nextChange`, backwards. Returns false at the first change. */
   prevChange(): boolean {
     return this.jumpChange(-1);
   }
 
-  /** Scroll an aligned row into view, expanding its collapsed region if needed. */
+  /** Scroll an aligned row into view, expanding its collapsed region if needed. Out-of-range rows are ignored. */
   scrollToRow(row: number, align: 'start' | 'center' | 'nearest' = 'center'): void {
     if (!this.diff || !(row >= 0 && row < this.diff.rowCount)) return;
     if (this.rows.displayOf[row] < 0) {
@@ -308,6 +374,7 @@ export class DiffGrid<A = unknown> {
     this.relayout();
   }
 
+  /** Collapse every expanded region again. */
   collapseAll(): void {
     this.expanded.clear();
     if (this.diff) this.relayout();
@@ -339,6 +406,9 @@ export class DiffGrid<A = unknown> {
     this.schedule();
   }
 
+  /**
+   * Remove the grid from the page and release its observers and listeners. The instance can be `render`ed again.
+   */
   cleanUp(): void {
     this.detach();
     for (const info of this.annotationEls.values()) info.ro.disconnect();
@@ -738,7 +808,7 @@ export class DiffGrid<A = unknown> {
     });
   }
 
-  /** Draw synchronously. Exposed for benchmarks. */
+  /** Draw synchronously instead of on the next animation frame. Rarely needed (tests, benchmarks). */
   drawNow(): void {
     if (!this.diff || !this.theme || this.width === 0) return;
     // Window moved to a display with a different pixel ratio.
@@ -1680,7 +1750,7 @@ export class DiffGrid<A = unknown> {
     return this.cellInfo(this.rows.ref[hit.display], this.cols.cols[hit.vcol]);
   }
 
-  /** Everything about one cell of the diff. */
+  /** Everything about one cell of the diff. Throws a `RangeError` for a row or column that doesn't exist. */
   cellInfo(row: number, columnIndex: number): CellInfo {
     if (!this.isCell(row, columnIndex)) throw new RangeError(`No cell at row ${row}, column ${columnIndex}`);
     const diff = this.diff!;

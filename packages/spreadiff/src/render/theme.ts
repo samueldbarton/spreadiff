@@ -30,7 +30,6 @@ export const STYLE = /* css */ `
   --sdi-modified: var(--sd-modified, light-dark(#009fff, #69b1ff));
   --sdi-added-bg: var(--sd-added-bg, light-dark(color-mix(in srgb, var(--sdi-added) 9%, var(--sdi-bg)), color-mix(in srgb, var(--sdi-added) 12%, var(--sdi-bg))));
   --sdi-removed-bg: var(--sd-removed-bg, light-dark(color-mix(in srgb, var(--sdi-removed) 9%, var(--sdi-bg)), color-mix(in srgb, var(--sdi-removed) 12%, var(--sdi-bg))));
-  --sdi-modified-bg: var(--sd-modified-bg, light-dark(color-mix(in srgb, var(--sdi-modified) 5%, var(--sdi-bg)), color-mix(in srgb, var(--sdi-modified) 8%, var(--sdi-bg))));
   --sdi-added-emphasis: var(--sd-added-emphasis, light-dark(color-mix(in srgb, var(--sdi-added) 22%, var(--sdi-bg)), color-mix(in srgb, var(--sdi-added) 28%, var(--sdi-bg))));
   --sdi-removed-emphasis: var(--sd-removed-emphasis, light-dark(color-mix(in srgb, var(--sdi-removed) 20%, var(--sdi-bg)), color-mix(in srgb, var(--sdi-removed) 26%, var(--sdi-bg))));
   --sdi-added-fg: var(--sd-added-fg, color-mix(in srgb, var(--sdi-added) 70%, var(--sdi-fg)));
@@ -39,7 +38,6 @@ export const STYLE = /* css */ `
   /* Downstream (computed) changes: same formula, new result. */
   --sdi-computed: var(--sd-computed, light-dark(#d97706, #fbbf24));
   --sdi-computed-emphasis: var(--sd-computed-emphasis, light-dark(color-mix(in srgb, var(--sdi-computed) 20%, var(--sdi-bg)), color-mix(in srgb, var(--sdi-computed) 24%, var(--sdi-bg))));
-  --sdi-computed-fg: var(--sd-computed-fg, color-mix(in srgb, var(--sdi-computed) 75%, var(--sdi-fg)));
   /* Formula edits. */
   --sdi-formula: var(--sd-formula, light-dark(#7c3aed, #a78bfa));
   --sdi-dim: var(--sd-dim, color-mix(in srgb, var(--sdi-bg) 62%, transparent));
@@ -149,7 +147,6 @@ export interface Theme {
   modified: string;
   addedBg: string;
   removedBg: string;
-  modifiedBg: string;
   addedEmphasis: string;
   removedEmphasis: string;
   addedFg: string;
@@ -157,7 +154,6 @@ export interface Theme {
   selection: string;
   computed: string;
   computedEmphasis: string;
-  computedFg: string;
   formula: string;
   dim: string;
   hatch: string;
@@ -184,14 +180,12 @@ const COLOR_TOKENS: [keyof Theme, string][] = [
   ['modified', '--sdi-modified'],
   ['addedBg', '--sdi-added-bg'],
   ['removedBg', '--sdi-removed-bg'],
-  ['modifiedBg', '--sdi-modified-bg'],
   ['addedEmphasis', '--sdi-added-emphasis'],
   ['removedEmphasis', '--sdi-removed-emphasis'],
   ['addedFg', '--sdi-added-fg'],
   ['removedFg', '--sdi-removed-fg'],
   ['computed', '--sdi-computed'],
   ['computedEmphasis', '--sdi-computed-emphasis'],
-  ['computedFg', '--sdi-computed-fg'],
   ['formula', '--sdi-formula'],
   ['dim', '--sdi-dim'],
   ['selection', '--sdi-selection'],

@@ -2,8 +2,11 @@ import { parseCsv } from './csv.js';
 import { parseXlsx } from './xlsx.js';
 import type { Workbook } from './types.js';
 
+/** Options for {@link parseFile}. */
 export interface ParseFileOptions {
+  /** Treat the first (non-empty) row as column names. Default true. */
   header?: boolean;
+  /** CSV delimiter; detected when omitted (`.tsv` files default to tab). */
   delimiter?: string;
 }
 

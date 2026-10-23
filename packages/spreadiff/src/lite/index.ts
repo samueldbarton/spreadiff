@@ -7,7 +7,10 @@
  *
  * ```ts
  * import { diffTables, parseCsv, renderHTML, LITE_CSS } from 'spreadiff/lite';
- * el.innerHTML = `<style>${LITE_CSS}</style>` + renderHTML(diffTables(a, b), { layout: 'split' });
+ * declare const before: string, after: string, container: HTMLElement;
+ *
+ * const diff = diffTables(parseCsv(before), parseCsv(after));
+ * container.innerHTML = `<style>${LITE_CSS}</style>` + renderHTML(diff, { layout: 'split' });
  * ```
  */
 import { columnLabel } from '../core/csv.js';
@@ -22,10 +25,15 @@ export { formatCell, numericDelta, diffText } from '../core/text.js';
 export { changeKind } from '../core/kind.js';
 export type { TableDiff, Table, CellValue, DiffOptions } from '../core/types.js';
 
+/**
+ * - `split`: old | new side by side, one row per line, like a code review.
+ * - `unified`: one table; modified rows as a − line and a + line, like `git diff`.
+ */
 export type LiteLayout = 'split' | 'unified';
-/** See `CellDisplay` in the canvas renderer: same meanings. */
+/** How a changed cell reads; same meanings as the canvas grid's {@link CellDisplay}. */
 export type LiteDisplay = 'stacked' | 'new' | 'delta' | 'inline';
 
+/** Options for {@link renderHTML}. All are optional. */
 export interface LiteOptions {
   /** `split`: old | new side by side, one row per line. `unified`: −/+ line pairs, like `git diff`. Default `split`. */
   layout?: LiteLayout;
@@ -264,11 +272,12 @@ function isNumericColumn(diff: TableDiff, ci: number): boolean {
 
 /**
  * Plain-text unified diff with aligned columns, for terminals, logs and
- * markdown code blocks:
+ * markdown code blocks. Lines start with `+` / `-` (ASCII), so a ```diff
+ * fence or a terminal diff highlighter colors them:
  *
  *       id  price   qty
  *     ⋯ 3 unchanged rows
- *   −  P-1003  65.4    28
+ *   -  P-1003  65.4    28
  *   +  P-1003  70.63   28
  */
 export function renderText(diff: TableDiff, options: Pick<LiteOptions, 'context' | 'changedColumnsOnly' | 'maxRows'> & { maxWidth?: number } = {}): string {
@@ -294,10 +303,10 @@ export function renderText(diff: TableDiff, options: Pick<LiteOptions, 'context'
     const r = it.row;
     const st = diff.status[r];
     if (st === ROW_STATUS.modified) {
-      lines.push({ sign: '−', cells: cols.map((ci) => value(r, ci, 'old')) });
+      lines.push({ sign: '-', cells: cols.map((ci) => value(r, ci, 'old')) });
       lines.push({ sign: '+', cells: cols.map((ci) => value(r, ci, 'new')) });
     } else if (st === ROW_STATUS.added) lines.push({ sign: '+', cells: cols.map((ci) => value(r, ci, 'new')) });
-    else if (st === ROW_STATUS.removed) lines.push({ sign: '−', cells: cols.map((ci) => value(r, ci, 'old')) });
+    else if (st === ROW_STATUS.removed) lines.push({ sign: '-', cells: cols.map((ci) => value(r, ci, 'old')) });
     else lines.push({ sign: ' ', cells: cols.map((ci) => value(r, ci, 'new')) });
   }
   const head = cols.map((ci) => diff.columns[ci].name);

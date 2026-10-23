@@ -10,18 +10,26 @@
 
 /** A rectangle in 0-based sheet coordinates. `-1` bounds mean "whole column/row". */
 export interface SheetRange {
+  /** Sheet name from a qualifier (`Data!A1` → `"Data"`), or null for the formula's own sheet. */
   sheet: string | null;
+  /** First row, 0-based (A1 is row 0), or -1 for a whole-column range (`C:C`). */
   r0: number;
+  /** First column, 0-based (A is 0), or -1 for a whole-row range (`3:3`). */
   c0: number;
+  /** Last row, inclusive, or -1 for a whole-column range. */
   r1: number;
+  /** Last column, inclusive, or -1 for a whole-row range. */
   c1: number;
 }
 
+/** A piece of a formula from {@link tokenizeFormula}: a reference, or anything else as text. */
 export type FormulaToken =
   | { type: 'text'; text: string }
   | { type: 'ref'; text: string; range: SheetRange };
 
+/** What a formula reads, from {@link formulaRefs}. */
 export interface FormulaRefs {
+  /** Every range read, including those reached through defined names. */
   ranges: SheetRange[];
   /** Precedents can't be fully known statically (INDIRECT, OFFSET, unknown names, …). */
   dynamic: boolean;
@@ -188,7 +196,11 @@ export function tokenizeFormula(formula: string): { tokens: FormulaToken[]; dyna
  * `Workbook.names`) to their formula text; unresolved names make the
  * result `dynamic`.
  */
-export function formulaRefs(formula: string, names?: Record<string, string>, depth = 0): FormulaRefs {
+export function formulaRefs(formula: string, names?: Record<string, string>): FormulaRefs {
+  return refsOf(formula, names, 0);
+}
+
+function refsOf(formula: string, names: Record<string, string> | undefined, depth: number): FormulaRefs {
   const t = tokenizeFormula(formula);
   const ranges: SheetRange[] = [];
   let dynamic = t.dynamic;
@@ -200,7 +212,7 @@ export function formulaRefs(formula: string, names?: Record<string, string>, dep
       dynamic = true;
       continue;
     }
-    const sub = formulaRefs(target, names, depth + 1);
+    const sub = refsOf(target, names, depth + 1);
     ranges.push(...sub.ranges);
     dynamic ||= sub.dynamic;
     volatile ||= sub.volatile;

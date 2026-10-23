@@ -4,7 +4,9 @@
   "description": "Fast, beautiful spreadsheet diffs. Canvas-rendered, virtualized, framework-agnostic.",
   "license": "MIT",
   "type": "module",
-  "sideEffects": false,
+  "sideEffects": [
+    "./dist/worker/worker.js"
+  ],
   "files": [
     "dist"
   ],

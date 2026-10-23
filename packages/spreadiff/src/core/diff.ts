@@ -88,9 +88,10 @@ function alignTables(oldTable: Table, newTable: Table, o: Required<DiffOptions>)
   const equal = makeComparer(o);
   let columns = alignColumns(oldTable.columns, newTable.columns);
   const shared = columns.filter((c) => c.oldIndex >= 0 && c.newIndex >= 0);
-  const keyColumns = resolveKeys(oldTable, newTable, shared, o, norm);
+  const resolved = resolveKeys(oldTable, newTable, shared, o, norm);
+  const keyColumns = resolved.keys;
   const pairs: number[] = []; // [old, new, …]; -1 for the missing side
-  if (keyColumns.length) alignByKey(oldTable, newTable, columns, keyColumns, norm, pairs);
+  if (keyColumns.length) alignByKey(oldTable, newTable, columns, resolved, norm, pairs);
   else alignBySequence(oldTable, newTable, shared, norm, equal, o.rowSimilarity, pairs);
   if (o.detectRenames) columns = detectRenames(columns, oldTable, newTable, pairs, equal);
   return { oldTable, newTable, columns, pairs, keyColumns, o };
@@ -283,6 +284,7 @@ export function diffWorkbooks(oldBook: Workbook, newBook: Workbook, options: Dif
   return { sheets, names: oldBook.names || newBook.names ? { old: oldBook.names, new: newBook.names } : undefined };
 }
 
+/** True if the diff has any added, removed or modified rows, or any column changes. */
 export function hasChanges(d: TableDiff): boolean {
   const s = d.stats;
   return (
@@ -332,88 +334,140 @@ function alignColumns(oldCols: string[], newCols: string[]): AlignedColumn[] {
 const isKeyName = (name: string) =>
   /^(id|key|uuid|guid|sku|code)$/i.test(name) || /[ _.-](id|key|code)$/i.test(name) || /[a-z0-9](Id|ID)$/.test(name);
 
+type Key = string | number;
+
+/**
+ * A Map key with the same equality as `norm(a) === norm(b)`, without
+ * allocating a string per number: numbers key as themselves, and strings
+ * that spell a number exactly as it prints (`"12"`) key as that number.
+ */
+function keyValue(v: CellValue, norm: Normalizer): Key {
+  if (typeof v === 'number') return v;
+  const s = norm(v);
+  const c = s.charCodeAt(0);
+  // Only strings that could print from a number: digit, '-', "Infinity", "NaN".
+  if ((c >= 48 && c <= 57) || c === 45 || c === 73 || c === 78) {
+    const n = Number(s);
+    if (String(n) === s) return n;
+  }
+  return s;
+}
+
+/** Key values of one column, or null if any is empty or repeated. */
+function uniqueKeys(t: Table, col: number, norm: Normalizer): { keys: Key[]; set: Set<Key> } | null {
+  const keys = new Array<Key>(t.rows.length);
+  const set = new Set<Key>();
+  for (let r = 0; r < t.rows.length; r++) {
+    const k = keyValue(t.rows[r][col] ?? null, norm);
+    if (k === '' || set.has(k)) return null;
+    set.add(k);
+    keys[r] = k;
+  }
+  return { keys, set };
+}
+
+interface ResolvedKeys {
+  keys: string[];
+  /** Key values already computed while choosing an automatic key. */
+  values?: { old: Key[]; new: Key[] };
+}
+
 function resolveKeys(
   oldTable: Table,
   newTable: Table,
   shared: AlignedColumn[],
   o: Required<DiffOptions>,
   norm: Normalizer,
-): string[] {
-  if (o.keys === 'none') return [];
+): ResolvedKeys {
+  if (o.keys === 'none') return { keys: [] };
   if (Array.isArray(o.keys)) {
     const names = new Set(shared.map((c) => c.name));
     const missing = o.keys.filter((k) => !names.has(k));
     if (missing.length) throw new Error(`Key column(s) not in both tables: ${missing.join(', ')}`);
-    return o.keys;
+    return { keys: o.keys };
   }
-  if (oldTable.rows.length < 2 || newTable.rows.length < 2) return [];
+  if (oldTable.rows.length < 2 || newTable.rows.length < 2) return { keys: [] };
   // Auto: only id-like column names, leftmost first, with unique non-empty
   // values on both sides. A "name" column would turn renames into
   // remove + add, so plain data columns never become keys implicitly.
   const candidates = shared.filter((c) => isKeyName(c.name)).sort((x, y) => x.newIndex - y.newIndex);
   for (const c of candidates.slice(0, 4)) {
-    if (isUniqueKey(oldTable, c.oldIndex, norm) && isUniqueKey(newTable, c.newIndex, norm)) {
-      // A key that matches almost nothing (e.g. regenerated ids) is worse than none.
-      const oldKeys = new Set(oldTable.rows.map((r) => norm(r[c.oldIndex] ?? null)));
-      let hits = 0;
-      for (const r of newTable.rows) if (oldKeys.has(norm(r[c.newIndex] ?? null))) hits++;
-      if (hits >= 0.5 * Math.min(oldTable.rows.length, newTable.rows.length)) return [c.name];
+    const a = uniqueKeys(oldTable, c.oldIndex, norm);
+    if (!a) continue;
+    const b = uniqueKeys(newTable, c.newIndex, norm);
+    if (!b) continue;
+    // A key that matches almost nothing (e.g. regenerated ids) is worse than none.
+    let hits = 0;
+    for (const k of b.keys) if (a.set.has(k)) hits++;
+    if (hits >= 0.5 * Math.min(oldTable.rows.length, newTable.rows.length)) {
+      return { keys: [c.name], values: { old: a.keys, new: b.keys } };
     }
   }
-  return [];
-}
-
-function isUniqueKey(t: Table, col: number, norm: Normalizer): boolean {
-  const seen = new Set<string>();
-  for (const r of t.rows) {
-    const k = norm(r[col] ?? null);
-    if (k === '' || seen.has(k)) return false;
-    seen.add(k);
-  }
-  return true;
+  return { keys: [] };
 }
 
 function alignByKey(
   oldTable: Table,
   newTable: Table,
   columns: AlignedColumn[],
-  keys: string[],
+  resolved: ResolvedKeys,
   norm: Normalizer,
   pairs: number[],
 ): void {
-  const keyCols = keys.map((k) => columns.find((c) => c.name === k)!);
-  // Length-prefixed, so values containing the separator can't collide.
-  const keyOf = (row: CellValue[], side: 'oldIndex' | 'newIndex') => {
-    let k = '';
-    for (const c of keyCols) {
-      const v = norm(row[c[side]] ?? null);
-      k += v.length + ':' + v;
+  const keyCols = resolved.keys.map((k) => columns.find((c) => c.name === k)!);
+  const keysOf = (t: Table, side: 'oldIndex' | 'newIndex'): Key[] => {
+    if (keyCols.length === 1) {
+      const col = keyCols[0][side];
+      return t.rows.map((r) => keyValue(r[col] ?? null, norm));
     }
-    return k;
+    // Composite: length-prefixed, so values containing the separator can't collide.
+    return t.rows.map((r) => {
+      let k = '';
+      for (const c of keyCols) {
+        const v = norm(r[c[side]] ?? null);
+        k += v.length + ':' + v;
+      }
+      return k;
+    });
   };
-  const oldByKey = new Map<string, number[]>();
-  oldTable.rows.forEach((r, i) => {
-    const k = keyOf(r, 'oldIndex');
-    const q = oldByKey.get(k);
-    if (q) q.push(i);
-    else oldByKey.set(k, [i]);
+  const oldKeys = resolved.values?.old ?? keysOf(oldTable, 'oldIndex');
+  const newKeys = resolved.values?.new ?? keysOf(newTable, 'newIndex');
+  // First old row per key; repeated keys (rare) get a queue matched in order.
+  const first = new Map<Key, number>();
+  const dups = new Map<Key, number[]>();
+  oldKeys.forEach((k, i) => {
+    const f = first.get(k);
+    if (f === undefined) first.set(k, i);
+    else {
+      const q = dups.get(k);
+      if (q) q.push(i);
+      else dups.set(k, [f, i]);
+    }
   });
   const matchedOld = new Int32Array(newTable.rows.length).fill(-1);
   const oldUsed = new Uint8Array(oldTable.rows.length);
-  // Duplicate keys match in order. A cursor per key, not Array#shift (O(n)
-  // per call: quadratic when a low-cardinality column is used as the key).
-  const cursor = new Map<string, number>();
-  newTable.rows.forEach((r, ni) => {
-    const k = keyOf(r, 'newIndex');
-    const q = oldByKey.get(k);
-    const at = cursor.get(k) ?? 0;
-    if (q && at < q.length) {
-      const oi = q[at];
-      cursor.set(k, at + 1);
+  // A cursor per repeated key, not Array#shift (O(n) per call: quadratic
+  // when a low-cardinality column is used as the key).
+  const cursor = new Map<Key, number>();
+  for (let ni = 0; ni < newKeys.length; ni++) {
+    const k = newKeys[ni];
+    const q = dups.size ? dups.get(k) : undefined;
+    let oi = -1;
+    if (q) {
+      const at = cursor.get(k) ?? 0;
+      if (at < q.length) {
+        oi = q[at];
+        cursor.set(k, at + 1);
+      }
+    } else {
+      const f = first.get(k);
+      if (f !== undefined && !oldUsed[f]) oi = f;
+    }
+    if (oi >= 0) {
       matchedOld[ni] = oi;
       oldUsed[oi] = 1;
     }
-  });
+  }
   // Walk new order; slot each removed row in before the first new row whose
   // old counterpart comes after it, so deletions appear where they were.
   let nextOld = 0;
@@ -444,21 +498,66 @@ function alignBySequence(
   threshold: number,
   pairs: number[],
 ): void {
-  // Intern whole rows to exact integer ids (no hash collisions).
-  const ids = new Map<string, number>();
-  const intern = (row: CellValue[], side: 'oldIndex' | 'newIndex') => {
-    let s = '';
-    for (const c of shared) {
-      const v = norm(row[c[side]] ?? null);
-      s += v.length + ':' + v; // length-prefixed: no separator collisions
+  // Intern whole rows to integer ids: hash each row's key values, then
+  // confirm equality cell by cell, so a hash collision can't merge rows.
+  // (Building one string per row instead cost ~7× more, mostly in GC.)
+  const width = shared.length;
+  const oldKeys = new Array<Key>(oldTable.rows.length * width);
+  const newKeys = new Array<Key>(newTable.rows.length * width);
+  const buckets = new Map<number, number[]>(); // hash → ids
+  const repAt: number[] = []; // id → offset of its key values; old side ≥ 0, new side ~offset
+  const f64 = new Float64Array(1);
+  const u32 = new Uint32Array(f64.buffer);
+  const intern = (rows: CellValue[][], side: 'oldIndex' | 'newIndex', keys: Key[]) => {
+    const ids = new Int32Array(rows.length);
+    for (let r = 0; r < rows.length; r++) {
+      const row = rows[r];
+      const at = r * width;
+      let h = 0x811c9dc5;
+      for (let c = 0; c < width; c++) {
+        const k = keyValue(row[shared[c][side]] ?? null, norm);
+        keys[at + c] = k;
+        if (typeof k === 'number') {
+          f64[0] = k === 0 ? 0 : k !== k ? NaN : k; // -0 and NaN hash like the Map would
+          h = Math.imul(h ^ u32[0], 0x01000193);
+          h = Math.imul(h ^ u32[1], 0x01000193);
+        } else {
+          h = Math.imul(h ^ 0x5bd1e995, 0x01000193); // separate "12" (number) from strings
+          for (let i = 0; i < k.length; i++) h = Math.imul(h ^ k.charCodeAt(i), 0x01000193);
+          h = Math.imul(h ^ k.length, 0x01000193);
+        }
+      }
+      let bucket = buckets.get(h);
+      let id = -1;
+      if (bucket) {
+        for (const cand of bucket) {
+          const o = repAt[cand];
+          const repKeys = o >= 0 ? oldKeys : newKeys;
+          const repOff = o >= 0 ? o : ~o;
+          let same = true;
+          for (let c = 0; c < width && same; c++) {
+            const x = repKeys[repOff + c];
+            const y = keys[at + c];
+            same = x === y || (x !== x && y !== y);
+          }
+          if (same) {
+            id = cand;
+            break;
+          }
+        }
+      } else buckets.set(h, (bucket = []));
+      if (id < 0) {
+        id = repAt.length;
+        repAt.push(side === 'oldIndex' ? at : ~at);
+        bucket.push(id);
+      }
+      ids[r] = id;
     }
-    let id = ids.get(s);
-    if (id === undefined) ids.set(s, (id = ids.size));
-    return id;
+    return ids;
   };
-  const a = Int32Array.from(oldTable.rows, (r) => intern(r, 'oldIndex'));
-  const b = Int32Array.from(newTable.rows, (r) => intern(r, 'newIndex'));
-  ids.clear();
+  const a = intern(oldTable.rows, 'oldIndex', oldKeys);
+  const b = intern(newTable.rows, 'newIndex', newKeys);
+  buckets.clear();
   const matches = alignSequences(a, b);
 
   // Formula results change *because* inputs did, so a row's identity is its

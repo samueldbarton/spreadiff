@@ -141,7 +141,7 @@ export function TracePanel({ wb, trace, sheet, selected, view, onView, onPick }:
         {view === 'why' && <Why wb={wb} trace={trace} selected={selected} sheet={sheet} onPick={onPick} />}
       </div>
       <p className="tp-foot">
-        {trace.stats.inputs} input edits · {trace.stats.formulas} formula edits · {trace.stats.computed} downstream
+        {plural(trace.stats.inputs, 'input edit')} · {plural(trace.stats.formulas, 'formula edit')} · {trace.stats.computed} downstream
         {trace.stats.unexplained ? ` · ${trace.stats.unexplained} unexplained` : ''}
       </p>
     </aside>
@@ -272,3 +272,5 @@ function Node({ wb, trace, r, sheet, onPick, depth, seen }: { wb: WorkbookDiff; 
     </div>
   );
 }
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;

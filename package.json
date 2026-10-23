@@ -12,8 +12,12 @@
     "test": "npm test -w spreadiff",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "bench": "node bench/run.mjs",
+    "size": "node bench/size.mjs",
     "test:browser": "node bench/browser-test.mjs",
-    "fuzz:render": "node bench/fuzz-render.mjs 3000"
+    "fuzz:render": "node bench/fuzz-render.mjs 3000",
+    "docs:check": "node scripts/docs-check.mjs",
+    "docs:screenshots": "node scripts/screenshots.mjs",
+    "test:bundle": "node scripts/test-bundling.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.25.10",

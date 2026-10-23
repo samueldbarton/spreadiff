@@ -22,51 +22,93 @@
 import { formulaRefs, type SheetRange } from './formula.js';
 import { ROW_STATUS, type TableDiff, type WorkbookDiff } from './types.js';
 
+/**
+ * Why a cell changed:
+ * - `input`: its value was edited (it has no formula).
+ * - `formula`: its formula was edited (compared by meaning, not text).
+ * - `computed`: same formula, different result. It changed *because*
+ *   something upstream changed: a downstream change.
+ * - `added` / `removed`: a cell of an added or removed row or column that
+ *   a formula reads (only recorded when it actually moved something).
+ */
 export type ChangeKind = 'input' | 'formula' | 'computed' | 'added' | 'removed';
 
-/** A cell of the diff: sheet index into `WorkbookDiff.sheets`, aligned row, aligned column index. */
+/** One cell of a {@link WorkbookDiff}, in aligned coordinates. */
 export interface CellRef {
+  /** Index into `WorkbookDiff.sheets`. */
   sheet: number;
+  /** Aligned row index in that sheet's `TableDiff`. */
   row: number;
+  /** Aligned column index (into `TableDiff.columns`). */
   col: number;
 }
 
+/** What the trace knows about one changed cell. */
 export interface CellTrace {
+  /** Why it changed. */
   kind: ChangeKind;
-  /** Root changes this cell traces back to (computed cells). Capped; see `causeCount`. */
+  /**
+   * For `computed` cells: the root changes (inputs, formula edits, added or
+   * removed cells) this result depends on, transitively, through cells whose
+   * values changed. Capped at `TraceOptions.maxCauses`; see `causeCount`.
+   */
   causes: CellRef[];
+  /** Exact number of root causes, even when `causes` is capped. */
   causeCount: number;
-  /** Computed cells this change flows into (root changes). Capped; see `impactCount`. */
+  /**
+   * For root changes: the `computed` cells this change flowed into. Capped
+   * at `TraceOptions.maxImpacts`; see `impactCount`.
+   */
   impacts: CellRef[];
+  /** Exact number of computed cells this change flowed into, even when `impacts` is capped. */
   impactCount: number;
-  /** For computed changes without a traced cause: why. */
+  /**
+   * Set on `computed` cells with no traced cause:
+   * - `volatile`: the formula uses NOW, TODAY, RAND, … and is treated as its own cause.
+   * - `dynamic`: precedents can't be known statically (INDIRECT, OFFSET, unknown names, external links).
+   * - `unknown`: the formula's inputs didn't change as far as the trace can see
+   *   (e.g. it reads a cell outside the parsed range).
+   */
   unexplained?: 'volatile' | 'dynamic' | 'unknown';
 }
 
+/** Totals over a {@link WorkbookTrace}. */
 export interface TraceStats {
+  /** Changed cells without a formula. */
   inputs: number;
+  /** Cells whose formula was edited. */
   formulas: number;
+  /** Formula results that changed because of upstream changes. */
   computed: number;
+  /** Computed cells with no traced cause (including volatile and dynamic ones). */
   unexplained: number;
 }
 
+/** The result of {@link traceWorkbook}. Lookups are O(1). */
 export interface WorkbookTrace {
+  /** The trace of a changed cell, or undefined if the cell didn't change. */
   get(ref: CellRef): CellTrace | undefined;
-  /** Changed cells this cell's formula reads directly (one level up), for cause trees. */
+  /**
+   * Changed cells that this cell's formula reads directly: one level up,
+   * for building cause trees. Includes cells of added/removed rows inside
+   * the formula's ranges. At most 200.
+   */
   parents(ref: CellRef): CellRef[];
-  /** All traced cells of one sheet, keyed by `row * columns + col`. */
+  /** All traced cells of one sheet, keyed by `row * columns.length + col`. */
   sheet(index: number): ReadonlyMap<number, CellTrace>;
+  /** Totals by kind. */
   stats: TraceStats;
-  /** The work budget ran out; some causes may be missing. */
+  /** The work budget ran out; some causes and impacts may be missing. */
   truncated: boolean;
 }
 
+/** Options for {@link traceWorkbook}. */
 export interface TraceOptions {
-  /** Max causes kept per cell (the count is exact). Default 25. */
+  /** Max causes kept per cell (`causeCount` stays exact). Default 25. */
   maxCauses?: number;
-  /** Max impacts kept per root change (the count is exact). Default 500. */
+  /** Max impacts kept per root change (`impactCount` stays exact). Default 500. */
   maxImpacts?: number;
-  /** Max graph steps before giving up. Default 5M. */
+  /** Max graph steps before giving up and setting `truncated`. Default 5,000,000. */
   budget?: number;
 }
 

@@ -54,10 +54,10 @@ describe('lite', () => {
       [
         '   id  name      price',
         '⋯  1 unchanged rows',
-        '−  2   Chair     20',
+        '-  2   Chair     20',
         '+  2   Armchair  25',
         '⋯  4 unchanged rows',
-        '−  7   Tray      7',
+        '-  7   Tray      7',
         '+  8   Clock     12',
         '',
       ].join('\n'),

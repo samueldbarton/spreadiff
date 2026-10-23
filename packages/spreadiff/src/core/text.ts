@@ -1,8 +1,11 @@
 import { alignSequences } from './sequence.js';
 import type { CellValue } from './types.js';
 
+/** A run of text in a {@link diffText} result. */
 export interface TextSpan {
+  /** The characters of this run. */
   text: string;
+  /** `equal` in both strings, `removed` only in the old one, `added` only in the new one. */
   kind: 'equal' | 'added' | 'removed';
 }
 
@@ -51,6 +54,11 @@ export function numericDelta(before: CellValue, after: CellValue): { delta: numb
   return { delta: y - x, ratio: x === 0 ? null : (y - x) / Math.abs(x) };
 }
 
+/**
+ * Display text for a cell value: `''` for null, `TRUE`/`FALSE` for booleans,
+ * and numbers with float noise trimmed (`0.1 + 0.2` → `"0.3"`) at 15
+ * significant digits.
+ */
 export function formatCell(v: CellValue): string {
   if (v === null || v === undefined) return '';
   if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';

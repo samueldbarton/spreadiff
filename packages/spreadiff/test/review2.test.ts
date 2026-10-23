@@ -62,3 +62,34 @@ describe('review 2: duplicate keys scale', () => {
     expect(d.stats.rowsEqual).toBe(300_000);
   });
 });
+
+describe('numeric key matching keeps text-equality semantics', () => {
+  it('matches 1 with "1" but not "1.0", "01" or "-0" with 0', () => {
+    const t = (ids: (string | number)[]): Table => ({ name: 's', columns: ['id', 'v'], rows: ids.map((id, i) => [id, `v${i}`]) });
+    const d = diffTables(t([1, 2, 0, 5, 'x']), t(['1', '2.0', '-0', '05', 'x']), { keys: ['id'] });
+    const pairs = Array.from({ length: d.rowCount }, (_, r) => [d.oldRows[r], d.newRows[r]].join(':'));
+    // 1↔"1" and "x"↔"x" pair; 2/"2.0", 0/"-0", 5/"05" don't.
+    expect(pairs.filter((p) => !p.includes('-1'))).toEqual(['0:0', '4:4']);
+  });
+
+  it('matches unkeyed rows with the same equality as text comparison', () => {
+    // Without a key, whole rows are hashed. Rows equal as text must match;
+    // rows that only look alike must not.
+    const t = (rows: (string | number)[][]): Table => ({ name: 's', columns: ['a', 'b'], rows });
+    const old = t([[1, 'x'], [-0, 'y'], [NaN, 'z'], [2, ' Pad '], [3, '12'], [4, 'q']]);
+    const neu = t([['1', 'x'], [0, 'y'], [NaN, 'z'], [2, 'Pad'], [3, 12], [4, 'Q']]);
+    const d = diffTables(old, neu, { keys: 'none' });
+    expect(d.stats.rowsEqual).toBe(5); // trimWhitespace is on by default
+    expect(d.stats.rowsModified).toBe(1); // 'q' vs 'Q': case matters by default
+    expect(diffTables(old, neu, { keys: 'none', ignoreCase: true }).stats.rowsEqual).toBe(6);
+  });
+
+  it('keeps distinct unkeyed rows apart at scale', () => {
+    // Many distinct rows, so hash buckets are exercised; one edit in the middle.
+    const rows = Array.from({ length: 50_000 }, (_, i) => [i % 7, `r${i}`, i * 0.5] as (string | number)[]);
+    const edited = rows.map((r) => [...r]);
+    edited[25_000][2] = -1;
+    const d = diffTables({ name: 's', columns: ['a', 'b', 'c'], rows }, { name: 's', columns: ['a', 'b', 'c'], rows: edited }, { keys: 'none' });
+    expect(d.stats).toMatchObject({ rowsEqual: 49_999, rowsModified: 1, rowsAdded: 0, rowsRemoved: 0 });
+  });
+});
