@@ -1,19 +1,36 @@
 /// <reference lib="webworker" />
 import { diffWorkbooks } from '../core/diff.js';
 import { parseFile } from '../core/file.js';
-import { packWorkbookDiff } from '../core/transfer.js';
+import { traceWorkbook, type TraceOptions } from '../core/trace.js';
+import { packWorkbookDiff, packWorkbookTrace } from '../core/transfer.js';
 import type { DiffOptions } from '../core/types.js';
 
+/**
+ * A request to the diff worker (`spreadiff/worker/worker.js`). Normally sent
+ * for you by {@link createDiffWorker}. Replies are `{ id, packed, timings }`
+ * (plus `trace` when asked for) or `{ id, error }`.
+ */
 export interface WorkerRequest {
+  /** Echoed back in the reply, to match it to the request. */
   id: number;
+  /** The old file. */
   old: { name: string; data: ArrayBuffer };
+  /** The new file. */
   new: { name: string; data: ArrayBuffer };
+  /** Diff options. */
   options?: DiffOptions;
-  parse?: { header?: boolean };
+  /** Parse options: whether the first row is a header (default `'auto'`; see `ParseFileOptions.header`). */
+  parse?: { header?: boolean | 'auto' };
+  /**
+   * Also trace downstream changes here, off the main thread, when the files
+   * have formulas: `true` or {@link TraceOptions}. The reply then carries a
+   * packed trace (see `packWorkbookTrace`).
+   */
+  trace?: boolean | TraceOptions;
 }
 
 self.onmessage = (e: MessageEvent<WorkerRequest>) => {
-  const { id, options, parse } = e.data;
+  const { id, options, parse, trace } = e.data;
   try {
     const t0 = performance.now();
     const a = parseFile(e.data.old.name, e.data.old.data, parse);
@@ -21,8 +38,11 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
     const t1 = performance.now();
     const result = diffWorkbooks(a, b, options);
     const t2 = performance.now();
+    const hasFormulas = result.sheets.some((s) => s.diff.oldTable.formulas || s.diff.newTable.formulas);
+    const traced = trace && hasFormulas ? packWorkbookTrace(traceWorkbook(result, trace === true ? {} : trace), result) : undefined;
+    const t3 = performance.now();
     const { packed, transfer } = packWorkbookDiff(result);
-    (self as unknown as Worker).postMessage({ id, packed, timings: { parse: t1 - t0, diff: t2 - t1 } }, transfer);
+    (self as unknown as Worker).postMessage({ id, packed, trace: traced?.packed, timings: { parse: t1 - t0, diff: t2 - t1, trace: t3 - t2 } }, [...transfer, ...(traced?.transfer ?? [])]);
   } catch (err) {
     (self as unknown as Worker).postMessage({ id, error: err instanceof Error ? err.message : String(err) });
   }

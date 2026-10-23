@@ -1,5 +1,7 @@
 import { columnLabel } from '../core/csv.js';
 import { diffText, formatCell, numericDelta } from '../core/text.js';
+import { changeKind } from '../core/kind.js';
+import type { CellRef, CellTrace, ChangeKind, WorkbookTrace } from '../core/trace.js';
 import {
   ROW_STATUS,
   ROW_STATUS_NAMES,
@@ -7,6 +9,7 @@ import {
   type CellValue,
   type RowStatus,
   type TableDiff,
+  type WorkbookDiff,
 } from '../core/types.js';
 import {
   computeColumnLayout,
@@ -19,66 +22,140 @@ import {
 } from './layout.js';
 import { resolveTheme, STYLE, type Theme } from './theme.js';
 
+/**
+ * - `unified`: one grid; changed cells show old and new together (see {@link CellDisplay}).
+ * - `split`: old on the left, new on the right, rows aligned; missing rows and columns are hatched.
+ */
 export type DiffLayout = 'unified' | 'split';
 
+/** A note attached to a row (and optionally a cell) of the diff. */
 export interface CellAnnotation<A = unknown> {
-  /** Aligned row index (`0 … diff.rowCount - 1`). */
+  /** Aligned row index (`0 … diff.rowCount - 1`). The annotation renders below this row. */
   row: number;
-  /** Column name to mark with a corner indicator. Optional. */
+  /** Column name to mark with a corner triangle. Optional. */
   column?: string;
+  /** Your payload, passed back to `renderAnnotation`. */
   data: A;
 }
 
+/** Everything about one cell of the diff, as passed to event callbacks and returned by `cellInfo()`. */
 export interface CellInfo {
   /** Aligned row index. */
   row: number;
+  /** The aligned column. */
   column: AlignedColumn;
+  /** Index into `diff.columns`. */
   columnIndex: number;
+  /** Status of the row. */
   status: RowStatus;
+  /** True when this cell changed (in a modified row). */
   changed: boolean;
+  /** Row index in the old table, or -1. */
   oldRow: number;
+  /** Row index in the new table, or -1. */
   newRow: number;
+  /** Old value; `undefined` when the row or column doesn't exist in the old table. */
   oldValue: CellValue | undefined;
+  /** New value; `undefined` when the row or column doesn't exist in the new table. */
   newValue: CellValue | undefined;
+  /** Old formula text, `null` if none, `undefined` if the cell doesn't exist on that side. */
   oldFormula?: string | null;
+  /** New formula text, `null` if none, `undefined` if the cell doesn't exist on that side. */
   newFormula?: string | null;
+  /** For changed cells: `input`, `formula` or `computed` (from the trace when attached). */
+  kind?: ChangeKind;
+  /** The cell's trace (causes, impacts), when a `trace` is attached and the cell changed. */
+  trace?: CellTrace;
 }
 
+/**
+ * How a changed cell shows its change:
+ * - `stacked`: old value struck through above the new one (modified rows are taller).
+ * - `new`: just the new value on a tinted background.
+ * - `delta`: the new value, with the absolute and % change beneath it
+ *   (or `was …` for text). Modified rows are taller.
+ * - `inline`: `old → new` on one line.
+ */
+export type CellDisplay = 'stacked' | 'new' | 'delta' | 'inline';
+
+/** A workbook trace, plus which sheet of the workbook a grid shows. */
+export interface TraceContext {
+  /** From {@link traceWorkbook}. */
+  trace: WorkbookTrace;
+  /** The workbook diff the trace was made from. Used to label causes on other sheets. */
+  workbook: WorkbookDiff;
+  /** Index of the grid's sheet in `workbook.sheets`. */
+  sheet: number;
+}
+
+/** Options for {@link DiffGrid}. All are optional and can be changed later with `setOptions`. */
 export interface DiffGridOptions<A = unknown> {
-  /** `unified` (one grid, old/new stacked in changed cells) or `split` (side by side). */
+  /** `unified` or `split`. Default `unified`. */
   layout?: DiffLayout;
-  /** Collapse runs of unchanged rows into expandable separators. Default true. */
+  /** Collapse runs of unchanged rows into separators that expand on click. Default true. */
   collapseUnchanged?: boolean;
-  /** Unchanged rows kept around each change when collapsing. Default 2. */
+  /** Unchanged rows kept visible around each change when collapsing. Default 2. */
   context?: number;
-  /** Hide columns with no changes (key columns stay). Default false. */
+  /** Hide columns with no changed cells. Key, added, removed and renamed columns stay. Default false. */
   hideUnchangedColumns?: boolean;
-  /** Columns pinned to the left. `'keys'` pins the diff's key columns. Default `'keys'`. */
+  /**
+   * Columns pinned to the left while scrolling horizontally. `'keys'` (default)
+   * moves the diff's key columns to the front and pins them; a number pins
+   * that many leading columns.
+   */
   frozenColumns?: number | 'keys';
   /**
-   * Added to the 0-based row index for display. Defaults to the table's
-   * `origin` (real sheet row numbers), or 2 (1-based, after a header row).
+   * Added to a 0-based row index to get the displayed row number. Defaults
+   * to the table's `origin`, so numbers match the spreadsheet (2 for the
+   * first data row under a header).
    */
   rowNumberOffset?: number;
-  /** Force a color scheme. Default follows the page (`system`). */
+  /** `system` (default) follows the page's `prefers-color-scheme`; `light` / `dark` force one. */
   theme?: 'system' | 'light' | 'dark';
-  /** Change overview strip on the right edge. Default true. */
+  /** Change overview strip on the right edge; click it to jump. Default true. */
   minimap?: boolean;
-  /** Old → new popover when hovering a changed cell. Default true. */
+  /** Popover with old → new, character diff, Δ and trace when hovering a changed cell. Default true. */
   tooltips?: boolean;
-  /** Fixed widths for columns, by name. */
+  /** Fixed widths in CSS pixels, by column name. Other columns size to their content. */
   columnWidths?: Record<string, number>;
+  /** Notes to show below rows. Keep the array referentially stable; a new array re-renders all of them. */
   annotations?: CellAnnotation<A>[];
-  /** Render a full-width element below an annotated row. */
+  /**
+   * Render an annotation's content. The element is placed in the light DOM
+   * (projected into the grid through a `<slot>`), so your page CSS styles
+   * it, and spans the grid's width below its row. Its height is measured and
+   * tracked as it resizes.
+   */
   renderAnnotation?: (annotation: CellAnnotation<A>) => HTMLElement | null | undefined;
+  /** Called on pointer down on a cell (after selecting it). */
   onCellClick?: (cell: CellInfo, event: MouseEvent) => void;
+  /** Called when the pointer enters a cell, with `null` when it leaves the cells. */
   onCellHover?: (cell: CellInfo | null) => void;
+  /** Called whenever the selected cell changes: click, keyboard, `nextChange()`, `select()`. */
   onSelectionChange?: (cell: CellInfo | null) => void;
+  /** How changed cells show old vs. new. Default `stacked`. */
+  cellDisplay?: CellDisplay;
+  /**
+   * Color downstream changes (formula results that changed because
+   * something upstream did) amber, and mark formula edits with `ƒ`. Works
+   * without a trace. Default true.
+   */
+  highlightComputed?: boolean;
+  /** Attach a workbook trace: tooltips list causes and impacts, and selection can focus them. */
+  trace?: TraceContext;
+  /**
+   * When a traced cell is selected: outline its causes (solid), computed
+   * parents (dotted) and impacts (dashed) on this sheet, and dim the rest.
+   * Default true.
+   */
+  traceFocus?: boolean;
 }
 
+/** Arguments to `DiffGrid.render`. */
 export interface DiffGridRenderProps {
+  /** The diff to show. */
   diff: TableDiff;
-  /** Element to render into. The grid fills it; give it a height. */
+  /** Element to render into. The grid fills it, so give it a size (e.g. a height). */
   container: HTMLElement;
 }
 
@@ -109,14 +186,28 @@ interface PaneGeometry {
 }
 
 /**
- * A canvas-rendered, virtualized spreadsheet diff.
+ * A canvas-rendered, virtualized spreadsheet diff. Only the visible cells
+ * are drawn, so size doesn't matter; the grid fills its container.
  *
  * ```ts
+ * import { DiffGrid, diffTables, parseCsv } from 'spreadiff';
+ * declare const before: string, after: string, container: HTMLElement;
+ *
  * const grid = new DiffGrid({ layout: 'split' });
- * grid.render({ diff: diffTables(before, after), container });
+ * grid.render({ diff: diffTables(parseCsv(before), parseCsv(after)), container });
+ * grid.nextChange(); // select and scroll to the first change
+ * // later:
+ * grid.cleanUp();
  * ```
+ *
+ * Keyboard (when the grid has focus): `n`/`j` next change, `p`/`k`
+ * previous, arrow keys move the selection, ⌘/Ctrl+C copies the selected
+ * value, Esc clears the selection. Tab moves focus out of the grid.
  */
 export class DiffGrid<A = unknown> {
+  /**
+   * The element the grid renders into its container (it holds the shadow root). Style its size from outside if needed.
+   */
   readonly host: HTMLElement;
   private options: DiffGridOptions<A>;
   private diff: TableDiff | null = null;
@@ -149,6 +240,9 @@ export class DiffGrid<A = unknown> {
   private tooltipTimer = 0;
   private resizing: { vcol: number; startX: number; startW: number } | null = null;
   private lastPointer: { x: number; y: number } | null = null;
+  /** Cells related to the selection through the trace: `row:col` → role. */
+  private focus: Map<string, 'cause' | 'impact' | 'parent'> | null = null;
+  private focusKey = '';
   private themeFrame = 0;
   private textCache = new Map<string, string>();
   private minimapCache: { key: string; colors: (string | null)[] } | null = null;
@@ -184,6 +278,7 @@ export class DiffGrid<A = unknown> {
 
   // ---- Public API ------------------------------------------------------
 
+  /** Mount into `container` (first call, or a new container) and show `diff`. */
   render({ diff, container }: DiffGridRenderProps): void {
     if (this.container !== container) {
       this.detach();
@@ -194,6 +289,9 @@ export class DiffGrid<A = unknown> {
     this.setDiff(diff);
   }
 
+  /**
+   * Show a different diff. Resets scroll, selection, expanded regions and resized columns. A no-op for the same diff.
+   */
   setDiff(diff: TableDiff): void {
     if (this.diff === diff) return;
     this.diff = diff;
@@ -227,29 +325,35 @@ export class DiffGrid<A = unknown> {
       this.refreshTheme();
     }
     if (!this.diff) return;
-    if (has('columnWidths')) this.measureColumns();
+    if (has('columnWidths', 'cellDisplay')) this.measureColumns();
     if (has('annotations', 'renderAnnotation')) this.syncAnnotations();
-    if (has('layout', 'collapseUnchanged', 'context', 'hideUnchangedColumns', 'frozenColumns', 'columnWidths', 'annotations', 'renderAnnotation', 'rowNumberOffset', 'minimap')) {
+    if (has('trace', 'traceFocus')) this.updateFocus();
+    if (has('layout', 'collapseUnchanged', 'context', 'hideUnchangedColumns', 'frozenColumns', 'columnWidths', 'annotations', 'renderAnnotation', 'rowNumberOffset', 'minimap', 'cellDisplay')) {
       this.relayout();
     } else {
       this.schedule();
     }
   }
 
+  /** The current options. */
   getOptions(): Readonly<DiffGridOptions<A>> {
     return this.options;
   }
 
-  /** Scroll to the next block of changes. Returns false at the end. */
+  /**
+   * Select the first changed cell of the next block of changed rows and
+   * scroll to it. Returns false when there is no further change.
+   */
   nextChange(): boolean {
     return this.jumpChange(1);
   }
 
+  /** Like `nextChange`, backwards. Returns false at the first change. */
   prevChange(): boolean {
     return this.jumpChange(-1);
   }
 
-  /** Scroll an aligned row into view, expanding its collapsed region if needed. */
+  /** Scroll an aligned row into view, expanding its collapsed region if needed. Out-of-range rows are ignored. */
   scrollToRow(row: number, align: 'start' | 'center' | 'nearest' = 'center'): void {
     if (!this.diff || !(row >= 0 && row < this.diff.rowCount)) return;
     if (this.rows.displayOf[row] < 0) {
@@ -270,6 +374,7 @@ export class DiffGrid<A = unknown> {
     this.relayout();
   }
 
+  /** Collapse every expanded region again. */
   collapseAll(): void {
     this.expanded.clear();
     if (this.diff) this.relayout();
@@ -301,6 +406,9 @@ export class DiffGrid<A = unknown> {
     this.schedule();
   }
 
+  /**
+   * Remove the grid from the page and release its observers and listeners. The instance can be `render`ed again.
+   */
   cleanUp(): void {
     this.detach();
     for (const info of this.annotationEls.values()) info.ro.disconnect();
@@ -434,6 +542,26 @@ export class DiffGrid<A = unknown> {
     return this.options.minimap === false ? 0 : MINIMAP_WIDTH;
   }
 
+  private get display(): CellDisplay {
+    return this.options.cellDisplay ?? 'stacked';
+  }
+
+  /** Stacked and delta displays need two lines per changed row. */
+  private get tallRows(): boolean {
+    return this.display === 'stacked' || this.display === 'delta';
+  }
+
+  /** input / formula / computed for a changed cell. */
+  private kindOf(r: number, ci: number): ChangeKind {
+    const d = this.diff!;
+    const tc = this.options.trace;
+    if (tc) {
+      const k = tc.trace.get({ sheet: tc.sheet, row: r, col: ci })?.kind;
+      if (k) return k;
+    }
+    return changeKind(d, r, ci);
+  }
+
   private get rowHeight(): number {
     return this.theme?.rowHeight ?? 30;
   }
@@ -454,7 +582,7 @@ export class DiffGrid<A = unknown> {
       context: this.options.context ?? 2,
       expanded: this.expanded,
       rowHeight: lh,
-      modifiedHeight: unified ? Math.round(lh * 1.6) : lh,
+      modifiedHeight: unified && this.tallRows ? Math.round(lh * 1.6) : lh,
       separatorHeight: SEPARATOR_HEIGHT,
       annotationsAfter,
     });
@@ -562,6 +690,28 @@ export class DiffGrid<A = unknown> {
           const s = formatCell(v);
           ws.push(s.length > 80 ? 80 * 7 : ctx.measureText(s).width);
         }
+        // Changed cells in inline / delta displays need room for more than the value.
+        if (diff.changedCells.get(r)?.[i] && c.oldIndex >= 0 && c.newIndex >= 0 && (this.display === 'inline' || this.display === 'delta')) {
+          const ov = diff.oldTable.rows[diff.oldRows[r]][c.oldIndex] ?? null;
+          const nv = diff.newTable.rows[diff.newRows[r]][c.newIndex] ?? null;
+          const ot = formatCell(ov);
+          const nt = formatCell(nv);
+          if (ot.length + nt.length < 80) {
+            if (this.display === 'inline') {
+              ctx.font = `${t.fontSize - 1}px ${t.fontFamily}`;
+              const ow = ctx.measureText(ot).width;
+              ctx.font = `${t.fontSize}px ${t.fontFamily}`;
+              ws.push(ow + 14 + ctx.measureText(nt).width);
+            } else {
+              const dl = numericDelta(ov, nv);
+              if (dl && dl.delta) {
+                ctx.font = `500 ${t.fontSize - 2}px ${t.monoFontFamily}`;
+                ws.push(ctx.measureText(formatDelta(dl).label).width);
+                ctx.font = `${t.fontSize}px ${t.fontFamily}`;
+              }
+            }
+          }
+        }
       }
       if (nonEmpty && numeric / nonEmpty >= 0.8) this.numericCols[i] = 1;
       if (fixed) return fixed;
@@ -658,7 +808,7 @@ export class DiffGrid<A = unknown> {
     });
   }
 
-  /** Draw synchronously. Exposed for benchmarks. */
+  /** Draw synchronously instead of on the next animation frame. Rarely needed (tests, benchmarks). */
   drawNow(): void {
     if (!this.diff || !this.theme || this.width === 0) return;
     // Window moved to a display with a different pixel ratio.
@@ -667,6 +817,8 @@ export class DiffGrid<A = unknown> {
       this.resize();
       return;
     }
+    const key = this.selected ? `${this.selected.row}:${this.selected.col}` : '';
+    if (key !== this.focusKey) this.updateFocus();
     const ctx = this.ctx;
     const t = this.theme;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
@@ -787,6 +939,29 @@ export class DiffGrid<A = unknown> {
       }
     }
 
+    if (this.focus) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(dataX, bodyTop, right - dataX, this.height - bodyTop);
+      ctx.clip();
+      ctx.lineWidth = 2;
+      for (const [k, role] of this.focus) {
+        const [row, col] = k.split(':').map(Number);
+        const d = rows.displayOf[row];
+        const vi = cols.cols.indexOf(col);
+        if (d < 0 || vi < 0) continue;
+        const y = bodyTop + rows.offsets[d] - scrollY;
+        if (y > this.height || y + 100 < bodyTop) continue;
+        const h = rows.offsets[d + 1] - rows.offsets[d];
+        ctx.strokeStyle = role === 'impact' ? t.computed : t.modified;
+        ctx.setLineDash(role === 'impact' ? [4, 3] : role === 'parent' ? [1.5, 2.5] : []);
+        roundRect(ctx, colX(vi) + 1.5, y + 1.5, cols.widths[vi] - 3, h - 3, 3);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+
     this.drawHeader(p, firstScrolled, lastScrolled, colX);
     ctx.restore();
   }
@@ -853,25 +1028,17 @@ export class DiffGrid<A = unknown> {
         newText = String(newV);
       }
     }
-    if (changed && p.side === 'unified') {
-      // Old value over new value, each on its own tinted band.
-      const half = Math.floor(h / 2);
-      ctx.fillStyle = t.removedEmphasis;
-      ctx.fillRect(x, y, w - 1, half);
-      ctx.fillStyle = t.addedEmphasis;
-      ctx.fillRect(x, y + half, w - 1, h - half);
-      const small = `${t.fontSize - 1}px ${t.fontFamily}`;
-      this.text(oldText, x, y + half / 2 + 0.5, w, align, small, t.removedFg, true);
-      this.text(newText, x, y + half + (h - half) / 2 + 0.5, w, align, font, t.fg);
-    } else if (changed) {
-      ctx.fillStyle = p.side === 'old' ? t.removedEmphasis : t.addedEmphasis;
-      ctx.fillRect(x, y, w - 1, h);
-      this.text(p.side === 'old' ? oldText : newText, x, y + h / 2 + 0.5, w, align, font, t.fg);
+    if (changed) {
+      this.drawChange(p, r, ci, x, y, w, h, oldText, newText, oldV, newV, align);
     } else {
       const v = p.side === 'old' ? oldV : p.side === 'new' ? newV : newV !== undefined ? newV : oldV;
       let color = t.fg;
       if (status === ROW_STATUS.removed || (p.side === 'unified' && col.status === 'removed')) color = t.fgMuted;
       this.text(formatCell(v ?? null), x, y + h / 2 + 0.5, w, align, font, color, p.side === 'unified' && status === ROW_STATUS.removed);
+    }
+    if (this.focus && !(this.selected?.row === r && this.selected.col === ci) && !this.focus.has(`${r}:${ci}`)) {
+      ctx.fillStyle = t.dim;
+      ctx.fillRect(x, y, w, h);
     }
 
     if (this.cellMarks.size && this.cellMarks.has(`${r}:${col.name}`)) {
@@ -882,6 +1049,158 @@ export class DiffGrid<A = unknown> {
       ctx.lineTo(right - 1, y + 7);
       ctx.closePath();
       ctx.fill();
+    }
+  }
+
+  /** Recompute which cells the selection's trace points at. */
+  private updateFocus(): void {
+    const sel = this.selected;
+    this.focusKey = sel ? `${sel.row}:${sel.col}` : '';
+    this.focus = null;
+    const tc = this.options.trace;
+    if (!sel || !tc || this.options.traceFocus === false) return;
+    const ref = { sheet: tc.sheet, row: sel.row, col: sel.col };
+    const t = tc.trace.get(ref);
+    if (!t) return;
+    const m = new Map<string, 'cause' | 'impact' | 'parent'>();
+    for (const c of t.causes) if (c.sheet === tc.sheet) m.set(`${c.row}:${c.col}`, 'cause');
+    for (const c of t.impacts) if (c.sheet === tc.sheet) m.set(`${c.row}:${c.col}`, 'impact');
+    if (t.kind === 'computed') {
+      for (const c of tc.trace.parents(ref)) if (c.sheet === tc.sheet && !m.has(`${c.row}:${c.col}`)) m.set(`${c.row}:${c.col}`, 'parent');
+    }
+    // Relations only on other sheets: don't dim everything here.
+    this.focus = m.size ? m : null;
+    this.schedule();
+  }
+
+  /** `Sheet!B7 price` for a traced cell, with its change. */
+  private describeRef(ref: CellRef): { label: string; delta: string; sign: '+' | '-' | '' } {
+    const tc = this.options.trace!;
+    const sheet = tc.workbook.sheets[ref.sheet];
+    const d = sheet.diff;
+    const c = d.columns[ref.col];
+    const ni = d.newRows[ref.row];
+    const oi = d.oldRows[ref.row];
+    const side = ni >= 0 ? 'new' : 'old';
+    const table = side === 'new' ? d.newTable : d.oldTable;
+    const ri = side === 'new' ? ni : oi;
+    const ci = side === 'new' ? c.newIndex : c.oldIndex;
+    const origin = table.origin ?? { row: 1, col: 0 };
+    const prefix = ref.sheet === tc.sheet ? '' : `${sheet.name}!`;
+    // Name the row by its first cell when that's a label ("Price"), else the column.
+    const first = table.rows[ri]?.[0];
+    const rowName = ref.col !== 0 && typeof first === 'string' && first ? first : c.name;
+    const label = `${prefix}${columnLabel(ci + origin.col)}${ri + origin.row + 1} ${rowName}`;
+    const ov = oi >= 0 && c.oldIndex >= 0 ? d.oldTable.rows[oi][c.oldIndex] ?? null : null;
+    const nv = ni >= 0 && c.newIndex >= 0 ? d.newTable.rows[ni][c.newIndex] ?? null : null;
+    if (ni < 0) return { label, delta: 'row removed', sign: '-' };
+    if (oi < 0) return { label, delta: 'row added', sign: '+' };
+    const dl = numericDelta(ov, nv);
+    if (dl && dl.delta !== 0) {
+      const f = formatDelta(dl);
+      return { label, delta: f.label, sign: f.up ? '+' : '-' };
+    }
+    return { label, delta: `${formatCell(ov) || '∅'} → ${formatCell(nv) || '∅'}`, sign: '' };
+  }
+
+  /** The delta label, or a shorter form (% only, then absolute only) that fits. */
+  private fitDelta(d: { label: string; pct?: string; abs?: string }, w: number, font: string): string {
+    this.ctx.font = font;
+    const room = w - CELL_PAD * 2;
+    for (const s of [d.label, d.pct, d.abs]) if (s && this.ctx.measureText(s).width <= room) return s;
+    return d.pct ?? d.label;
+  }
+
+  /** A changed cell, in the configured display. */
+  private drawChange(
+    p: PaneGeometry,
+    r: number,
+    ci: number,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    oldText: string,
+    newText: string,
+    oldV: CellValue | undefined,
+    newV: CellValue | undefined,
+    align: 'left' | 'right',
+  ): void {
+    const ctx = this.ctx;
+    const t = this.theme;
+    const kind = this.options.highlightComputed === false ? 'input' : this.kindOf(r, ci);
+    const computed = kind === 'computed';
+    const font = `${t.fontSize}px ${t.fontFamily}`;
+    const small = `${t.fontSize - 1}px ${t.fontFamily}`;
+    const tiny = `500 ${t.fontSize - 2}px ${t.monoFontFamily}`;
+    const newBg = computed ? t.computedEmphasis : t.addedEmphasis;
+    // Computed: the old value isn't "wrong", it was just recalculated; keep it quiet.
+    const oldBg = computed ? t.separatorBg : t.removedEmphasis;
+    const oldFg = computed ? t.fgMuted : t.removedFg;
+    const mode = this.display;
+    const delta = numericDelta(oldV ?? null, newV ?? null);
+    const deltaText = delta && delta.delta !== 0 ? formatDelta(delta) : null;
+
+    if (p.side === 'old') {
+      ctx.fillStyle = oldBg;
+      ctx.fillRect(x, y, w - 1, h);
+      this.text(oldText, x, y + h / 2 + 0.5, w, align, font, t.fg);
+    } else if (p.side === 'new') {
+      ctx.fillStyle = newBg;
+      ctx.fillRect(x, y, w - 1, h);
+      if (mode === 'delta' && deltaText) {
+        // Split rows are one line: the change sits on the opposite side of the value.
+        this.text(newText, x, y + h / 2 + 0.5, w, align, font, t.fg);
+        this.text(this.fitDelta(deltaText, w / 2, tiny), x, y + h / 2 + 0.5, w, align === 'right' ? 'left' : 'right', tiny, deltaText.up ? t.added : t.removed);
+      } else {
+        this.text(newText, x, y + h / 2 + 0.5, w, align, font, t.fg);
+      }
+    } else if (mode === 'stacked') {
+      const half = Math.floor(h / 2);
+      ctx.fillStyle = oldBg;
+      ctx.fillRect(x, y, w - 1, half);
+      ctx.fillStyle = newBg;
+      ctx.fillRect(x, y + half, w - 1, h - half);
+      this.text(oldText, x, y + half / 2 + 0.5, w, align, small, oldFg, true);
+      this.text(newText, x, y + half + (h - half) / 2 + 0.5, w, align, font, t.fg);
+    } else if (mode === 'new') {
+      ctx.fillStyle = newBg;
+      ctx.fillRect(x, y, w - 1, h);
+      this.text(newText, x, y + h / 2 + 0.5, w, align, font, t.fg);
+    } else if (mode === 'delta') {
+      ctx.fillStyle = newBg;
+      ctx.fillRect(x, y, w - 1, h);
+      const top = y + h * 0.36;
+      const bottom = y + h * 0.72;
+      this.text(newText, x, top, w, align, font, t.fg);
+      if (deltaText) this.text(this.fitDelta(deltaText, w, tiny), x, bottom, w, align, tiny, deltaText.up ? t.added : t.removed);
+      else this.text(`was ${oldText || '∅'}`, x, bottom, w, align, small, oldFg);
+    } else {
+      // inline: old → new on one line; falls back to the new value when narrow.
+      ctx.fillStyle = newBg;
+      ctx.fillRect(x, y, w - 1, h);
+      const cy = y + h / 2 + 0.5;
+      ctx.font = small;
+      const ow = ctx.measureText(oldText).width;
+      ctx.font = font;
+      const nw = ctx.measureText(newText).width;
+      const arrow = 14;
+      if (ow + nw + arrow + 2 * CELL_PAD <= w) {
+        const start = align === 'right' ? x + w - CELL_PAD - nw - arrow - ow : x + CELL_PAD;
+        this.text(oldText, start - CELL_PAD, cy, ow + 2 * CELL_PAD + 1, 'left', small, oldFg, true);
+        this.text('→', start + ow - CELL_PAD + 2, cy, arrow + 2 * CELL_PAD, 'left', small, t.fgFaint);
+        this.text(newText, start + ow + arrow - CELL_PAD, cy, nw + 2 * CELL_PAD + 1, 'left', font, t.fg);
+      } else {
+        this.text(newText, x, cy, w, align, font, t.fg);
+      }
+    }
+    // Formula edits get an ƒ in the corner. Computed cells are told apart by
+    // their amber tint (and the tooltip), with no extra mark.
+    if (kind === 'formula' && p.side !== 'old') {
+      ctx.font = `italic 600 ${t.fontSize - 3}px ${t.fontFamily}`;
+      ctx.fillStyle = t.formula;
+      ctx.textAlign = 'left';
+      ctx.fillText('ƒ', x + 3, y + 8);
     }
   }
 
@@ -922,8 +1241,13 @@ export class DiffGrid<A = unknown> {
       const numW = (p.gutter - BAR_WIDTH - 16) / 2;
       if (oi >= 0) this.text(String(oi + offOld), p.x + BAR_WIDTH, cy, numW, 'right', mono, numColor);
       if (ni >= 0) this.text(String(ni + offNew), p.x + BAR_WIDTH + numW, cy, numW, 'right', mono, numColor);
-      const sign = status === ROW_STATUS.added ? '+' : status === ROW_STATUS.removed ? '−' : status === ROW_STATUS.modified ? '~' : '';
-      if (sign) {
+      const sign = status === ROW_STATUS.added ? '+' : status === ROW_STATUS.removed ? '−' : '';
+      if (status === ROW_STATUS.modified) {
+        ctx.fillStyle = accent!;
+        ctx.beginPath();
+        ctx.arc(p.x + p.gutter - 9, cy - 0.5, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (sign) {
         ctx.font = `600 ${t.fontSize}px ${t.monoFontFamily}`;
         ctx.fillStyle = accent!;
         ctx.textAlign = 'center';
@@ -1077,8 +1401,8 @@ export class DiffGrid<A = unknown> {
       ctx.font = `600 ${t.fontSize - 3}px ${t.fontFamily}`;
       const bw = Math.max(18, ctx.measureText(label).width + 10);
       const bx = x + w - CELL_PAD - bw + 4;
-      ctx.fillStyle = mixAlpha(t.modified, 0.16);
-      roundRect(ctx, bx, cy - 8, bw, 16, 8);
+      ctx.fillStyle = mixAlpha(t.modified, t.dark ? 0.16 : 0.1);
+      roundRect(ctx, bx, cy - 7.5, bw, 15, 7.5);
       ctx.fill();
       ctx.fillStyle = t.modified;
       ctx.textAlign = 'center';
@@ -1429,7 +1753,7 @@ export class DiffGrid<A = unknown> {
     return this.cellInfo(this.rows.ref[hit.display], this.cols.cols[hit.vcol]);
   }
 
-  /** Everything about one cell of the diff. */
+  /** Everything about one cell of the diff. Throws a `RangeError` for a row or column that doesn't exist. */
   cellInfo(row: number, columnIndex: number): CellInfo {
     if (!this.isCell(row, columnIndex)) throw new RangeError(`No cell at row ${row}, column ${columnIndex}`);
     const diff = this.diff!;
@@ -1449,13 +1773,17 @@ export class DiffGrid<A = unknown> {
       newValue: ni >= 0 && column.newIndex >= 0 ? diff.newTable.rows[ni][column.newIndex] ?? null : undefined,
       oldFormula: oi >= 0 && column.oldIndex >= 0 ? diff.oldTable.formulas?.[oi]?.[column.oldIndex] : undefined,
       newFormula: ni >= 0 && column.newIndex >= 0 ? diff.newTable.formulas?.[ni]?.[column.newIndex] : undefined,
+      kind: diff.changedCells.get(row)?.[columnIndex] === 1 ? this.kindOf(row, columnIndex) : undefined,
+      trace: this.options.trace?.trace.get({ sheet: this.options.trace.sheet, row, col: columnIndex }),
     };
   }
 
   private showTooltip(info: CellInfo, hit: Hit): void {
     const before = formatCell(info.oldValue ?? null);
     const after = formatCell(info.newValue ?? null);
-    const spans = before.length + after.length < 2000 ? diffText(before, after) : null;
+    // Character highlights help in text; inside numbers they're noise.
+    const numeric = typeof info.oldValue === 'number' && typeof info.newValue === 'number';
+    const spans = !numeric && before.length + after.length < 2000 ? diffText(before, after) : null;
     const esc = (s: string) => s.replace(/[&<>]/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'));
     const side = (kind: 'removed' | 'added') =>
       spans
@@ -1469,7 +1797,10 @@ export class DiffGrid<A = unknown> {
     html += `<div class="sd-tt-row sd-tt-old"><span class="sd-tt-sign">−</span><span class="sd-tt-val">${side('removed') || '<i>empty</i>'}</span></div>`;
     html += `<div class="sd-tt-row sd-tt-new"><span class="sd-tt-sign">+</span><span class="sd-tt-val">${side('added') || '<i>empty</i>'}</span></div>`;
     if (info.oldFormula || info.newFormula) {
-      html += `<div class="sd-tt-formula">${esc(info.oldFormula ?? '—')} → ${esc(info.newFormula ?? '—')}</div>`;
+      html +=
+        info.kind === 'computed' || info.oldFormula === info.newFormula
+          ? `<div class="sd-tt-formula">ƒ ${esc(info.newFormula ?? info.oldFormula ?? '')}</div>`
+          : `<div class="sd-tt-formula">${esc(info.oldFormula ?? '—')} → ${esc(info.newFormula ?? '—')}</div>`;
     }
     const delta = numericDelta(info.oldValue ?? null, info.newValue ?? null);
     if (delta && delta.delta !== 0) {
@@ -1477,6 +1808,47 @@ export class DiffGrid<A = unknown> {
       const abs = formatCell(Math.abs(delta.delta));
       const pct = delta.ratio === null ? '' : ` (${sign}${Math.abs(delta.ratio * 100).toFixed(Math.abs(delta.ratio) < 0.1 ? 2 : 1)}%)`;
       html += `<div class="sd-tt-delta">Δ <b data-sign="${sign}">${sign}${abs}${pct}</b></div>`;
+    }
+    const tc = this.options.trace;
+    const kind = info.kind;
+    if (kind && this.options.highlightComputed !== false) {
+      const kindLabel = kind === 'computed' ? 'downstream' : kind === 'formula' ? 'formula edit' : 'input edit';
+      let trace = `<div class="sd-tt-trace"><div class="sd-tt-trace-title"><span class="sd-tt-kind" data-kind="${kind}">${kindLabel}</span>`;
+      const t = info.trace;
+      if (tc && t) {
+        const list = kind === 'computed' ? t.causes : t.impacts;
+        const count = kind === 'computed' ? t.causeCount : t.impactCount;
+        if (kind === 'computed') {
+          trace += count
+            ? ` changed because of ${count} edit${count === 1 ? '' : 's'}:`
+            : t.unexplained === 'volatile' ? ' volatile function (NOW, RAND, …)' : t.unexplained === 'dynamic' ? ' dynamic reference (INDIRECT, OFFSET, …)' : ' cause not found';
+        } else {
+          trace += count ? ` flows into ${count} cell${count === 1 ? '' : 's'}:` : ' nothing downstream changed';
+        }
+        trace += '</div>';
+        // Each cause, its own change, and (when recalculated) how much of this cell's change it accounts for.
+        const contributions = kind === 'computed' ? t.contributions : undefined;
+        for (let i = 0; i < Math.min(list.length, 6); i++) {
+          const d = this.describeRef(list[i]);
+          const c = contributions?.[i];
+          // A difference of two doubles: round away the binary noise (56082.4700000002).
+          const share = typeof c === 'number' && c !== 0 ? `<span class="sd-tt-share" data-sign="${c > 0 ? '+' : '-'}">${c > 0 ? '+' : '−'}${esc(formatCell(Number(Math.abs(c).toPrecision(12))))}</span>` : contributions ? '<span></span>' : '';
+          trace += `<div class="sd-tt-cause${contributions ? ' sd-tt-has-share' : ''}"><span>${kind === 'computed' ? '←' : '→'}</span><span class="sd-tt-ref">${esc(d.label)}</span><span class="sd-tt-d" data-sign="${d.sign}">${esc(d.delta)}</span>${share}</div>`;
+        }
+        if (count > 6) trace += `<div class="sd-tt-trace-title">+ ${count - 6} more</div>`;
+        if (kind === 'computed' && count) {
+          trace +=
+            t.method === 'recalculated'
+              ? `<div class="sd-tt-note">${contributions?.some((x) => typeof x === 'number') ? 'Right column: this cell\'s change from each edit, found by undoing it and recalculating.' : 'Found by undoing each edit and recalculating.'}</div>`
+              : '<div class="sd-tt-note">From formula references; some listed edits may not have mattered.</div>';
+        }
+        if (t.stale) {
+          trace += `<div class="sd-tt-stale">The file saved <b>${esc(formatCell(t.stale.cached) || 'nothing')}</b> here without recalculating; recalculating its inputs gives <b>${esc(formatCell(t.stale.recalculated))}</b>.</div>`;
+        }
+      } else {
+        trace += '</div>';
+      }
+      html += trace + '</div>';
     }
     this.tooltip.innerHTML = html;
     // Position under the cell, flipping above near the bottom edge.
@@ -1489,7 +1861,14 @@ export class DiffGrid<A = unknown> {
     const th = this.tooltip.offsetHeight;
     const left = Math.max(8, Math.min(vx, this.width - this.minimapWidth - tw - 8));
     const rowH = this.rows.offsets[hit.display + 1] - this.rows.offsets[hit.display];
-    const top = y + th + 8 > this.height ? y - rowH - th - 6 : y + 6;
+    // A tall tooltip (many causes) may fit neither side: take the roomier one, kept inside the grid.
+    const below = y + 6;
+    const above = y - rowH - th - 6;
+    const top =
+      below + th + 8 <= this.height ? below
+      : above >= 4 ? above
+      : this.height - y > y - rowH ? Math.max(4, Math.min(below, this.height - th - 4))
+      : 4;
     this.tooltip.style.left = `${left}px`;
     this.tooltip.style.top = `${top}px`;
     this.tooltip.setAttribute('data-open', '');
@@ -1509,6 +1888,17 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string): HTMLEle
   const e = document.createElement(tag);
   e.className = cls;
   return e;
+}
+
+/** `+5.23 · +8.0%` (or `+5.23` when the old value was 0). */
+function formatDelta(d: { delta: number; ratio: number | null }): { label: string; up: boolean; abs: string; pct?: string } {
+  const up = d.delta > 0;
+  const sign = up ? '+' : '−';
+  const abs = `${sign}${formatCell(Math.abs(d.delta))}`;
+  if (d.ratio === null) return { label: abs, up, abs };
+  const pct = Math.abs(d.ratio * 100);
+  const p = `${sign}${pct >= 100 ? pct.toFixed(0) : pct >= 10 ? pct.toFixed(1) : pct.toFixed(2)}%`;
+  return { label: `${abs} · ${p}`, up, abs, pct: p };
 }
 
 function shallowEqual(a: unknown, b: unknown): boolean {

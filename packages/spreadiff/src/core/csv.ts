@@ -1,5 +1,6 @@
 import type { CellValue, Table } from './types.js';
 
+/** Options for {@link parseCsv}. */
 export interface ParseCsvOptions {
   /** Field delimiter. Detected from the first lines when omitted. */
   delimiter?: string;
@@ -11,6 +12,7 @@ export interface ParseCsvOptions {
    * stay text. Numbers make diffs, rendering and worker transfer much cheaper.
    */
   numbers?: boolean | 'lossless';
+  /** Name for the resulting table (default `Sheet1`). */
   name?: string;
 }
 
@@ -26,6 +28,11 @@ export function columnLabel(index: number): string {
   return s;
 }
 
+/**
+ * Guess the field delimiter of delimited text: `,`, tab, `;` or `|`. Prefers
+ * the candidate that appears the same number of times on each of the first
+ * lines. Defaults to `,`.
+ */
 export function detectDelimiter(text: string): string {
   const sample = text.slice(0, 64 * 1024);
   const lines = sample.split(/\r?\n/, 20).filter((l) => l.length > 0);

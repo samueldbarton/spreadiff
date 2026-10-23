@@ -1,8 +1,11 @@
 import { alignSequences } from './sequence.js';
 import type { CellValue } from './types.js';
 
+/** A run of text in a {@link diffText} result. */
 export interface TextSpan {
+  /** The characters of this run. */
   text: string;
+  /** `equal` in both strings, `removed` only in the old one, `added` only in the new one. */
   kind: 'equal' | 'added' | 'removed';
 }
 
@@ -48,9 +51,20 @@ export function numericDelta(before: CellValue, after: CellValue): { delta: numb
   const x = typeof before === 'number' ? before : typeof before === 'string' && before.trim() ? Number(before) : NaN;
   const y = typeof after === 'number' ? after : typeof after === 'string' && after.trim() ? Number(after) : NaN;
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-  return { delta: y - x, ratio: x === 0 ? null : (y - x) / Math.abs(x) };
+  // A difference is only as precise as its operands: keep 15 significant
+  // digits of the larger one (3878764.11 − 3887856.67 = −9092.56, not −9092.56000000006).
+  const scale = Math.max(Math.abs(x), Math.abs(y));
+  const decimals = scale ? 14 - Math.floor(Math.log10(scale)) : 0;
+  const raw = y - x;
+  const delta = decimals > 0 && decimals <= 100 ? Number(raw.toFixed(decimals)) : raw;
+  return { delta, ratio: x === 0 ? null : delta / Math.abs(x) };
 }
 
+/**
+ * Display text for a cell value: `''` for null, `TRUE`/`FALSE` for booleans,
+ * and numbers with float noise trimmed (`0.1 + 0.2` → `"0.3"`) at 15
+ * significant digits.
+ */
 export function formatCell(v: CellValue): string {
   if (v === null || v === undefined) return '';
   if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';

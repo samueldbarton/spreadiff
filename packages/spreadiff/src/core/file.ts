@@ -2,8 +2,14 @@ import { parseCsv } from './csv.js';
 import { parseXlsx } from './xlsx.js';
 import type { Workbook } from './types.js';
 
+/** Options for {@link parseFile}. */
 export interface ParseFileOptions {
-  header?: boolean;
+  /**
+   * Whether the first (non-empty) row holds column names. Default `'auto'`:
+   * for XLSX, see `ParseXlsxOptions.header`; CSV treats `'auto'` as true.
+   */
+  header?: boolean | 'auto';
+  /** CSV delimiter; detected when omitted (`.tsv` files default to tab). */
   delimiter?: string;
 }
 
@@ -19,7 +25,7 @@ export function parseFile(name: string, data: ArrayBuffer | Uint8Array, options:
   if (/\.(xlsx|xlsm|xlsb|ods)$/i.test(name)) throw new Error(`${name}: not a valid .xlsx file`);
   const text = decodeText(bytes);
   const delimiter = options.delimiter ?? (/\.tsv$/i.test(name) ? '\t' : undefined);
-  const sheet = parseCsv(text, { name: name.replace(/\.[^.]+$/, ''), delimiter, header: options.header });
+  const sheet = parseCsv(text, { name: name.replace(/\.[^.]+$/, ''), delimiter, header: options.header !== false });
   return { name, sheets: [sheet] };
 }
 

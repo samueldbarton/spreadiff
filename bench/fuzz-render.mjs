@@ -21,7 +21,7 @@ const result = await page.evaluate(async ([ITER, SEED]) => {
     name: 's',
     columns: cols,
     rows: Array.from({ length: rows }, (_, i) => cols.map((c, j) => (j === 0 && c === 'id' ? String(i) : pick(vals) || null))),
-    formulas: r() < 0.2 ? Array.from({ length: rows }, () => cols.map(() => (r() < 0.1 ? '=A1' : null))) : undefined,
+    formulas: r() < 0.4 ? Array.from({ length: rows }, (_, i) => cols.map((_, j) => (j > 0 && r() < 0.3 ? pick([`=A${i + 2}*2`, `=SUM(B2:B${rows + 1})`, '=NOW()', `=B${i + 1}+1`, '=INDIRECT("A1")']) : null))) : undefined,
   });
   const mkDiff = () => {
     const kind = r();
@@ -53,6 +53,12 @@ const result = await page.evaluate(async ([ITER, SEED]) => {
     minimap: () => g.setOptions({ minimap: r() < 0.5 }),
     widths: () => g.setOptions({ columnWidths: { a: Math.floor(r() * 400), b: 1 } }),
     theme: () => g.setOptions({ theme: pick(['light', 'dark', 'system']) }),
+    display: () => g.setOptions({ cellDisplay: pick(['stacked', 'new', 'delta', 'inline']), highlightComputed: r() < 0.9 }),
+    trace: () => {
+      if (!g.diff || r() < 0.2) return g.setOptions({ trace: undefined });
+      const workbook = { sheets: [{ name: 's', status: 'modified', diff: g.diff }] };
+      g.setOptions({ trace: { trace: window.sd.traceWorkbook(workbook), workbook, sheet: 0 }, traceFocus: r() < 0.8 });
+    },
     annotations: () => g.setOptions({
       annotations: Array.from({ length: Math.floor(r() * 4) }, () => ({ row: Math.floor(r() * 500) - 50, column: pick(['a', 'b', 'nope']), data: 1 })),
       renderAnnotation: r() < 0.8 ? () => Object.assign(document.createElement('div'), { textContent: 'note', style: `height:${Math.floor(r() * 80)}px` }) : undefined,

@@ -12,26 +12,48 @@ import { createPortal } from 'react-dom';
 import { DiffGrid as DiffGridView, type CellAnnotation, type DiffGridOptions } from '../render/DiffGrid.js';
 import type { TableDiff } from '../core/types.js';
 
+/** Props of the React {@link DiffGrid}: every {@link DiffGridOptions} field, plus these. */
 export interface DiffGridProps<A = unknown> extends Omit<DiffGridOptions<A>, 'renderAnnotation'> {
+  /** The diff to show. Changing it resets scroll and selection. */
   diff: TableDiff;
   /** Keep this array referentially stable (useMemo); a new array re-renders every annotation. */
   annotations?: CellAnnotation<A>[];
+  /** Class for the container element. */
   className?: string;
+  /** Style for the container element. The grid fills it: give it a height. */
   style?: CSSProperties;
-  /** Render annotation content with React; it is portaled below the annotated row. */
+  /** Render annotation content with React; it is portaled into place below the annotated row. */
   renderAnnotation?: (annotation: CellAnnotation<A>) => ReactNode;
 }
 
+/**
+ * The `ref` of the React {@link DiffGrid}: the imperative methods of the
+ * vanilla grid, and the instance itself for anything else.
+ */
 export type DiffGridHandle = Pick<
   DiffGridView,
   'nextChange' | 'prevChange' | 'scrollToRow' | 'expandAll' | 'collapseAll' | 'select' | 'refreshTheme' | 'cellInfo'
 > & { readonly instance: DiffGridView | null };
 
 /**
- * React wrapper around the canvas `DiffGrid`. Give the element a height.
+ * React wrapper around the canvas `DiffGrid`. Props are the grid's options;
+ * changing them updates the grid in place (only layout-affecting changes
+ * re-layout). Give the element a height.
  *
  * ```tsx
- * <DiffGrid diff={diff} layout="split" style={{ height: 600 }} />
+ * import { DiffGrid, type DiffGridHandle } from 'spreadiff/react';
+ * import { useRef } from 'react';
+ * import type { TableDiff } from 'spreadiff';
+ *
+ * function Review({ diff }: { diff: TableDiff }) {
+ *   const grid = useRef<DiffGridHandle>(null);
+ *   return (
+ *     <>
+ *       <button onClick={() => grid.current?.nextChange()}>Next change</button>
+ *       <DiffGrid ref={grid} diff={diff} layout="split" cellDisplay="delta" style={{ height: 600 }} />
+ *     </>
+ *   );
+ * }
  * ```
  */
 export const DiffGrid = forwardRef(function DiffGrid<A>(
@@ -115,4 +137,4 @@ export const DiffGrid = forwardRef(function DiffGrid<A>(
   );
 }) as <A = unknown>(props: DiffGridProps<A> & { ref?: React.Ref<DiffGridHandle> }) => ReactNode;
 
-export type { CellAnnotation, CellInfo, DiffGridOptions, DiffLayout } from '../render/DiffGrid.js';
+export type { CellAnnotation, CellDisplay, CellInfo, DiffGridOptions, DiffLayout, TraceContext } from '../render/DiffGrid.js';

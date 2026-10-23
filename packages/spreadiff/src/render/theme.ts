@@ -30,12 +30,17 @@ export const STYLE = /* css */ `
   --sdi-modified: var(--sd-modified, light-dark(#009fff, #69b1ff));
   --sdi-added-bg: var(--sd-added-bg, light-dark(color-mix(in srgb, var(--sdi-added) 9%, var(--sdi-bg)), color-mix(in srgb, var(--sdi-added) 12%, var(--sdi-bg))));
   --sdi-removed-bg: var(--sd-removed-bg, light-dark(color-mix(in srgb, var(--sdi-removed) 9%, var(--sdi-bg)), color-mix(in srgb, var(--sdi-removed) 12%, var(--sdi-bg))));
-  --sdi-modified-bg: var(--sd-modified-bg, light-dark(color-mix(in srgb, var(--sdi-modified) 5%, var(--sdi-bg)), color-mix(in srgb, var(--sdi-modified) 8%, var(--sdi-bg))));
   --sdi-added-emphasis: var(--sd-added-emphasis, light-dark(color-mix(in srgb, var(--sdi-added) 22%, var(--sdi-bg)), color-mix(in srgb, var(--sdi-added) 28%, var(--sdi-bg))));
   --sdi-removed-emphasis: var(--sd-removed-emphasis, light-dark(color-mix(in srgb, var(--sdi-removed) 20%, var(--sdi-bg)), color-mix(in srgb, var(--sdi-removed) 26%, var(--sdi-bg))));
   --sdi-added-fg: var(--sd-added-fg, color-mix(in srgb, var(--sdi-added) 70%, var(--sdi-fg)));
   --sdi-removed-fg: var(--sd-removed-fg, color-mix(in srgb, var(--sdi-removed) 70%, var(--sdi-fg)));
   --sdi-selection: var(--sd-selection, var(--sdi-modified));
+  /* Downstream (computed) changes: same formula, new result. */
+  --sdi-computed: var(--sd-computed, light-dark(#e08a00, #f5b83d));
+  --sdi-computed-emphasis: var(--sd-computed-emphasis, light-dark(color-mix(in srgb, var(--sdi-computed) 13%, var(--sdi-bg)), color-mix(in srgb, var(--sdi-computed) 15%, var(--sdi-bg))));
+  /* Formula edits. */
+  --sdi-formula: var(--sd-formula, light-dark(#7c3aed, #a78bfa));
+  --sdi-dim: var(--sd-dim, color-mix(in srgb, var(--sdi-bg) 62%, transparent));
   --sdi-hatch: var(--sd-hatch, color-mix(in srgb, var(--sdi-fg) 7%, transparent));
   --sdi-font-family: var(--sd-font-family, "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif);
   --sdi-mono-font-family: var(--sd-mono-font-family, "Berkeley Mono", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace);
@@ -112,6 +117,21 @@ export const STYLE = /* css */ `
 }
 .sd-tooltip .sd-tt-delta b[data-sign="+"] { color: var(--sdi-added); font-weight: 600; }
 .sd-tooltip .sd-tt-delta b[data-sign="-"] { color: var(--sdi-removed); font-weight: 600; }
+.sd-tooltip .sd-tt-trace { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--sdi-border); }
+.sd-tooltip .sd-tt-trace-title { color: var(--sdi-fg-muted); font-size: 11px; margin-bottom: 4px; }
+.sd-tooltip .sd-tt-kind { font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; padding: 1px 5px; border-radius: 4px; }
+.sd-tooltip .sd-tt-kind[data-kind="computed"] { color: var(--sdi-computed); background: var(--sdi-computed-emphasis); }
+.sd-tooltip .sd-tt-kind[data-kind="input"] { color: var(--sdi-modified); background: color-mix(in srgb, var(--sdi-modified) 14%, transparent); }
+.sd-tooltip .sd-tt-kind[data-kind="formula"] { color: var(--sdi-formula); background: color-mix(in srgb, var(--sdi-formula) 14%, transparent); }
+.sd-tooltip .sd-tt-cause { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; font-family: var(--sdi-mono-font-family); font-size: 11px; line-height: 1.6; }
+.sd-tooltip .sd-tt-cause .sd-tt-ref { color: var(--sdi-fg-muted); }
+.sd-tooltip .sd-tt-cause .sd-tt-d[data-sign="+"] { color: var(--sdi-added); }
+.sd-tooltip .sd-tt-cause .sd-tt-d[data-sign="-"] { color: var(--sdi-removed); }
+.sd-tooltip .sd-tt-cause.sd-tt-has-share { grid-template-columns: auto 1fr auto 4.5em; }
+.sd-tooltip .sd-tt-share { text-align: right; font-weight: 600; color: var(--sdi-fg); }
+.sd-tooltip .sd-tt-note { margin-top: 4px; color: var(--sdi-fg-faint); font-size: 10.5px; line-height: 1.35; }
+.sd-tooltip .sd-tt-stale { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--sdi-border); color: var(--sdi-fg-muted); font-size: 11px; }
+.sd-tooltip .sd-tt-stale b { color: var(--sdi-fg); font-family: var(--sdi-mono-font-family); font-weight: 600; }
 .sd-tooltip .sd-tt-formula { color: var(--sdi-fg-muted); font-family: var(--sdi-mono-font-family); font-size: 11px; }
 .sd-probe { position: absolute; width: 0; height: 0; visibility: hidden; pointer-events: none; }
 `;
@@ -132,12 +152,15 @@ export interface Theme {
   modified: string;
   addedBg: string;
   removedBg: string;
-  modifiedBg: string;
   addedEmphasis: string;
   removedEmphasis: string;
   addedFg: string;
   removedFg: string;
   selection: string;
+  computed: string;
+  computedEmphasis: string;
+  formula: string;
+  dim: string;
   hatch: string;
   fontFamily: string;
   monoFontFamily: string;
@@ -162,11 +185,14 @@ const COLOR_TOKENS: [keyof Theme, string][] = [
   ['modified', '--sdi-modified'],
   ['addedBg', '--sdi-added-bg'],
   ['removedBg', '--sdi-removed-bg'],
-  ['modifiedBg', '--sdi-modified-bg'],
   ['addedEmphasis', '--sdi-added-emphasis'],
   ['removedEmphasis', '--sdi-removed-emphasis'],
   ['addedFg', '--sdi-added-fg'],
   ['removedFg', '--sdi-removed-fg'],
+  ['computed', '--sdi-computed'],
+  ['computedEmphasis', '--sdi-computed-emphasis'],
+  ['formula', '--sdi-formula'],
+  ['dim', '--sdi-dim'],
   ['selection', '--sdi-selection'],
   ['hatch', '--sdi-hatch'],
 ];
