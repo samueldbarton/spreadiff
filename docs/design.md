@@ -84,20 +84,34 @@ a formula edit.
 *Cost:* a tokenizer and reference parser, plus rules for range edges
 (an endpoint on a deleted row snaps inward).
 
-### No formula evaluation
+### Cached values first, a formula engine to check them
 
-Values come from the cached results stored in the file. spreadiff never
-recalculates.
+Values shown are the cached results stored in the file. spreadiff
+doesn't replace them with its own. It does carry a formula engine
+(about 150 functions) and uses it in two places:
 
-*Gain:* no formula engine to write or keep correct (Excel has about 500
-functions), tracing cost that grows with the changed cells rather than
-the model ([Tracing → Cost](tracing.md#cost)), and values that always
-match what Excel displayed.
+- **Values the file doesn't have.** Files written by tools that don't
+  calculate (openpyxl, most exporters) store formulas without results.
+  `parseXlsx` computes those, and only those.
+- **Tracing.** Static references say which inputs *could* have moved a
+  cell. Recalculating says which ones *did*: each edit is put back to
+  its old value, one at a time, and the cells it reaches are evaluated.
+  The same pass catches cached values the file never refreshed.
 
-*Cost:* no attribution. spreadiff can say "net income changed because
-price and units changed," but not "+8% from price, +4% from units". It
-also can't follow references computed at run time (`INDIRECT`, `OFFSET`);
-those are flagged as dynamic instead.
+Before trusting itself, the engine evaluates a sample of each formula
+shape against the old file's cached values. A shape it can't reproduce
+falls back to static references for that part of the model.
+
+*Gain:* precise causes and contributions ("+8% from price, +4% from
+units"), stale values flagged rather than shown as if current, and files
+without cached values still diffable.
+
+*Cost:* `core` grew from 16 to 36 KB gzip; `lite` doesn't include the
+engine. Recalculating takes 3–5× as long as static tracing
+([Tracing → Cost](tracing.md#cost)). The engine is one spreadsheet's
+opinion: where it disagrees with Excel (hidden rows in `SUBTOTAL`,
+locale-dependent text) the calibration should catch it, but only for
+the cells it samples. See [Tracing → Failure cases](tracing.md#failure-cases).
 
 ### Numbers parse only when they round-trip
 
@@ -111,7 +125,7 @@ calling `String(Number(x))` per field.
 
 The reader handles values, shared strings, dates, booleans and shared
 formulas, on top of [fflate](https://github.com/101arrowz/fflate). The
-whole `core` entry, tracing included, is 16.1 KB gzip.
+whole `core` entry, tracing included, is 36.3 KB gzip.
 
 *Cost:* no styles, merged cells, comments or legacy `.xls`. A file that
 needs those needs another parser; any parser that produces a `Table` works.
@@ -164,7 +178,7 @@ a server, in CI or in an email. It shows changes plus context, like a code
 review, and caps the output with `maxRows`.
 
 *Why a separate entry and not a mode of `DiffGrid`?* Different jobs. A
-pull-request comment needs ten rows of static HTML at 11.1 KB; a reviewer
+pull-request comment needs ten rows of static HTML at 11.8 KB; a reviewer
 scrolling a million rows needs the canvas. Sharing the diff model keeps
 them consistent.
 

@@ -57,8 +57,12 @@ least 80% of their values agree across matched rows. Rows where both cells
 are blank are skipped, so two mostly-empty columns don't pair on their
 blanks. `detectRenames: false` turns this off.
 
-**No header row?** Parse with `header: false`. Columns are then named `A`,
-`B`, … and match by position.
+**No header row?** CSV: parse with `header: false`. Columns are then
+named `A`, `B`, … and match by position. XLSX decides per sheet
+(`header: 'auto'`, the default): the first row is data, not names, when
+it holds numbers, dates or formulas, or when a formula reads one of its
+cells. A financial model's row 1 is usually a row of the model. Treating
+it as a header hid edits to it and broke the traces that run through it.
 
 ## Step 2: rows
 
@@ -87,6 +91,16 @@ Without keys, rows are aligned like lines in a text diff:
    `modified` row when at least half their cells (`rowSimilarity`, default
    0.5) are equal. A single removed and a single added row at the same
    position pair whenever any cell matches: that is almost always an edit.
+   When a gap has as many removed rows as added ones, each row is first
+   tried against the row in its own position, and pairs when it is
+   similar enough or both rows have formulas in the same column. In a
+   sheet with formulas, a row in place that matches nothing better is
+   still paired. An input edit can change every value in a model's rows,
+   so similarity alone would split them into removed + added.
+
+Row identity includes each formula's shape, relative to its cell
+(`=B2*C2` in row 2 and `=B3*C3` in row 3 are the same shape), so a row
+whose formula was edited doesn't match its old self as unchanged.
 
 **Cost.** Matching by key is the faster path: on a million rows with ~0.8%
 changed, about 1–3 s by key against 3–5 s by order, in Node. See
@@ -101,6 +115,8 @@ typed-in values keeps the row recognisable as "the same row, edited".
 Two cells are equal when:
 
 - they are the same value, or
+- both are numbers that agree to `precision` significant digits (default
+  15, allowing one unit in the last place), or
 - with `numericTolerance > 0`, both read as numbers within that tolerance, or
 - their normalized text matches. By default whitespace is trimmed
   (`trimWhitespace`) and case matters (`ignoreCase: false`).
@@ -108,6 +124,13 @@ Two cells are equal when:
 Values keep their type: `1` and `"1"` compare equal (both read as `1`), but
 `"1.0"` and `1` don't, because the text differs. Use `numericTolerance` to
 compare numerically.
+
+**Why 15 digits?** Excel calculates to 15 significant digits but writes
+17 to the file. LibreOffice writes 15. The same result can therefore be
+saved as `0.9382716049382716` by one and `0.938271604938272` by the
+other, and neither displays the difference. Comparing all 17 digits
+flagged such cells in Excel files re-saved by LibreOffice as changes. `precision: 17`
+compares doubles exactly.
 
 ### Formulas
 
@@ -145,8 +168,8 @@ sheet's alignment.
 | Delimiter | detected (`,` `\t` `;` `\|`), or Excel's `sep=;` first line, or `delimiter` | — |
 | Numbers | converted only when lossless: `"007"`, `"1.50"`, `"1e5"` stay text | stored values |
 | Dates | text | ISO strings, from the number format (`2026-01-31`) |
-| Formulas | — | text of each cell, shared formulas expanded; values are the cached results |
-| Header | first row (`header: false` for none) | first non-empty row of the used range |
+| Formulas | — | text of each cell, shared and array formulas expanded; values are the cached results, and formulas without one are computed |
+| Header | first row (`header: false` for none) | first non-empty row of the used range, unless it looks like data (`header: 'auto'`) |
 
 `parseFile(name, bytes)` picks the parser: zip content means XLSX, `.tsv`
 means tab-delimited, anything else is CSV. Legacy `.xls` (BIFF) files are
@@ -163,6 +186,7 @@ strings.
 | --- | --- | --- |
 | `keys` | `'auto'` | `string[]`, `'auto'` or `'none'`; see [rows](#step-2-rows) |
 | `numericTolerance` | `0` | Numbers within ± this are equal |
+| `precision` | `15` | Significant digits numbers must share to be equal |
 | `trimWhitespace` | `true` | Ignore leading/trailing whitespace in text |
 | `ignoreCase` | `false` | Compare text case-insensitively |
 | `compareFormulas` | `true` | Count formula-meaning changes, XLSX vs. XLSX |
@@ -179,7 +203,9 @@ changed, so it no longer looks like the same row. If rows have an id, match
 by key; otherwise lower `rowSimilarity`.
 
 **"Numbers that look equal are flagged."** `0.30000000000000004` vs. `0.3`
-displays the same but differs. Set `numericTolerance` (e.g. `1e-9`). The
+displays the same but differs at the 16th digit; the default `precision`
+of 15 already treats those as equal. For larger noise, set
+`numericTolerance` (e.g. `1e-9`). The
 grid shows full precision when two different values would display
 identically.
 

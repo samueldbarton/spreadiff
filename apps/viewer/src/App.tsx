@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { diffText, formatCell, numericDelta, toUnifiedCsv, traceWorkbook, unpackWorkbookDiff, type CellRef, type DiffOptions, type WorkbookDiff } from 'spreadiff';
+import { applyRecalculation, diffText, formatCell, numericDelta, toUnifiedCsv, traceWorkbook, unpackWorkbookDiff, type CellRef, type DiffOptions, type WorkbookDiff } from 'spreadiff';
 import { DiffGrid, type CellDisplay, type CellInfo, type DiffGridHandle, type DiffLayout } from 'spreadiff/react';
 import { CodeView } from './CodeView';
 import { Icon } from './Icon';
@@ -186,11 +186,14 @@ export function App() {
     setSheet(i);
   };
 
-  // Formula tracing, when any sheet has formulas (cheap: no evaluation).
+  // Formula tracing, when any sheet has formulas: recalculates around each change.
   const trace = useMemo(() => {
     if (!loaded || !loaded.result.sheets.some((s) => s.diff.newTable.formulas || s.diff.oldTable.formulas)) return null;
     return traceWorkbook(loaded.result);
   }, [loaded]);
+  // Stale results in the new file: show what recalculating gives, unless asked for the saved values.
+  const [savedValues, setSavedValues] = useState(false);
+  const shown = useMemo(() => (loaded && trace && !savedValues ? applyRecalculation(loaded.result, trace) : loaded?.result ?? null), [loaded, trace, savedValues]);
 
   // Jump to a cell from the trace panel (possibly on another sheet).
   const pick = (ref: CellRef) => {
@@ -215,8 +218,8 @@ export function App() {
     if (next[0] && next[1]) void diffFiles(next[0], next[1]);
   };
 
-  const sheets = loaded?.result.sheets ?? [];
-  const traceCtx = useMemo(() => (trace && loaded ? { trace, workbook: loaded.result, sheet } : undefined), [trace, loaded, sheet]);
+  const sheets = shown?.sheets ?? [];
+  const traceCtx = useMemo(() => (trace && shown ? { trace, workbook: shown, sheet } : undefined), [trace, shown, sheet]);
   const current = sheets[sheet];
   const diff = current?.diff;
   const stats = diff?.stats;
@@ -400,6 +403,14 @@ export function App() {
             )}
           </div>
 
+          {(trace?.stats.stale || 0) > 0 && (
+            <div className="banner">
+              <b>{plural(trace!.stats.stale, 'formula result')} in the new file {trace!.stats.stale === 1 ? 'was' : 'were'} saved without recalculating.</b>
+              <span>Their inputs changed but their saved values didn't (manual calculation mode, or a script edited the file). {savedValues ? 'Showing the saved values.' : 'Showing what recalculating gives.'}</span>
+              <button className="btn ghost small" onClick={() => setSavedValues((v) => !v)}>{savedValues ? 'Show recalculated' : 'Show saved values'}</button>
+            </div>
+          )}
+          {missingNote(loaded.result) && <div className="banner info"><span>{missingNote(loaded.result)}</span></div>}
           <div className="work">
             <main className="grid-wrap">
               {renderer === 'spreadiff' ? (
@@ -424,7 +435,7 @@ export function App() {
               {busy && <div className="busy"><span className="spinner" />{busy}…</div>}
             </main>
             {trace && panel && (
-              <TracePanel wb={loaded.result} trace={trace} sheet={sheet} selected={selectedRef} view={traceView} onView={setTraceView} onPick={pick} />
+              <TracePanel wb={shown!} trace={trace} sheet={sheet} selected={selectedRef} view={traceView} onView={setTraceView} onPick={pick} />
             )}
           </div>
 
@@ -445,6 +456,17 @@ export function App() {
 }
 
 const plural = (n: number, word: string) => `${fmt(n)} ${word}${n === 1 ? '' : 's'}`;
+
+/** A note when a file had formulas without saved values (written by a tool that doesn't calculate). */
+function missingNote(d: WorkbookDiff): string | null {
+  const parts = (['old', 'new'] as const).flatMap((side) => {
+    const m = d.computedValues?.[side];
+    if (!m) return [];
+    const which = side === 'old' ? 'The old file' : 'The new file';
+    return [`${which} had no saved results for ${plural(m.computed + m.failed, 'formula')}; spreadiff computed ${m.failed ? `${fmt(m.computed)} of them (${fmt(m.failed)} use functions it can't evaluate and show empty)` : 'them'}.`];
+  });
+  return parts.length ? parts.join(' ') : null;
+}
 
 function Landing(props: {
   busy: string | null;

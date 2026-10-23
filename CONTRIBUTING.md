@@ -26,6 +26,7 @@ path, or run `npx playwright install chromium`.
 | `npm run build` | Library (tsc) and viewer (Vite) | | Before a PR |
 | `npm run size` | Bundle size per entry point | | Changes that add code to an entry |
 | `npm run bench` | Scroll smoothness and pipeline timings vs. Glide Data Grid | `vite preview` on port 4173 (below) | Performance work |
+| `npm run bench:trace` | Tracing and the formula engine against LibreOffice: generated models, real Excel files (Apache POI test corpus) and 40k–300k-formula models. Prints the tables in [docs/tracing.md](docs/tracing.md#how-it-was-tested). About 30 minutes from scratch; `-- --skip-build` reuses the cases | LibreOffice (`soffice`), Python with openpyxl, network access the first time | Changes to tracing, the engine, the XLSX reader or the diff |
 
 Starting the servers:
 

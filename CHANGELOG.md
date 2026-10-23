@@ -10,6 +10,28 @@ the repository.
 - **Formula tracing.** `traceWorkbook` classifies every changed cell as an
   `input` edit, a `formula` edit or a `computed` change, and links each
   computed change to its root causes and each edit to its impacts.
+- **Recalculated tracing.** A formula engine (about 150 functions,
+  structured and 3-D references, array formulas) undoes each edit in turn
+  and recalculates what it reaches. Causes are the edits that actually
+  moved a value, with each one's contribution
+  (`CellTrace.contributions`). Formula shapes the engine can't reproduce
+  from the old file's cached values fall back to references
+  (`CellTrace.method`, `TraceStats.unmodelled`). Options `recalculate`
+  and `evaluationBudget`.
+- **Stale values.** Cells whose saved value doesn't match the file's own
+  formulas are flagged (`CellTrace.stale`, a banner in the viewer);
+  `applyRecalculation` shows the diff as if the file had been
+  recalculated.
+- **Missing values.** Formulas saved without a value (openpyxl and other
+  tools that don't calculate) are computed on parsing
+  (`computeMissingValues`, `ParseXlsxOptions.computeMissing`,
+  `Workbook.computedValues`).
+- `npm run bench:trace`: checks tracing against LibreOffice on generated
+  models and real Excel files from the Apache POI test corpus. Results
+  are in [Tracing → How it was tested](docs/tracing.md#how-it-was-tested).
+- `DiffOptions.precision`, `Workbook.tables` / `TableDefinition`,
+  `structuredRange`, `FormulaContext`, `Table.header`, `Table.arrays`,
+  `Workbook.date1904`.
 - **Downstream changes in amber** in `DiffGrid`, with cause lists in the
   tooltip, and a focus mode that outlines a selected cell's causes and
   impacts.
@@ -30,8 +52,18 @@ the repository.
 
 ### Changed
 
-- Downstream (computed) cells are quieter: a lighter amber tint, and a
-  corner notch instead of a left bar, so they read as secondary to edits.
+- `spreadiff/core` is 36.3 KB gzip, up from 16.1, almost all of it the
+  formula engine. `spreadiff/lite` is unchanged in scope (11.8 KB).
+- `parseXlsx` defaults to `header: 'auto'`: a first row with numbers,
+  dates or formulas, or one that formulas read, is data rather than
+  column names.
+- Numbers compare to 15 significant digits by default, so Excel's
+  17-digit and LibreOffice's 15-digit writes of the same result are equal.
+- The grid no longer draws a corner triangle on changed cells; the
+  formula mark (ƒ) remains.
+- Computed cells use a clearer amber.
+- Downstream (computed) cells are quieter: a lighter amber tint and no
+  left bar, so they read as secondary to edits.
   The dark-mode amber no longer turns olive. Modified rows show a dot in
   the gutter instead of `~`, and column change counts are subtler.
 - The viewer's toolbar is regrouped: layout and cell display as segmented
@@ -56,6 +88,18 @@ the repository.
 
 ### Fixed
 
+- A tooltip too tall to fit above or below its cell was placed partly
+  outside the grid, cutting off its title. It now takes the roomier side
+  and stays inside.
+- XLSX: structured references (`Sales[Amount]`), 3-D references
+  (`Jan:Mar!B2`), shared formulas over whole columns or rows, CRLF and
+  `_x000D_` escapes in text, and LibreOffice's `=#VALUE!` and `TRUE()`
+  forms were misread, so traces through them were lost or formulas
+  showed as edited.
+- An edited row in a model sheet could split into removed + added when
+  the edit changed most of its values; equal-size gaps now pair rows in
+  place. Row identity includes formula shapes, so a row with an edited
+  formula isn't matched as unchanged.
 - The worker entry was tree-shaken out of production builds, because the
   package declared `sideEffects: false`. Workers built that way did
   nothing.

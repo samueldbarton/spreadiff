@@ -78,6 +78,7 @@ Options for `diffTables` and `diffWorkbooks`.
 | --- | --- | --- | --- |
 | `keys` | `string[] \| 'auto' \| 'none'` | `'auto'` | How rows are matched; see [Step 2: rows](diffing.md#step-2-rows) |
 | `numericTolerance` | `number` | `0` | Numbers within this absolute difference are equal |
+| `precision` | `number` | `15` | Significant digits two numbers must share (one unit in the last place allowed). 15 hides Excel-vs-LibreOffice float noise such as `0.9382716049382716` vs `0.938271604938272`; 17 compares doubles exactly |
 | `trimWhitespace` | `boolean` | `true` | Ignore leading/trailing whitespace in text |
 | `ignoreCase` | `boolean` | `false` | Compare text case-insensitively |
 | `compareFormulas` | `boolean` | `true` | Count formula-meaning changes (when both sides have formulas) |
@@ -153,6 +154,9 @@ added/removed rows and columns aren't included.
 | --- | --- | --- |
 | `sheets` | `SheetDiff[]` | New-workbook order, removed sheets where they were |
 | `names` | `{ old?, new? }?` | Defined names of each workbook, for tracing |
+| `tables` | `{ old?, new? }?` | `TableDefinition`s of each workbook, for structured references |
+| `date1904` | `{ old?, new? }?` | Each workbook's date system, for recalculation |
+| `computedValues` | `{ old?, new? }?` | Each workbook's `computedValues` |
 
 ---
 
@@ -173,6 +177,8 @@ strings: `"2026-01-31"`, `"2026-01-31 14:05:00"` or `"14:05:00"`.
 | `rows` | `CellValue[][]` | Data rows, without the header |
 | `formulas` | `(string \| null)[][]?` | Formula text per cell (`"=B2*C2"`), parallel to `rows`; rows may be missing. Set (even empty) for any source that can hold formulas |
 | `origin` | `{ row, col }?` | Sheet position of `rows[0][0]`, 0-based. Default `{ row: 1, col: 0 }` (A2) |
+| `header` | `CellValue[]?` | The header row's original cells, when the first row became column names. Formula evaluation reads them on the row above `origin.row` |
+| `arrays` | `{ r0, c0, r1, c1 }[]?` | Array-formula and spill blocks, 0-based inclusive sheet coordinates. Every cell of a block holds the block's formula |
 
 Build tables by hand when your data isn't a file:
 
@@ -194,6 +200,22 @@ const d = diffTables(toTable([{ sku: 'A1', qty: 3 }]), toTable([{ sku: 'A1', qty
 | `name` | `string` | Usually the file name |
 | `sheets` | `Table[]` | In workbook order |
 | `names` | `Record<string, string>?` | Defined names: `TaxRate` → `Inputs!$B$2` |
+| `tables` | `TableDefinition[]?` | Excel tables, to resolve structured references (`Sales[Amount]`) |
+| `date1904` | `boolean?` | Dates count from 1904-01-01 (old Mac Excel) |
+| `computedValues` | `MissingValues?` | Set when formulas without cached values were computed on parsing |
+
+### TableDefinition
+
+An Excel table (*Insert → Table*), as structured references see it.
+
+| Field | Type | |
+| --- | --- | --- |
+| `name` | `string` | Name in formulas: `Sales` |
+| `sheet` | `string` | Sheet it's on |
+| `range` | `{ r0, c0, r1, c1 }` | Whole table, header and totals rows included; 0-based inclusive sheet coordinates |
+| `columns` | `string[]` | Column names, left to right |
+| `headerRows` | `number` | 0 or 1 |
+| `totalsRows` | `number` | 0 or 1 |
 
 ---
 
@@ -258,11 +280,12 @@ parseXlsx(data: ArrayBuffer | Uint8Array, options?: ParseXlsxOptions): Workbook
 ```
 
 Read `.xlsx` / `.xlsm`. It reads:
-- cached values (formulas aren't evaluated) and formula text, with shared
-  formulas expanded per cell;
+- cached values and formula text, with shared and array formulas expanded
+  per cell. Formulas with no cached value are computed (see
+  `computeMissing`); cached values are never replaced;
 - dates (by number format, including the 1904 date system and Excel's
   1900 leap-year quirk), booleans, errors (`"#DIV/0!"`) and rich text;
-- workbook-scoped defined names.
+- workbook-scoped defined names, Excel tables and the date system.
 
 Each sheet is trimmed to its used range, and `origin` records where it
 starts. Styles, merged cells, charts and comments are ignored. Scanning is
@@ -274,9 +297,28 @@ From `spreadiff`, `spreadiff/core`, `spreadiff/xlsx`.
 
 | Field | Type | Default | |
 | --- | --- | --- | --- |
-| `header` | `boolean` | `true` | Each sheet's first non-empty row holds column names |
+| `header` | `boolean \| 'auto'` | `'auto'` | Whether each sheet's first non-empty row holds column names. `'auto'`: yes, unless it has numbers, dates or formulas, or a formula reads one of its cells; then columns are lettered, as suits a financial model |
 | `sheets` | `string[]` | all | Only parse these sheets |
 | `name` | `string` | `'workbook.xlsx'` | Workbook name |
+| `computeMissing` | `boolean` | `true` | Compute formulas the file has no value for (files from openpyxl and other tools that don't calculate) |
+
+### computeMissingValues
+
+```ts signature
+computeMissingValues(workbook: Workbook): MissingValues
+```
+
+Compute, in place, every formula cell whose value is `null`. Values the
+file has are never changed. A cell that depends on one that couldn't be
+computed fails too, rather than reading it as blank. `parseXlsx` calls
+this unless `computeMissing` is false. See [Stale and missing
+values](tracing.md#stale-and-missing-values).
+
+### MissingValues
+
+`{ computed, failed }`: formula cells without a cached value that were
+computed, and that couldn't be (unsupported function, circular
+reference) and are left empty.
 
 ### uniqueNames
 
@@ -325,6 +367,8 @@ traceTable(diff: TableDiff, options?: TraceOptions): WorkbookTrace
 | `maxCauses` | `25` | Causes kept per cell (`causeCount` stays exact) |
 | `maxImpacts` | `500` | Impacts kept per root change (`impactCount` stays exact) |
 | `budget` | `5_000_000` | Graph steps before stopping and setting `truncated` |
+| `recalculate` | `true` | Recalculate formulas for exact causes, contributions and stale values. `false`: causes from references only |
+| `evaluationBudget` | `2_000_000` | Formula evaluations for recalculation, across the trace. Past it, the rest falls back to references |
 
 ### WorkbookTrace
 
@@ -346,6 +390,9 @@ traceTable(diff: TableDiff, options?: TraceOptions): WorkbookTrace
 | `impacts` | `CellRef[]` | Root changes: computed cells they moved (capped) |
 | `impactCount` | `number` | Exact number of impacts |
 | `unexplained` | `'volatile' \| 'dynamic' \| 'unknown'?` | Computed cells without a traced cause: why |
+| `contributions` | `(number \| null)[]?` | Parallel to `causes`, when `method` is `'recalculated'`: new value − value without that cause. Parts needn't add up to the total |
+| `method` | `'recalculated' \| 'references'?` | How `causes` was found: by undoing each edit and recalculating (exact), or by following references (may over-include) |
+| `stale` | `{ cached, recalculated }?` | The new file's saved value is out of date: `cached` is what the file says, `recalculated` what its formulas give |
 
 ### CellRef
 
@@ -359,8 +406,22 @@ of change](tracing.md#four-kinds-of-change).
 
 ### TraceStats
 
-`{ inputs, formulas, computed, unexplained }`: counts of changed cells by
-kind; `unexplained` counts computed cells with no traced cause.
+`{ inputs, formulas, computed, unexplained, stale, recalculated, unmodelled }`:
+counts of changed cells by kind; `unexplained` counts computed cells with
+no traced cause, `stale` those whose saved value was out of date,
+`recalculated` those whose causes came from recalculation, and
+`unmodelled` formulas near a change the engine couldn't reproduce.
+
+### applyRecalculation
+
+```ts signature
+applyRecalculation(diff: WorkbookDiff, trace: WorkbookTrace): WorkbookDiff
+```
+
+The diff as it would be had the new file been recalculated: stale cells
+take their recalculated values and count as changed. Alignment is
+unchanged, so `trace` still applies. Returns `diff` itself when nothing
+was stale; never modifies it.
 
 ### changeKind
 
@@ -379,11 +440,12 @@ changed, `computed` if it has the same formula on both sides, else
 ### formulaRefs
 
 ```ts signature
-formulaRefs(formula: string, names?: Record<string, string>): FormulaRefs
+formulaRefs(formula: string, names?: Record<string, string>, context?: FormulaContext): FormulaRefs
 ```
 
 What a formula reads. `names` resolves defined names (pass
-`Workbook.names`).
+`Workbook.names`); `context` resolves structured references and 3-D
+references.
 
 <!-- example: formula-refs -->
 ```ts
@@ -405,6 +467,27 @@ Lines:1,3-8,3 Q&A:2,1-2,1 Inputs:3,1-3,1 false false
 | `ranges` | `SheetRange[]` | Every range read, including through names |
 | `dynamic` | `boolean` | Precedents can't be fully known (INDIRECT, OFFSET, unknown names, external links, `#REF!`) |
 | `volatile` | `boolean` | Uses NOW, TODAY, RAND, RANDBETWEEN or RANDARRAY |
+
+### FormulaContext
+
+| Field | Type | |
+| --- | --- | --- |
+| `tables` | `TableDefinition[]?` | The workbook's Excel tables, for `Sales[Amount]` |
+| `row` | `number?` | 0-based sheet row of the formula's cell, for `[@Qty]` / `[#This Row]` |
+| `sheets` | `string[]?` | Sheet names in workbook order, to expand `Jan:Mar!B2` |
+
+Without it, structured and 3-D references make the result `dynamic`.
+
+### structuredRange
+
+```ts signature
+structuredRange(table: string, spec: string, context?: FormulaContext): SheetRange | null
+```
+
+Resolve a structured reference to a sheet range: `structuredRange('Sales',
+'[[#Totals],[Amount]]', ctx)`. Handles `#All`, `#Data`, `#Headers`,
+`#Totals`, `#This Row` / `@` and column spans. `null` when the table or a
+column isn't known.
 
 ### SheetRange
 

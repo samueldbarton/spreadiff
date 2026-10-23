@@ -64,7 +64,7 @@ some other way from script, call `grid.refreshTheme()`.
 | `--sd-removed-emphasis` | removed at 20% / 26% | Background of a changed cell's old value |
 | `--sd-added-fg` | 70% added | Names of added columns |
 | `--sd-removed-fg` | 70% removed | Old values in `stacked` display, names of removed columns |
-| `--sd-computed` | `#e08a00` / `#f5b83d` | Downstream changes: corner notch, impact outlines |
+| `--sd-computed` | `#e08a00` / `#f5b83d` | Downstream changes: tint base, impact outlines, the tooltip's kind label |
 | `--sd-computed-emphasis` | computed at 13% / 15% | Background of downstream changes |
 | `--sd-formula` | `#7c3aed` / `#a78bfa` | The `ƒ` on formula edits |
 | `--sd-selection` | `--sd-modified` | Selected-cell ring |

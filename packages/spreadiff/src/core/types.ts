@@ -27,6 +27,18 @@ export interface Table {
    * a header row.
    */
   origin?: { row: number; col: number };
+  /**
+   * The header row's original cells (before names were made unique), when
+   * the first row was used as column names. It sits on the sheet row just
+   * above `origin.row`; formula evaluation reads it there.
+   */
+  header?: CellValue[];
+  /**
+   * Array-formula (and dynamic-array spill) blocks, in 0-based inclusive
+   * sheet coordinates. Every cell of a block holds the block's formula;
+   * each shows its own element of the result.
+   */
+  arrays?: { r0: number; c0: number; r1: number; c1: number }[];
 }
 
 /** An ordered list of sheets. A CSV file is a one-sheet workbook. */
@@ -37,6 +49,32 @@ export interface Workbook {
   sheets: Table[];
   /** Workbook-scoped defined names (`TaxRate` → `Inputs!$B$2`), used to resolve formula references. */
   names?: Record<string, string>;
+  /** Excel tables, used to resolve structured references such as `Sales[Amount]`. */
+  tables?: TableDefinition[];
+  /** Dates count from 1904-01-01 (old Mac Excel) rather than 1900-01-01. */
+  date1904?: boolean;
+  /**
+   * Set when the file had formulas without cached values (written by a tool
+   * that doesn't calculate) and they were computed on parsing: how many
+   * were computed, and how many couldn't be and are left empty.
+   */
+  computedValues?: { computed: number; failed: number };
+}
+
+/** An Excel table (a ListObject): what a structured reference like `Sales[Amount]` points at. */
+export interface TableDefinition {
+  /** The table's name in formulas (`Sales`). */
+  name: string;
+  /** The sheet it's on. */
+  sheet: string;
+  /** The whole table, header and totals rows included, in 0-based inclusive sheet coordinates. */
+  range: { r0: number; c0: number; r1: number; c1: number };
+  /** Column names, left to right. */
+  columns: string[];
+  /** Header rows at the top: 0 or 1. */
+  headerRows: number;
+  /** Totals rows at the bottom: 0 or 1. */
+  totalsRows: number;
 }
 
 /** How an aligned row changed. */
@@ -76,6 +114,13 @@ export interface DiffOptions {
   keys?: string[] | 'auto' | 'none';
   /** Treat numbers (or numeric strings) within this absolute difference as equal. Default 0. */
   numericTolerance?: number;
+  /**
+   * Significant digits two numbers must share to be equal. Default 15,
+   * Excel's own precision: Excel writes `0.9382716049382716` where
+   * LibreOffice writes `0.938271604938272` for the same result, and neither
+   * can display the difference. Use 17 to compare doubles exactly.
+   */
+  precision?: number;
   /** Ignore leading and trailing whitespace in text. Default true. */
   trimWhitespace?: boolean;
   /** Compare text case-insensitively. Default false. */
@@ -193,4 +238,10 @@ export interface WorkbookDiff {
   sheets: SheetDiff[];
   /** Defined names of the old and new workbooks, for formula tracing. */
   names?: { old?: Record<string, string>; new?: Record<string, string> };
+  /** Excel tables of the old and new workbooks, for structured references. */
+  tables?: { old?: TableDefinition[]; new?: TableDefinition[] };
+  /** Whether each workbook uses the 1904 date system. */
+  date1904?: { old?: boolean; new?: boolean };
+  /** `Workbook.computedValues` of each side: formula values computed because the file had none. */
+  computedValues?: { old?: Workbook['computedValues']; new?: Workbook['computedValues'] };
 }

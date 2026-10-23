@@ -74,9 +74,8 @@ themselves for the active display. When a delta still doesn't fit, it
 shortens to the % change, then to the absolute change.
 
 In every display:
-- downstream (computed) changes are **amber**, with a notch in the top-left
-  corner, and formula edits carry an `ƒ` there ([Tracing](tracing.md)). The
-  marks keep the kinds apart without relying on colour;
+- downstream (computed) changes are **amber**, and formula edits carry an
+  `ƒ` in the corner ([Tracing](tracing.md));
 - the hover popover always shows the full old → new, a character-level
   diff for text, and the Δ for numbers.
 

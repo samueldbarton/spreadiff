@@ -1194,21 +1194,13 @@ export class DiffGrid<A = unknown> {
         this.text(newText, x, cy, w, align, font, t.fg);
       }
     }
-    // A mark in the corner says what kind of change this is: ƒ for a formula
-    // edit, an amber notch for a downstream result. Colour alone isn't enough.
+    // Formula edits get an ƒ in the corner. Computed cells are told apart by
+    // their amber tint (and the tooltip), with no extra mark.
     if (kind === 'formula' && p.side !== 'old') {
       ctx.font = `italic 600 ${t.fontSize - 3}px ${t.fontFamily}`;
       ctx.fillStyle = t.formula;
       ctx.textAlign = 'left';
       ctx.fillText('ƒ', x + 3, y + 8);
-    } else if (computed && p.side !== 'old') {
-      ctx.fillStyle = t.computed;
-      ctx.beginPath();
-      ctx.moveTo(x, y);
-      ctx.lineTo(x + 6, y);
-      ctx.lineTo(x, y + 6);
-      ctx.closePath();
-      ctx.fill();
     }
   }
 
@@ -1834,11 +1826,25 @@ export class DiffGrid<A = unknown> {
           trace += count ? ` flows into ${count} cell${count === 1 ? '' : 's'}:` : ' nothing downstream changed';
         }
         trace += '</div>';
-        for (const ref of list.slice(0, 6)) {
-          const d = this.describeRef(ref);
-          trace += `<div class="sd-tt-cause"><span>${kind === 'computed' ? '←' : '→'}</span><span class="sd-tt-ref">${esc(d.label)}</span><span class="sd-tt-d" data-sign="${d.sign}">${esc(d.delta)}</span></div>`;
+        // Each cause, its own change, and (when recalculated) how much of this cell's change it accounts for.
+        const contributions = kind === 'computed' ? t.contributions : undefined;
+        for (let i = 0; i < Math.min(list.length, 6); i++) {
+          const d = this.describeRef(list[i]);
+          const c = contributions?.[i];
+          // A difference of two doubles: round away the binary noise (56082.4700000002).
+          const share = typeof c === 'number' && c !== 0 ? `<span class="sd-tt-share" data-sign="${c > 0 ? '+' : '-'}">${c > 0 ? '+' : '−'}${esc(formatCell(Number(Math.abs(c).toPrecision(12))))}</span>` : contributions ? '<span></span>' : '';
+          trace += `<div class="sd-tt-cause${contributions ? ' sd-tt-has-share' : ''}"><span>${kind === 'computed' ? '←' : '→'}</span><span class="sd-tt-ref">${esc(d.label)}</span><span class="sd-tt-d" data-sign="${d.sign}">${esc(d.delta)}</span>${share}</div>`;
         }
         if (count > 6) trace += `<div class="sd-tt-trace-title">+ ${count - 6} more</div>`;
+        if (kind === 'computed' && count) {
+          trace +=
+            t.method === 'recalculated'
+              ? `<div class="sd-tt-note">${contributions?.some((x) => typeof x === 'number') ? 'Right column: this cell\'s change from each edit, found by undoing it and recalculating.' : 'Found by undoing each edit and recalculating.'}</div>`
+              : '<div class="sd-tt-note">From formula references; some listed edits may not have mattered.</div>';
+        }
+        if (t.stale) {
+          trace += `<div class="sd-tt-stale">The file saved <b>${esc(formatCell(t.stale.cached) || 'nothing')}</b> here without recalculating; recalculating its inputs gives <b>${esc(formatCell(t.stale.recalculated))}</b>.</div>`;
+        }
       } else {
         trace += '</div>';
       }
@@ -1855,7 +1861,14 @@ export class DiffGrid<A = unknown> {
     const th = this.tooltip.offsetHeight;
     const left = Math.max(8, Math.min(vx, this.width - this.minimapWidth - tw - 8));
     const rowH = this.rows.offsets[hit.display + 1] - this.rows.offsets[hit.display];
-    const top = y + th + 8 > this.height ? y - rowH - th - 6 : y + 6;
+    // A tall tooltip (many causes) may fit neither side: take the roomier one, kept inside the grid.
+    const below = y + 6;
+    const above = y - rowH - th - 6;
+    const top =
+      below + th + 8 <= this.height ? below
+      : above >= 4 ? above
+      : this.height - y > y - rowH ? Math.max(4, Math.min(below, this.height - th - 4))
+      : 4;
     this.tooltip.style.left = `${left}px`;
     this.tooltip.style.top = `${top}px`;
     this.tooltip.setAttribute('data-open', '');

@@ -143,6 +143,8 @@ export function TracePanel({ wb, trace, sheet, selected, view, onView, onPick }:
       <p className="tp-foot">
         {plural(trace.stats.inputs, 'input edit')} · {plural(trace.stats.formulas, 'formula edit')} · {trace.stats.computed} downstream
         {trace.stats.unexplained ? ` · ${trace.stats.unexplained} unexplained` : ''}
+        {trace.stats.stale ? ` · ${trace.stats.stale} stale in file` : ''}
+        {trace.stats.computed ? ` · causes ${trace.stats.recalculated === trace.stats.computed ? 'all' : `${trace.stats.recalculated} of ${trace.stats.computed}`} recalculated` : ''}
       </p>
     </aside>
   );
@@ -167,17 +169,28 @@ function Outputs({ wb, trace, outputs, sheet, onPick }: { wb: WorkbookDiff; trac
             </div>
             <div className="tp-drivers">
               <span className="tp-muted">driven by</span>
-              {t.causes.map((c) => {
-                const cd = describe(wb, trace, c);
-                return (
-                  <button key={`${c.sheet}:${c.row}:${c.col}`} className={`driver k-${cd.kind}`} onClick={() => onPick(c)} title={`${cd.sheet}!${cd.addr} ${cd.before} → ${cd.after}`}>
-                    {cd.name}
-                    {cd.delta && <span className={`tdelta ${cd.delta.up ? 'up' : 'down'}`}>{cd.delta.text.replace(/ \(.*\)/, '')}</span>}
-                    {!cd.delta && cd.kind === 'formula' && <span className="tdelta">ƒ</span>}
-                    {!cd.delta && (cd.kind === 'added' || cd.kind === 'removed') && <span className="tdelta">{cd.kind === 'added' ? '+row' : '−row'}</span>}
-                  </button>
-                );
-              })}
+              {/* Biggest effect first, when recalculation measured each one. */}
+              {t.causes
+                .map((c, i) => ({ c, share: t.contributions?.[i] ?? null }))
+                .sort((x, y) => Math.abs(y.share ?? 0) - Math.abs(x.share ?? 0))
+                .map(({ c, share }) => {
+                  const cd = describe(wb, trace, c);
+                  const shareText = typeof share === 'number' && share !== 0 ? `${share > 0 ? '+' : '−'}${formatCell(Number(Math.abs(share).toPrecision(12)))}` : null;
+                  return (
+                    <button
+                      key={`${c.sheet}:${c.row}:${c.col}`}
+                      className={`driver k-${cd.kind}`}
+                      onClick={() => onPick(c)}
+                      title={`${cd.sheet}!${cd.addr} ${cd.before} → ${cd.after}${shareText ? ` · accounts for ${shareText} of this result's change` : ''}`}
+                    >
+                      {cd.name}
+                      {cd.delta && <span className={`tdelta ${cd.delta.up ? 'up' : 'down'}`}>{cd.delta.text.replace(/ \(.*\)/, '')}</span>}
+                      {!cd.delta && cd.kind === 'formula' && <span className="tdelta">ƒ</span>}
+                      {!cd.delta && (cd.kind === 'added' || cd.kind === 'removed') && <span className="tdelta">{cd.kind === 'added' ? '+row' : '−row'}</span>}
+                      {shareText && <span className="tshare">→ {shareText}</span>}
+                    </button>
+                  );
+                })}
               {t.causeCount > t.causes.length && <span className="tp-muted">+{t.causeCount - t.causes.length}</span>}
               {t.unexplained && <span className="tp-muted">{t.unexplained === 'volatile' ? 'volatile function' : t.unexplained === 'dynamic' ? 'dynamic reference' : 'unknown cause'}</span>}
             </div>

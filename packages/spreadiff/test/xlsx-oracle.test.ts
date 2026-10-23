@@ -73,7 +73,8 @@ describe('xlsx: parse files written by ExcelJS (independent writer)', () => {
         expectedF[name] = forms;
       }
       const buf = await wb.xlsx.writeBuffer();
-      const parsed = parseXlsx(new Uint8Array(buf as ArrayBuffer));
+      // The formulas read A1, so 'auto' would (rightly) treat row 1 as data; this test is about values.
+      const parsed = parseXlsx(new Uint8Array(buf as ArrayBuffer), { header: true });
       for (const sheet of parsed.sheets) {
         const exp = expected[sheet.name];
         expect(exp, `unexpected sheet ${sheet.name}`).toBeDefined();

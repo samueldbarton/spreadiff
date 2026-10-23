@@ -127,6 +127,11 @@ export const STYLE = /* css */ `
 .sd-tooltip .sd-tt-cause .sd-tt-ref { color: var(--sdi-fg-muted); }
 .sd-tooltip .sd-tt-cause .sd-tt-d[data-sign="+"] { color: var(--sdi-added); }
 .sd-tooltip .sd-tt-cause .sd-tt-d[data-sign="-"] { color: var(--sdi-removed); }
+.sd-tooltip .sd-tt-cause.sd-tt-has-share { grid-template-columns: auto 1fr auto 4.5em; }
+.sd-tooltip .sd-tt-share { text-align: right; font-weight: 600; color: var(--sdi-fg); }
+.sd-tooltip .sd-tt-note { margin-top: 4px; color: var(--sdi-fg-faint); font-size: 10.5px; line-height: 1.35; }
+.sd-tooltip .sd-tt-stale { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--sdi-border); color: var(--sdi-fg-muted); font-size: 11px; }
+.sd-tooltip .sd-tt-stale b { color: var(--sdi-fg); font-family: var(--sdi-mono-font-family); font-weight: 600; }
 .sd-tooltip .sd-tt-formula { color: var(--sdi-fg-muted); font-family: var(--sdi-mono-font-family); font-size: 11px; }
 .sd-probe { position: absolute; width: 0; height: 0; visibility: hidden; pointer-events: none; }
 `;

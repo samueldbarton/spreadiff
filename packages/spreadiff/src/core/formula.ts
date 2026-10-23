@@ -5,8 +5,10 @@
  * Handles A1 refs, ranges, whole columns/rows (`A:C`, `1:3`), absolute
  * markers, sheet qualifiers (`Data!A1`, `'Q&A 2026'!B2:B9`), defined
  * names (via a lookup), and flags what can't be resolved statically:
- * INDIRECT/OFFSET, external workbooks, `#REF!`, structured table refs.
+ * INDIRECT/OFFSET, external workbooks and `#REF!`. Structured references
+ * (`Sales[Amount]`) resolve when the workbook's tables are passed in.
  */
+import type { TableDefinition } from './types.js';
 
 /** A rectangle in 0-based sheet coordinates. `-1` bounds mean "whole column/row". */
 export interface SheetRange {
@@ -20,6 +22,8 @@ export interface SheetRange {
   r1: number;
   /** Last column, inclusive, or -1 for a whole-row range. */
   c1: number;
+  /** For a 3-D reference (`Jan:Mar!B2`), the last sheet; `sheet` is the first. */
+  sheetTo?: string;
 }
 
 /** A piece of a formula from {@link tokenizeFormula}: a reference, or anything else as text. */
@@ -37,8 +41,10 @@ export interface FormulaRefs {
   volatile: boolean;
 }
 
-const DYNAMIC_FUNCS = new Set(['INDIRECT', 'OFFSET']);
-const VOLATILE_FUNCS = new Set(['NOW', 'TODAY', 'RAND', 'RANDBETWEEN', 'RANDARRAY']);
+// TABLE: a what-if data table (its results come from re-running another formula).
+const DYNAMIC_FUNCS = new Set(['INDIRECT', 'OFFSET', 'TABLE']);
+// CELL and INFO read the environment (column widths, OS, recalc mode), so they behave like volatiles.
+const VOLATILE_FUNCS = new Set(['NOW', 'TODAY', 'RAND', 'RANDBETWEEN', 'RANDARRAY', 'CELL', 'INFO']);
 const MAX_ROW = 1048575;
 const MAX_COL = 16383;
 
@@ -54,6 +60,7 @@ const IDENT_CHAR = /[A-Za-z0-9_.\\À-￿]/;
 const STRING = /"(?:[^"]|"")*"/y;
 const QUOTED_SHEET = /'((?:[^']|'')+)'!/y;
 const BARE_SHEET = /([A-Za-z_À-￿][A-Za-z0-9_.À-￿]*)!/y;
+const BARE_3D = /([A-Za-z_À-￿][A-Za-z0-9_.À-￿]*):([A-Za-z_À-￿][A-Za-z0-9_.À-￿]*)!/y;
 const EXTERNAL = /\[[^\]]*\]/y;
 const ERROR = /#(?:REF!|NAME\?|VALUE!|DIV\/0!|N\/A|NUM!|NULL!|SPILL!|CALC!|GETTING_DATA)/y;
 const CELL_RANGE = /\$?([A-Z]{1,3})\$?(\d+)(?::\$?([A-Z]{1,3})\$?(\d+))?/y;
@@ -68,10 +75,18 @@ function at(re: RegExp, s: string, i: number): RegExpExecArray | null {
 }
 
 /** Split a formula into reference and non-reference tokens. */
-export function tokenizeFormula(formula: string): { tokens: FormulaToken[]; dynamic: boolean; volatile: boolean; names: string[] } {
+export function tokenizeFormula(formula: string): {
+  tokens: FormulaToken[];
+  dynamic: boolean;
+  volatile: boolean;
+  names: string[];
+  /** Structured references (`Sales[[#This Row],[Amount]]`): table name and the bracketed specifier. */
+  structured: { table: string; spec: string }[];
+} {
   const f = formula.startsWith('=') ? formula.slice(1) : formula;
   const tokens: FormulaToken[] = [];
   const names: string[] = [];
+  const structured: { table: string; spec: string }[] = [];
   let dynamic = false;
   let volatile = false;
   let text = '';
@@ -131,11 +146,15 @@ export function tokenizeFormula(formula: string): { tokens: FormulaToken[]; dyna
       continue;
     }
     if (boundaryBefore(i)) {
-      // Sheet-qualified reference.
-      const q = at(QUOTED_SHEET, f, i) ?? at(BARE_SHEET, f, i);
+      // Sheet-qualified reference, possibly 3-D (Jan:Mar!B2; sheet names can't contain ':').
+      const q3 = at(BARE_3D, f, i);
+      const q = q3 ?? at(QUOTED_SHEET, f, i) ?? at(BARE_SHEET, f, i);
       if (q) {
-        const sheet = q[1].replace(/''/g, "'");
+        const spec = q3 ? `${q3[1]}:${q3[2]}` : q[1].replace(/''/g, "'");
+        const colon = spec.indexOf(':');
+        const sheet = colon >= 0 ? spec.slice(0, colon) : spec;
         const ref = tryRef(i + q[0].length, sheet);
+        if (ref && colon >= 0) ref.range.sheetTo = spec.slice(colon + 1);
         if (ref) {
           flush();
           tokens.push({ type: 'ref', text: f.slice(i, ref.end), range: ref.range });
@@ -159,14 +178,37 @@ export function tokenizeFormula(formula: string): { tokens: FormulaToken[]; dyna
         const word = m[0];
         const end = i + word.length;
         const upper = word.toUpperCase();
+        if ((upper === 'TRUE' || upper === 'FALSE') && f[end] === '(' && f[end + 1] === ')') {
+          // TRUE() and FALSE() are the constants (LibreOffice writes them that way).
+          text += upper;
+          i = end + 2;
+          continue;
+        }
         if (f[end] === '(') {
           const name = upper.replace(/^_XLFN\./, '');
           if (DYNAMIC_FUNCS.has(name)) dynamic = true;
           if (VOLATILE_FUNCS.has(name)) volatile = true;
           text += upper;
         } else if (f[end] === '[') {
-          dynamic = true; // structured table reference
-          text += word;
+          // Structured reference: Sales[Amount], Sales[[#This Row],[Amount]].
+          // Brackets nest; an apostrophe escapes the next character.
+          let j = end;
+          let depth = 0;
+          for (; j < f.length; j++) {
+            const ch = f[j];
+            if (ch === "'") j++;
+            else if (ch === '[') depth++;
+            else if (ch === ']' && --depth === 0) break;
+          }
+          if (depth !== 0) {
+            dynamic = true;
+            text += word;
+          } else {
+            structured.push({ table: word, spec: f.slice(end, j + 1) });
+            text += f.slice(i, j + 1);
+            i = j + 1;
+            continue;
+          }
         } else if (upper === 'TRUE' || upper === 'FALSE') {
           text += upper;
         } else {
@@ -188,36 +230,142 @@ export function tokenizeFormula(formula: string): { tokens: FormulaToken[]; dyna
     i++;
   }
   flush();
-  return { tokens, dynamic, volatile, names };
+  return { tokens, dynamic, volatile, names, structured };
+}
+
+/** Where a formula sits, so structured references like `[#This Row]` can resolve. */
+export interface FormulaContext {
+  /** The workbook's Excel tables. */
+  tables?: TableDefinition[];
+  /** 0-based sheet row of the formula's cell. */
+  row?: number;
+  /** Sheet names in workbook order, to expand 3-D references (`Jan:Mar!B2`). */
+  sheets?: string[];
 }
 
 /**
  * All ranges a formula reads. `names` resolves defined names (e.g. from
- * `Workbook.names`) to their formula text; unresolved names make the
- * result `dynamic`.
+ * `Workbook.names`) to their formula text; `context.tables` resolves
+ * structured references. Anything unresolved makes the result `dynamic`.
  */
-export function formulaRefs(formula: string, names?: Record<string, string>): FormulaRefs {
-  return refsOf(formula, names, 0);
+export function formulaRefs(formula: string, names?: Record<string, string>, context?: FormulaContext): FormulaRefs {
+  return refsOf(formula, names, context, 0);
 }
 
-function refsOf(formula: string, names: Record<string, string> | undefined, depth: number): FormulaRefs {
+function refsOf(formula: string, names: Record<string, string> | undefined, context: FormulaContext | undefined, depth: number): FormulaRefs {
   const t = tokenizeFormula(formula);
   const ranges: SheetRange[] = [];
   let dynamic = t.dynamic;
   let volatile = t.volatile;
-  for (const tok of t.tokens) if (tok.type === 'ref') ranges.push(tok.range);
+  for (const tok of t.tokens) {
+    if (tok.type !== 'ref') continue;
+    const rg = tok.range;
+    if (rg.sheetTo === undefined) {
+      ranges.push(rg);
+      continue;
+    }
+    // 3-D: the same range on every sheet from `sheet` to `sheetTo`.
+    const order = context?.sheets?.map((x) => x.toUpperCase()) ?? [];
+    const a = order.indexOf(rg.sheet!.toUpperCase());
+    const b = order.indexOf(rg.sheetTo.toUpperCase());
+    if (a < 0 || b < 0) {
+      dynamic = true;
+      continue;
+    }
+    for (let k = Math.min(a, b); k <= Math.max(a, b); k++) ranges.push({ sheet: context!.sheets![k], r0: rg.r0, c0: rg.c0, r1: rg.r1, c1: rg.c1 });
+  }
   for (const n of t.names) {
     const target = lookupName(names, n);
     if (target === undefined || depth > 8) {
       dynamic = true;
       continue;
     }
-    const sub = refsOf(target, names, depth + 1);
+    const sub = refsOf(target, names, context, depth + 1);
     ranges.push(...sub.ranges);
     dynamic ||= sub.dynamic;
     volatile ||= sub.volatile;
   }
+  for (const s of t.structured) {
+    const r = structuredRange(s.table, s.spec, context);
+    if (r) ranges.push(r);
+    else dynamic = true;
+  }
   return { ranges, dynamic, volatile };
+}
+
+/**
+ * Resolve a structured reference (`Sales[Amount]`, `Sales[[#Totals],[Amount]]`,
+ * `Sales[[#This Row],[Qty]:[Price]]`, `Sales[#All]`) to a sheet range, or
+ * null when the table or column isn't known.
+ */
+export function structuredRange(table: string, spec: string, context?: FormulaContext): SheetRange | null {
+  const def = context?.tables?.find((t) => t.name.toUpperCase() === table.toUpperCase());
+  if (!def) return null;
+  const inner = spec.slice(1, -1).trim();
+  // Items are either one bare specifier (Sales[Amount]) or a list of [..] items.
+  const items: string[] = [];
+  if (inner.startsWith('[')) {
+    let depth = 0;
+    let cur = '';
+    for (let i = 0; i < inner.length; i++) {
+      const ch = inner[i];
+      if (ch === "'") {
+        cur += inner[++i] ?? '';
+        continue;
+      }
+      if (ch === '[') {
+        if (depth++ === 0) continue;
+      } else if (ch === ']') {
+        if (--depth === 0) {
+          items.push(cur); // spaces inside brackets are part of the name ("Field 4 ")
+          cur = '';
+          continue;
+        }
+      } else if (depth === 0) {
+        if (ch === ':') items.push(':');
+        continue; // commas and spaces between items
+      }
+      cur += ch;
+    }
+  } else if (inner.startsWith('@')) {
+    items.push('@');
+    if (inner.length > 1) items.push(inner.slice(1).replace(/'(.)/g, '$1'));
+  } else if (inner) {
+    items.push(inner.replace(/'(.)/g, '$1'));
+  }
+  const { range, headerRows, totalsRows } = def;
+  const dataTop = range.r0 + headerRows;
+  const dataBottom = range.r1 - totalsRows;
+  let r0 = dataTop;
+  let r1 = dataBottom;
+  const special = items.filter((x) => x.startsWith('#') || x === '@').map((x) => x.toUpperCase());
+  if (special.length) {
+    const has = (k: string) => special.includes(k);
+    if (has('#ALL')) {
+      r0 = range.r0;
+      r1 = range.r1;
+    } else if (has('#THIS ROW') || has('@')) {
+      if (context?.row === undefined) return null;
+      r0 = r1 = context.row;
+    } else {
+      r0 = has('#HEADERS') ? range.r0 : has('#DATA') ? dataTop : dataBottom + 1;
+      r1 = has('#TOTALS') ? range.r1 : has('#DATA') ? dataBottom : range.r0 + headerRows - 1;
+    }
+  }
+  const cols = items.filter((x) => !x.startsWith('#') && x !== '@');
+  let c0 = range.c0;
+  let c1 = range.c1;
+  if (cols.length) {
+    const idx = (name: string) => def.columns.findIndex((c) => c.toUpperCase() === name.replace(/^@/, '').toUpperCase());
+    const names = cols.filter((x) => x !== ':');
+    const a = idx(names[0]);
+    const b = idx(names[names.length - 1]);
+    if (a < 0 || b < 0) return null;
+    c0 = range.c0 + Math.min(a, b);
+    c1 = range.c0 + Math.max(a, b);
+  }
+  if (r0 > r1) return null;
+  return { sheet: def.sheet, r0, r1, c0, c1 };
 }
 
 export function lookupName(names: Record<string, string> | undefined, name: string): string | undefined {
@@ -237,6 +385,14 @@ export function lookupName(names: Record<string, string> | undefined, name: stri
 export function canonicalFormula(formula: string, map: (range: SheetRange) => string): string {
   const t = tokenizeFormula(formula);
   let out = '';
-  for (const tok of t.tokens) out += tok.type === 'ref' ? `\u0001${map(tok.range)}\u0001` : tok.text;
+  for (const tok of t.tokens) {
+    if (tok.type !== 'ref') out += tok.text;
+    else if (tok.range.sheetTo === undefined) out += `\u0001${map(tok.range)}\u0001`;
+    else {
+      // 3-D references don't map through one table: compare what they cover (A1 ≡ A1:A1).
+      const r = tok.range;
+      out += `\u00013d:${r.sheet!.toUpperCase()}:${r.sheetTo!.toUpperCase()}:${r.r0},${r.c0},${r.r1},${r.c1}\u0001`;
+    }
+  }
   return out;
 }

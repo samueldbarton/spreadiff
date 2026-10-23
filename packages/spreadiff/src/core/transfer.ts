@@ -26,6 +26,10 @@ export interface PackedTable {
   formulas?: (string | null)[][];
   /** `Table.origin`, unchanged. */
   origin?: { row: number; col: number };
+  /** `Table.header`, unchanged. */
+  header?: Table['header'];
+  /** `Table.arrays`, unchanged. */
+  arrays?: Table['arrays'];
 }
 
 const SEP = '\u0000';
@@ -55,7 +59,7 @@ export function packTable(t: Table): PackedTable {
       } else types[i] = v ? 3 : 4;
     }
   }
-  return { name: t.name, columns: t.columns, width, height, types, numbers, strings: parts.join(SEP), formulas: t.formulas, origin: t.origin };
+  return { name: t.name, columns: t.columns, width, height, types, numbers, strings: parts.join(SEP), formulas: t.formulas, origin: t.origin, header: t.header, arrays: t.arrays };
 }
 
 /** Decode a table encoded by {@link packTable}. */
@@ -76,6 +80,8 @@ export function unpackTable(p: PackedTable): Table {
   const t: Table = { name: p.name, columns: p.columns, rows };
   if (p.formulas) t.formulas = p.formulas;
   if (p.origin) t.origin = p.origin;
+  if (p.header) t.header = p.header;
+  if (p.arrays) t.arrays = p.arrays;
   return t;
 }
 
@@ -87,6 +93,12 @@ export interface PackedWorkbookDiff {
   sheets: { name: string; status: WorkbookDiff['sheets'][number]['status']; diff: PackedTableDiff }[];
   /** Defined names, as in `WorkbookDiff.names`. */
   names?: WorkbookDiff['names'];
+  /** Excel tables, as in `WorkbookDiff.tables`. */
+  tables?: WorkbookDiff['tables'];
+  /** Date systems, as in `WorkbookDiff.date1904`. */
+  date1904?: WorkbookDiff['date1904'];
+  /** As in `WorkbookDiff.computedValues`. */
+  computedValues?: WorkbookDiff['computedValues'];
 }
 
 /** Pack a workbook diff; returns the message and the buffers to transfer. */
@@ -101,6 +113,9 @@ export function packWorkbookDiff(d: WorkbookDiff): { packed: PackedWorkbookDiff;
       return { name: s.name, status: s.status, diff: { ...s.diff, oldTable, newTable } };
     }),
     names: d.names,
+    tables: d.tables,
+    date1904: d.date1904,
+    computedValues: d.computedValues,
   };
   return { packed, transfer };
 }
@@ -114,5 +129,8 @@ export function unpackWorkbookDiff(p: PackedWorkbookDiff): WorkbookDiff {
       diff: { ...s.diff, oldTable: unpackTable(s.diff.oldTable), newTable: unpackTable(s.diff.newTable) },
     })),
     names: p.names,
+    tables: p.tables,
+    date1904: p.date1904,
+    computedValues: p.computedValues,
   };
 }

@@ -8,22 +8,38 @@
  */
 import { unzipSync, strFromU8 } from 'fflate';
 import { columnLabel, uniqueNames } from './csv.js';
-import type { CellValue, Table, Workbook } from './types.js';
+import { formulaRefs } from './formula.js';
+import { computeMissingValues } from './recalc.js';
+import type { CellValue, Table, TableDefinition, Workbook } from './types.js';
 
 /** Options for {@link parseXlsx}. */
 export interface ParseXlsxOptions {
-  /** Treat each sheet's first non-empty row as column names. Default true. */
-  header?: boolean;
+  /**
+   * Whether each sheet's first non-empty row holds column names.
+   * - `'auto'` (default): yes, unless the row has numbers, dates or
+   *   formulas in it, or a formula anywhere in the workbook reads one of
+   *   its cells. Then it's data, as in most financial models, and
+   *   columns are named by letter.
+   * - `true` / `false`: always / never.
+   */
+  header?: boolean | 'auto';
   /** Only parse these sheets (by name). */
   sheets?: string[];
   /** Name for the resulting workbook (default `workbook.xlsx`). */
   name?: string;
+  /**
+   * Compute formulas the file has no value for (written by a tool that
+   * doesn't calculate, like openpyxl). Default true. See
+   * `Workbook.computedValues`.
+   */
+  computeMissing?: boolean;
 }
 
 /**
  * Read an `.xlsx` / `.xlsm` file into a {@link Workbook}.
  *
- * Reads cached values (formulas aren't evaluated), formula text (shared
+ * Reads cached values (formulas without one are computed; see
+ * `computeMissing`), formula text (shared
  * formulas are expanded per cell), dates (from the cell's number format),
  * booleans, errors (as `#DIV/0!` strings), rich text and workbook-scoped
  * defined names. Each sheet is trimmed to its used range; `origin` records
@@ -39,7 +55,8 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
       f.name === 'xl/sharedStrings.xml' ||
       f.name === 'xl/styles.xml' ||
       f.name === 'xl/_rels/workbook.xml.rels' ||
-      f.name.startsWith('xl/worksheets/'),
+      f.name.startsWith('xl/worksheets/') ||
+      f.name.startsWith('xl/tables/'),
   });
   const text = (path: string) => (files[path] ? stripPrefixes(strFromU8(files[path])) : '');
 
@@ -59,15 +76,25 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
   const strings = parseSharedStrings(text('xl/sharedStrings.xml'));
   const dateStyles = parseDateStyles(text('xl/styles.xml'));
 
-  const sheets: Table[] = [];
+  const raws: RawSheet[] = [];
+  const tables: TableDefinition[] = [];
   eachElement(workbookXml, 'sheet', (a) => {
-    const name = decode(attr(a, 'name') ?? `Sheet${sheets.length + 1}`);
+    const name = decode(attr(a, 'name') ?? `Sheet${raws.length + 1}`);
     if (options.sheets && !options.sheets.includes(name)) return;
     // The relationships prefix is conventionally `r:` but may be anything.
     const rid = attr(a, 'r:id') ?? /\s[\w.-]+:id\s*=\s*["']([^"']*)/.exec(a)?.[1];
     const path = rid ? rels.get(rid) : undefined;
     if (!path || !files[path]) return;
-    sheets.push(parseSheet(name, text(path), strings, dateStyles, date1904, options.header ?? true));
+    raws.push(parseCells(name, text(path), strings, dateStyles, date1904));
+    // Excel tables on this sheet, for structured references (Sales[Amount]).
+    const relsPath = path.replace(/([^/]+)$/, '_rels/$1.rels');
+    eachElement(text(relsPath), 'Relationship', (ra) => {
+      const target = attr(ra, 'Target');
+      if (!target || !/\/table$/.test(attr(ra, 'Type') ?? '')) return;
+      const tablePath = resolvePath(path, target);
+      const t = parseTableDefinition(text(tablePath), name);
+      if (t) tables.push(t);
+    });
   });
   // Defined names (TaxRate → Inputs!$B$2) let formula tracing see through them.
   const names: Record<string, string> = {};
@@ -77,7 +104,109 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
     if (!name || !body || name.startsWith('_xlnm.') || attr(a, 'localSheetId') !== undefined) return;
     names[decode(name)] = decode(body);
   });
-  return { name: options.name ?? 'workbook.xlsx', sheets, ...(Object.keys(names).length ? { names } : {}) };
+
+  const header = options.header ?? 'auto';
+  const headers = header === 'auto' ? detectHeaders(raws, names, tables) : raws.map(() => header);
+  const sheets = raws.map((r, i) => buildTable(r, headers[i]));
+  const workbook: Workbook = {
+    name: options.name ?? 'workbook.xlsx',
+    sheets,
+    ...(date1904 ? { date1904 } : {}),
+    ...(Object.keys(names).length ? { names } : {}),
+    ...(tables.length ? { tables } : {}),
+  };
+  if (options.computeMissing !== false) {
+    const m = computeMissingValues(workbook);
+    if (m.computed || m.failed) workbook.computedValues = m;
+  }
+  return workbook;
+}
+
+/** `xl/worksheets/sheet1.xml` + `../tables/table1.xml` → `xl/tables/table1.xml`. */
+function resolvePath(from: string, target: string): string {
+  if (target.startsWith('/')) return target.slice(1);
+  const parts = from.split('/').slice(0, -1);
+  for (const seg of target.split('/')) {
+    if (seg === '..') parts.pop();
+    else if (seg !== '.') parts.push(seg);
+  }
+  return parts.join('/');
+}
+
+function parseTableDefinition(xml: string, sheet: string): TableDefinition | null {
+  let def: TableDefinition | null = null;
+  eachElement(xml, 'table', (a) => {
+    const name = attr(a, 'displayName') ?? attr(a, 'name');
+    const ref = attr(a, 'ref');
+    if (!name || !ref || def) return;
+    const [from, to = from] = ref.split(':');
+    const [r0, c0] = decodeRef(from);
+    const [r1, c1] = decodeRef(to);
+    const headerRows = Number(attr(a, 'headerRowCount') ?? 1);
+    const totalsRows = Number(attr(a, 'totalsRowCount') ?? 0);
+    def = { name: decode(name), sheet, range: { r0, c0, r1, c1 }, columns: [], headerRows, totalsRows };
+  });
+  if (!def) return null;
+  const d: TableDefinition = def;
+  eachElement(xml, 'tableColumn', (a) => {
+    d.columns.push(decode(attr(a, 'name') ?? ''));
+  });
+  return d;
+}
+
+/**
+ * Decide, per sheet, whether its first row is a header: all text, no
+ * formulas, and not read by any formula in the workbook. A model's first
+ * row often holds inputs; treating them as column names would hide edits
+ * to them and every change they cause.
+ */
+function detectHeaders(raws: RawSheet[], names: Record<string, string>, tables: TableDefinition[]): boolean[] {
+  const candidate = new Map<string, number>(); // sheet name (upper) → index
+  const result = raws.map((r, i) => {
+    const ok = headerLike(r);
+    if (ok) candidate.set(r.name.toUpperCase(), i);
+    return ok;
+  });
+  if (!candidate.size) return result;
+  const sheets = raws.map((r) => r.name);
+  for (const r of raws) {
+    for (let row = 0; row < r.formulaGrid.length && candidate.size; row++) {
+      const fr = r.formulaGrid[row];
+      if (!fr) continue;
+      for (const f of fr) {
+        if (!f) continue;
+        for (const rg of formulaRefs(f, names, { tables, row, sheets }).ranges) {
+          const key = (rg.sheet ?? r.name).toUpperCase();
+          const i = candidate.get(key);
+          if (i === undefined || rg.r0 < 0) continue; // whole columns (A:A) don't single out the header
+          const first = raws[i].first;
+          if (rg.r0 <= first && first <= rg.r1) {
+            result[i] = false;
+            candidate.delete(key);
+          }
+        }
+        if (!candidate.size) break;
+      }
+    }
+  }
+  return result;
+}
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}/;
+
+function headerLike(r: RawSheet): boolean {
+  if (r.maxCol < 0) return false;
+  const row = r.grid[r.first];
+  if (r.formulaGrid[r.first]?.some(Boolean)) return false;
+  let n = 0;
+  for (let c = r.minCol; c <= r.maxCol; c++) {
+    const v = row?.[c];
+    if (v === null || v === undefined || v === '') continue;
+    // Numbers, booleans and dates (years, months) make it a data row.
+    if (typeof v !== 'string' || ISO_DATE.test(v)) return false;
+    n++;
+  }
+  return n > 0;
 }
 
 /** Drop namespace prefixes (`<x:c>` → `<c>`), as written by e.g. the OpenXML SDK. */
@@ -166,6 +295,11 @@ function attr(attrs: string, name: string): string | undefined {
 
 const ENTITY = /&(amp|lt|gt|quot|apos|#x[0-9a-fA-F]+|#\d+);/g;
 function decode(s: string): string {
+  // XML parsers must read a literal CR LF (or lone CR) as LF; an escaped
+  // &#13; survives. Excel writes CR LF, LibreOffice LF, for the same text.
+  if (s.indexOf('\r') >= 0) s = s.replace(/\r\n?/g, '\n');
+  // Excel escapes control characters in text as _xHHHH_ (OOXML ST_Xstring).
+  if (s.indexOf('_x') >= 0) s = s.replace(/_x([0-9A-Fa-f]{4})_/g, (_, h: string) => String.fromCharCode(parseInt(h, 16)));
   if (s.indexOf('&') < 0) return s;
   return s.replace(ENTITY, (all, e: string) => {
     switch (e) {
@@ -240,33 +374,62 @@ function decodeRef(ref: string): [row: number, col: number] {
 
 /** Shift relative A1 references in a shared formula by a row/column offset. */
 function shiftFormula(formula: string, dRow: number, dCol: number): string {
+  const colName = (abs: string, letters: string) => {
+    if (abs) return abs + letters;
+    let c = 0;
+    for (const ch of letters) c = c * 26 + (ch.charCodeAt(0) - 64);
+    const nc = c - 1 + dCol;
+    return nc < 0 ? null : columnLabel(nc);
+  };
+  const rowNum = (abs: string, digits: string) => {
+    if (abs) return abs + digits;
+    const nr = Number(digits) + dRow;
+    return nr < 1 ? null : String(nr);
+  };
   return formula.replace(
     // String literals and quoted sheet names pass through untouched. A ref
     // may follow `!` (Sheet!A1) but not be followed by `!` (it's a sheet name).
-    /("[^"]*")|('[^']*')|(?<![A-Za-z0-9_.])(\$?)([A-Z]{1,3})(\$?)(\d+)(?![\d(A-Za-z_!])/g,
-    (all, str, sheet, cAbs, col, rAbs, row) => {
+    // Whole columns (B:B) and whole rows (2:5) shift too.
+    /("[^"]*")|('[^']*')|(?<![A-Za-z0-9_.$])(\$?)([A-Z]{1,3}):(\$?)([A-Z]{1,3})(?![\d(A-Za-z_!])|(?<![A-Za-z0-9_.$:])(\$?)(\d+):(\$?)(\d+)(?![\d(A-Za-z_!.:])|(?<![A-Za-z0-9_.])(\$?)([A-Z]{1,3})(\$?)(\d+)(?![\d(A-Za-z_!])/g,
+    (all, str, sheet, ca1, c1, ca2, c2, ra1, r1, ra2, r2, cAbs, col, rAbs, row) => {
       if (str || sheet) return all;
-      let c = 0;
-      for (const ch of col as string) c = c * 26 + (ch.charCodeAt(0) - 64);
-      const nc = cAbs ? c - 1 : c - 1 + dCol;
-      const nr = rAbs ? Number(row) : Number(row) + dRow;
-      if (nc < 0 || nr < 1) return all;
-      return `${cAbs}${columnLabel(nc)}${rAbs}${nr}`;
+      if (c1 !== undefined) {
+        const a = colName(ca1, c1);
+        const b = colName(ca2, c2);
+        return a && b ? `${a}:${b}` : all;
+      }
+      if (r1 !== undefined) {
+        const a = rowNum(ra1, r1);
+        const b = rowNum(ra2, r2);
+        return a && b ? `${a}:${b}` : all;
+      }
+      const c = colName(cAbs, col);
+      const r = rowNum(rAbs, row);
+      if (c === null || r === null) return all;
+      return `${c}${r}`;
     },
   );
 }
 
-function parseSheet(
-  name: string,
-  xml: string,
-  strings: string[],
-  dateStyles: Set<number>,
-  date1904: boolean,
-  header: boolean,
-): Table {
+interface RawSheet {
+  name: string;
+  grid: CellValue[][];
+  formulaGrid: (string | null)[][];
+  minCol: number;
+  maxCol: number;
+  /** First non-empty row. */
+  first: number;
+  /** Array-formula blocks (sheet coordinates). */
+  arrays: { r0: number; c0: number; r1: number; c1: number }[];
+}
+
+function parseCells(name: string, xml: string, strings: string[], dateStyles: Set<number>, date1904: boolean): RawSheet {
   const grid: CellValue[][] = [];
   const formulaGrid: (string | null)[][] = [];
   const shared = new Map<string, { formula: string; row: number; col: number }>();
+  // Array formulas (and dynamic-array spills) store their formula once, on
+  // the anchor cell, with the range it fills; data tables likewise.
+  const blocks: { ref: string; formula: string; array: boolean }[] = [];
   let minCol = Infinity;
   let maxCol = -1;
   let implicitRow = 0;
@@ -313,8 +476,9 @@ function parseSheet(
       let formula: string | null = null;
       eachElement(body, 'f', (fAttrs, fBody) => {
         const text = fBody ? decode(fBody) : '';
+        const ft = attr(fAttrs, 't');
         const si = attr(fAttrs, 'si');
-        if (attr(fAttrs, 't') === 'shared' && si !== undefined) {
+        if (ft === 'shared' && si !== undefined) {
           if (text) {
             shared.set(si, { formula: text, row: r, col: c });
             formula = text;
@@ -322,10 +486,22 @@ function parseSheet(
             const master = shared.get(si);
             if (master) formula = shiftFormula(master.formula, r - master.row, c - master.col);
           }
+        } else if (ft === 'dataTable') {
+          // A what-if data table: results of re-running a formula with
+          // r1 (and r2) substituted. Its inputs are those cells.
+          const r1 = attr(fAttrs, 'r1');
+          const r2 = attr(fAttrs, 'r2');
+          formula = `TABLE(${[r1, r2].filter(Boolean).join(',')})`;
+          const blockRef = attr(fAttrs, 'ref');
+          if (blockRef) blocks.push({ ref: blockRef, formula, array: false });
         } else if (text) {
           formula = text;
+          const blockRef = attr(fAttrs, 'ref');
+          if (ft === 'array' && blockRef) blocks.push({ ref: blockRef, formula: text, array: true });
         }
       });
+      // LibreOffice writes a typed error constant as the formula `=#VALUE!`.
+      if (formula !== null && /^#(?:VALUE!|N\/A|REF!|DIV\/0!|NUM!|NAME\?|NULL!)$/.test(formula) && value === formula) formula = null;
       if (value === null && formula === null) return;
       (grid[r] ??= [])[c] = value;
       if (formula !== null) (formulaGrid[r] ??= [])[c] = '=' + formula;
@@ -333,10 +509,32 @@ function parseSheet(
       if (c > maxCol) maxCol = c;
     });
   });
-  if (maxCol < 0) return { name, columns: [], rows: [], formulas: [], origin: { row: 0, col: 0 } };
-
+  const arrays: RawSheet['arrays'] = [];
+  for (const b of blocks) {
+    const [from, to = from] = b.ref.split(':');
+    const [r0, c0] = decodeRef(from);
+    const [r1, c1] = decodeRef(to);
+    if (!(r1 - r0 < 1e6 && c1 - c0 < 2e4)) continue;
+    if (b.array && (r1 > r0 || c1 > c0)) arrays.push({ r0, c0, r1, c1 });
+    for (let r = r0; r <= r1; r++) {
+      const fr = (formulaGrid[r] ??= []);
+      for (let c = c0; c <= c1; c++) {
+        if (fr[c]) continue;
+        fr[c] = '=' + b.formula;
+        (grid[r] ??= [])[c] ??= null;
+        if (c < minCol) minCol = c;
+        if (c > maxCol) maxCol = c;
+      }
+    }
+  }
   let first = 0;
   while (first < grid.length && !grid[first]) first++;
+  return { name, grid, formulaGrid, minCol, maxCol, first, arrays };
+}
+
+function buildTable(raw: RawSheet, header: boolean): Table {
+  const { name, grid, formulaGrid, minCol, maxCol, first, arrays } = raw;
+  if (maxCol < 0) return { name, columns: [], rows: [], formulas: [], origin: { row: 0, col: 0 } };
   const width = maxCol - minCol + 1;
   const dense = <T,>(src: (T | null)[] | undefined): (T | null)[] => {
     const out = new Array<T | null>(width);
@@ -358,5 +556,13 @@ function parseSheet(
   // Trim trailing empty rows (rows holding only a formula are not empty).
   while (rows.length && !formulas[rows.length - 1] && rows[rows.length - 1].every((v) => v === null)) rows.pop();
   formulas.length = Math.min(formulas.length, rows.length);
-  return { name, columns, rows, formulas, origin: { row: start, col: minCol } };
+  return {
+    name,
+    columns,
+    rows,
+    formulas,
+    origin: { row: start, col: minCol },
+    ...(header ? { header: dense(grid[first]) } : {}),
+    ...(arrays.length ? { arrays } : {}),
+  };
 }

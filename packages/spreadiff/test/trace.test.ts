@@ -67,7 +67,9 @@ describe('formula references', () => {
     expect(formulaRefs('=UnknownName*2').dynamic).toBe(true);
     expect(formulaRefs('=NOW()-A1').volatile).toBe(true);
     expect(formulaRefs('=[1]Other!A1').dynamic).toBe(true);
-    expect(tokenizeFormula('=Table1[Col]').dynamic).toBe(true);
+    // A structured reference is dynamic only when its table isn't known.
+    expect(formulaRefs('=Table1[Col]').dynamic).toBe(true);
+    expect(tokenizeFormula('=Table1[Col]').structured).toEqual([{ table: 'Table1', spec: '[Col]' }]);
   });
 });
 

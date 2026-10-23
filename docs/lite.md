@@ -2,7 +2,7 @@
 
 `spreadiff/lite` renders a diff as an **HTML string** or as **plain text**.
 It uses no canvas, no DOM APIs and no workers, so the same call works in a
-browser, a Node server, a CI job or a static-site build. At 11.1 KB
+browser, a Node server, a CI job or a static-site build. At 11.8 KB
 (min+gzip) for the diff engine, the CSV parser and both renderers, it's the
 lightest way to use spreadiff.
 

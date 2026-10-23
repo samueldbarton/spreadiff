@@ -16,6 +16,7 @@ import {
 const DEFAULTS: Required<DiffOptions> = {
   keys: 'auto',
   numericTolerance: 0,
+  precision: 15,
   trimWhitespace: true,
   ignoreCase: false,
   compareFormulas: true,
@@ -55,8 +56,10 @@ export function cellsEqual(a: CellValue, b: CellValue, options: DiffOptions = {}
 function makeComparer(o: Required<DiffOptions>): (a: CellValue, b: CellValue) => boolean {
   const norm = makeNormalizer(o);
   const tol = o.numericTolerance;
+  const digits = o.precision;
   return (a, b) => {
     if (a === b) return true;
+    if (digits < 17 && typeof a === 'number' && typeof b === 'number' && sameDigits(a, b, digits)) return true;
     if (tol > 0) {
       const x = toNumber(a);
       const y = toNumber(b);
@@ -64,6 +67,28 @@ function makeComparer(o: Required<DiffOptions>): (a: CellValue, b: CellValue) =>
     }
     return norm(a) === norm(b);
   };
+}
+
+/**
+ * A formula with relative A1 references rewritten as offsets from its own
+ * cell (row, col: 0-based sheet coordinates), so a copied-down formula reads
+ * the same in every row. For row identity only; not a full R1C1 converter.
+ */
+function relativeFormula(f: string, row: number, col: number): string {
+  return f.replace(/("[^"]*")|(\$?)([A-Z]{1,3})(\$?)(\d+)/g, (all, str, cAbs, letters, rAbs, digits) => {
+    if (str) return all;
+    let c = 0;
+    for (let i = 0; i < letters.length; i++) c = c * 26 + (letters.charCodeAt(i) - 64);
+    return `${cAbs ? `C${c}` : `C[${c - 1 - col}]`}${rAbs ? `R${digits}` : `R[${Number(digits) - 1 - row}]`}`;
+  });
+}
+
+/** Do two numbers agree to `digits` significant digits? */
+function sameDigits(a: number, b: number, digits: number): boolean {
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+  // Within one unit in the last of `digits` places: writers round the same
+  // double differently (…2307 vs …2308 at 15 digits).
+  return Math.abs(a - b) <= Math.max(Math.abs(a), Math.abs(b)) * 10 ** (1 - digits);
 }
 
 /** Diff two tables: align columns, align rows, mark changed cells. */
@@ -281,7 +306,13 @@ export function diffWorkbooks(oldBook: Workbook, newBook: Workbook, options: Dif
     const d = compareAligned(aligned[i], formulaKeyer(aligned, i));
     return { name: p.name, status: p.status ?? (hasChanges(d) ? 'modified' : 'equal'), diff: d };
   });
-  return { sheets, names: oldBook.names || newBook.names ? { old: oldBook.names, new: newBook.names } : undefined };
+  return {
+    sheets,
+    names: oldBook.names || newBook.names ? { old: oldBook.names, new: newBook.names } : undefined,
+    tables: oldBook.tables || newBook.tables ? { old: oldBook.tables, new: newBook.tables } : undefined,
+    date1904: oldBook.date1904 || newBook.date1904 ? { old: oldBook.date1904, new: newBook.date1904 } : undefined,
+    computedValues: oldBook.computedValues || newBook.computedValues ? { old: oldBook.computedValues, new: newBook.computedValues } : undefined,
+  };
 }
 
 /** True if the diff has any added, removed or modified rows, or any column changes. */
@@ -501,21 +532,37 @@ function alignBySequence(
   // Intern whole rows to integer ids: hash each row's key values, then
   // confirm equality cell by cell, so a hash collision can't merge rows.
   // (Building one string per row instead cost ~7× more, mostly in GC.)
-  const width = shared.length;
+  // A row is its values plus how it computes them: `=A1+1` in row 2 and a
+  // typed 2 are different rows even when both show 2. Formulas compare in
+  // relative form (R[-1]C+1), so rows still match after an insert above.
+  const width = shared.length + 1;
   const oldKeys = new Array<Key>(oldTable.rows.length * width);
   const newKeys = new Array<Key>(newTable.rows.length * width);
+  const signature = (t: Table, r: number, side: 'oldIndex' | 'newIndex'): string => {
+    const fr = t.formulas?.[r];
+    if (!fr) return '';
+    const origin = t.origin ?? { row: 1, col: 0 };
+    let sig = '';
+    for (let k = 0; k < shared.length; k++) {
+      const c = shared[k][side];
+      const f = fr[c];
+      if (f) sig += `${k}\u0001${relativeFormula(f, r + origin.row, c + origin.col)}\u0002`;
+    }
+    return sig;
+  };
   const buckets = new Map<number, number[]>(); // hash → ids
   const repAt: number[] = []; // id → offset of its key values; old side ≥ 0, new side ~offset
   const f64 = new Float64Array(1);
   const u32 = new Uint32Array(f64.buffer);
-  const intern = (rows: CellValue[][], side: 'oldIndex' | 'newIndex', keys: Key[]) => {
+  const intern = (table: Table, side: 'oldIndex' | 'newIndex', keys: Key[]) => {
+    const rows = table.rows;
     const ids = new Int32Array(rows.length);
     for (let r = 0; r < rows.length; r++) {
       const row = rows[r];
       const at = r * width;
       let h = 0x811c9dc5;
       for (let c = 0; c < width; c++) {
-        const k = keyValue(row[shared[c][side]] ?? null, norm);
+        const k = c < width - 1 ? keyValue(row[shared[c][side]] ?? null, norm) : signature(table, r, side);
         keys[at + c] = k;
         if (typeof k === 'number') {
           f64[0] = k === 0 ? 0 : k !== k ? NaN : k; // -0 and NaN hash like the Map would
@@ -555,8 +602,8 @@ function alignBySequence(
     }
     return ids;
   };
-  const a = intern(oldTable.rows, 'oldIndex', oldKeys);
-  const b = intern(newTable.rows, 'newIndex', newKeys);
+  const a = intern(oldTable, 'oldIndex', oldKeys);
+  const b = intern(newTable, 'newIndex', newKeys);
   buckets.clear();
   const matches = alignSequences(a, b);
 
@@ -585,13 +632,32 @@ function alignBySequence(
     return total ? same / total : 0;
   };
 
+  const modelSheet = !!(of?.length || nf?.length);
+  const sharesFormulas = (oi: number, ni: number) => {
+    for (const c of shared) if (of?.[oi]?.[c.oldIndex] && nf?.[ni]?.[c.newIndex]) return true;
+    return false;
+  };
+
   // Pair up removed/added rows in each gap between matches as modifications.
   const gap = (o0: number, o1: number, n0: number, n1: number) => {
     let nj = n0;
     // One row out, one row in, at the same place: almost always an edit.
     // Pair it if anything at all still matches.
     const floor = o1 - o0 === 1 && n1 - n0 === 1 ? Math.min(threshold, Number.MIN_VALUE) : threshold;
+    // As many rows out as in: usually edits in place. Take the row at the
+    // same offset when it's similar enough, or computes the same columns
+    // (a model sheet where an input edit changed every row); otherwise a
+    // clearly similar row nearby; failing both, still the row in place.
+    const sameSize = o1 - o0 === n1 - n0;
     for (let oi = o0; oi < o1; oi++) {
+      const j = n0 + (oi - o0);
+      const inPlace = sameSize && j >= nj;
+      if (inPlace && (similarity(oi, j) >= threshold || sharesFormulas(oi, j))) {
+        for (; nj < j; nj++) pairs.push(-1, nj);
+        pairs.push(oi, j);
+        nj = j + 1;
+        continue;
+      }
       let best = -1;
       let bestScore = floor;
       const end = Math.min(n1, nj + PAIRING_WINDOW);
@@ -603,6 +669,8 @@ function alignBySequence(
           if (s === 1) break;
         }
       }
+      // In a model sheet (one with formulas) the row in place is the same row.
+      if (best < 0 && inPlace && modelSheet) best = j;
       if (best < 0) {
         pairs.push(oi, -1);
         continue;
