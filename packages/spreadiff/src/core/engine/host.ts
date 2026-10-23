@@ -1,5 +1,6 @@
 /** An {@link EngineHost} over parsed tables, with an override layer for recalculated values. */
 import type { CellValue, Table, TableDefinition } from '../types.js';
+import { scopedNames } from '../formula.js';
 import type { EngineHost } from './evaluate.js';
 import { errorOf, isoToSerial, type Scalar } from './values.js';
 
@@ -50,6 +51,7 @@ export function tableHost(
   });
   const date1904 = extra.date1904 ?? false;
   const overrides = new Map<number, Scalar>();
+  const scoped = new Map<string, Record<string, string>>();
   // Formula references usually spell the sheet exactly as named: try that first.
   const index = (name: string) => byName.get(name) ?? byName.get(name.toUpperCase()) ?? -1;
   const cachedIn = (t: Table, r: number, c: number): Scalar => {
@@ -68,6 +70,13 @@ export function tableHost(
   const host: TableHost = {
     sheets: tables.map((t) => t.name),
     names: extra.names,
+    namesFor: tables.some((t) => t.names)
+      ? (sheet) => {
+          let m = scoped.get(sheet);
+          if (!m) scoped.set(sheet, (m = scopedNames(extra.names, tables, sheet) ?? {}));
+          return m;
+        }
+      : undefined,
     tables: extra.tables,
     date1904,
     overrides,

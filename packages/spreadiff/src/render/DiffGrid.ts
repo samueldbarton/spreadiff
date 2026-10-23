@@ -1,6 +1,7 @@
 import { columnLabel } from '../core/csv.js';
 import { diffText, formatCell, numericDelta } from '../core/text.js';
 import { changeKind } from '../core/kind.js';
+import { rowLabelColumn } from '../core/label.js';
 import type { CellRef, CellTrace, ChangeKind, WorkbookTrace } from '../core/trace.js';
 import {
   ROW_STATUS,
@@ -8,6 +9,7 @@ import {
   type AlignedColumn,
   type CellValue,
   type RowStatus,
+  type Table,
   type TableDiff,
   type WorkbookDiff,
 } from '../core/types.js';
@@ -36,7 +38,20 @@ export interface CellAnnotation<A = unknown> {
   column?: string;
   /** Your payload, passed back to `renderAnnotation`. */
   data: A;
+  /**
+   * Stable identity across renders. Without it, annotations are matched by
+   * row and column, so passing a fresh array of equal annotations keeps
+   * their elements; an annotation is re-rendered only when its `data`
+   * changes (by `===`).
+   */
+  id?: string | number;
 }
+
+/** Instance counter, for ids unique within a page. */
+let gridIds = 0;
+
+/** A merged range in table coordinates (0-based rows and columns of `Table.rows`). */
+type Merge = { r0: number; r1: number; c0: number; c1: number };
 
 /** Everything about one cell of the diff, as passed to event callbacks and returned by `cellInfo()`. */
 export interface CellInfo {
@@ -50,6 +65,8 @@ export interface CellInfo {
   status: RowStatus;
   /** True when this cell changed (in a modified row). */
   changed: boolean;
+  /** True when the row moved (rows matched by key; see `TableDiff.moved`). */
+  moved: boolean;
   /** Row index in the old table, or -1. */
   oldRow: number;
   /** Row index in the new table, or -1. */
@@ -92,11 +109,19 @@ export interface TraceContext {
 export interface DiffGridOptions<A = unknown> {
   /** `unified` or `split`. Default `unified`. */
   layout?: DiffLayout;
+  /**
+   * Mirror the visible cells as hidden ARIA grid rows and cells, so screen
+   * readers can read them and arrow keys announce the selected cell.
+   * Default true; false skips the DOM work (the canvas is unaffected).
+   */
+  accessibility?: boolean;
+  /** The grid's accessible name. Default: a summary such as "Spreadsheet diff: 3 rows modified, 1 added, …". */
+  ariaLabel?: string;
   /** Collapse runs of unchanged rows into separators that expand on click. Default true. */
   collapseUnchanged?: boolean;
   /** Unchanged rows kept visible around each change when collapsing. Default 2. */
   context?: number;
-  /** Hide columns with no changed cells. Key, added, removed and renamed columns stay. Default false. */
+  /** Hide columns with no changed cells. Key, added, removed and renamed columns stay, and so does the row-label column (the first mostly-text one) when rows were matched by order. Default false. */
   hideUnchangedColumns?: boolean;
   /**
    * Columns pinned to the left while scrolling horizontally. `'keys'` (default)
@@ -228,8 +253,19 @@ export class DiffGrid<A = unknown> {
   private widths: number[] = [];
   private widthOverrides = new Map<number, number>();
   private numericCols: Uint8Array = new Uint8Array(0);
+  /** Merged ranges by table cell (row * width + col), per side; built on first use for each diff. */
+  private merges: { diff: TableDiff; old: Map<number, Merge>; new: Map<number, Merge> } | null = null;
+  /** The accessibility mirror (see `syncA11y`). */
+  private a11y: HTMLElement | null = null;
+  private a11yKey = '';
+  private a11yDiff: TableDiff | null = null;
+  private a11ySel = '';
+  private a11yScroll = '';
+  private a11yTimer = 0;
+  private readonly a11yId = `sd${(gridIds = (gridIds + 1) % 1e9)}`;
   private expanded = new Set<string>();
-  private annotationEls = new Map<CellAnnotation<A>, { el: HTMLElement; height: number; ro: ResizeObserver }>();
+  private annotationEls = new Map<string, { a: CellAnnotation<A>; el: HTMLElement; height: number; ro: ResizeObserver }>();
+  private annotationRender: DiffGridOptions<A>['renderAnnotation'] = undefined;
   private cellMarks = new Set<string>();
   private width = 0;
   private height = 0;
@@ -245,7 +281,7 @@ export class DiffGrid<A = unknown> {
   private focusKey = '';
   private themeFrame = 0;
   private textCache = new Map<string, string>();
-  private minimapCache: { key: string; colors: (string | null)[] } | null = null;
+  private minimapCache: { key: string; colors: (string | null)[]; alphas: Float32Array } | null = null;
   private cleanups: (() => void)[] = [];
 
   constructor(options: DiffGridOptions<A> = {}) {
@@ -254,8 +290,18 @@ export class DiffGrid<A = unknown> {
     this.host.className = 'spreadiff';
     this.host.style.cssText = 'display:block;position:relative;width:100%;height:100%;';
     this.shadow = this.host.attachShadow({ mode: 'open' });
-    const style = document.createElement('style');
-    style.textContent = STYLE;
+    // An adopted stylesheet isn't inline CSS, so a Content-Security-Policy
+    // without 'unsafe-inline' allows it. Older browsers get a <style>.
+    const adopt = 'adoptedStyleSheets' in ShadowRoot.prototype && 'replaceSync' in CSSStyleSheet.prototype;
+    let style: HTMLStyleElement | null = null;
+    if (adopt) {
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync(STYLE);
+      this.shadow.adoptedStyleSheets = [sheet];
+    } else {
+      style = document.createElement('style');
+      style.textContent = STYLE;
+    }
     this.scroller = el('div', 'sd-scroller');
     this.scroller.tabIndex = 0;
     this.scroller.setAttribute('role', 'grid');
@@ -270,7 +316,10 @@ export class DiffGrid<A = unknown> {
     this.overlay.appendChild(document.createElement('slot'));
     this.tooltip = el('div', 'sd-tooltip');
     this.tooltip.setAttribute('role', 'tooltip');
-    this.shadow.append(style, this.scroller, this.canvas, this.minimap, this.overlay, this.tooltip);
+    this.tooltip.setAttribute('aria-hidden', 'true');
+    this.tooltip.id = `${this.a11yId}-tip`;
+    if (style) this.shadow.append(style);
+    this.shadow.append(this.scroller, this.canvas, this.minimap, this.overlay, this.tooltip);
     this.ctx = this.canvas.getContext('2d', { alpha: false })!;
     this.mctx = this.minimap.getContext('2d')!;
     this.applyThemeAttr();
@@ -411,6 +460,7 @@ export class DiffGrid<A = unknown> {
    */
   cleanUp(): void {
     this.detach();
+    clearTimeout(this.a11yTimer);
     for (const info of this.annotationEls.values()) info.ro.disconnect();
     this.annotationEls.clear();
     this.host.remove();
@@ -571,10 +621,10 @@ export class DiffGrid<A = unknown> {
     const unified = this.layout === 'unified';
     const lh = this.rowHeight;
     const annotationsAfter = new Map<number, number[]>();
-    for (const [a, info] of this.annotationEls) {
-      const list = annotationsAfter.get(a.row) ?? [];
+    for (const info of this.annotationEls.values()) {
+      const list = annotationsAfter.get(info.a.row) ?? [];
       list.push(info.height);
-      annotationsAfter.set(a.row, list);
+      annotationsAfter.set(info.a.row, list);
     }
     this.rows = computeRowLayout({
       diff,
@@ -594,9 +644,10 @@ export class DiffGrid<A = unknown> {
   private relayoutColumns(): void {
     const diff = this.diff!;
     const keys = new Set(diff.keyColumns);
+    const label = this.options.hideUnchangedColumns ? rowLabelColumn(diff) : -1; // without keys, keep what names the rows
     const visible: number[] = [];
     diff.columns.forEach((c, i) => {
-      if (!this.options.hideUnchangedColumns || c.status !== 'equal' || c.changes > 0 || keys.has(c.name)) {
+      if (!this.options.hideUnchangedColumns || c.status !== 'equal' || c.changes > 0 || keys.has(c.name) || i === label) {
         visible.push(i);
       }
     });
@@ -740,18 +791,41 @@ export class DiffGrid<A = unknown> {
   private syncAnnotations(): void {
     const list = this.options.annotations ?? [];
     const render = this.options.renderAnnotation;
-    const keep = new Set(list);
-    for (const [a, info] of this.annotationEls) {
-      if (!keep.has(a) || !render) {
+    const renderChanged = render !== this.annotationRender;
+    this.annotationRender = render;
+    // Match by id, else by row + column (+ position among equal ones), not by
+    // object identity: a fresh array of equal annotations keeps its elements.
+    const seen = new Map<string, number>();
+    const keyed = list.map((a) => {
+      const base = a.id !== undefined ? `id:${a.id}` : `${a.row}\u0000${a.column ?? ''}`;
+      const n = seen.get(base) ?? 0;
+      seen.set(base, n + 1);
+      return { a, key: `${base}\u0000${n}` };
+    });
+    const keep = new Set(keyed.map((k) => k.key));
+    let moved = false;
+    for (const [key, info] of this.annotationEls) {
+      if (!keep.has(key) || !render) {
         info.ro.disconnect();
         info.el.remove();
-        this.annotationEls.delete(a);
+        this.annotationEls.delete(key);
+        moved = true;
       }
     }
     this.cellMarks.clear();
-    for (const a of list) {
+    for (const { a, key } of keyed) {
       if (a.column) this.cellMarks.add(`${a.row}:${a.column}`);
-      if (!render || this.annotationEls.has(a)) continue;
+      if (!render) continue;
+      const existing = this.annotationEls.get(key);
+      if (existing) {
+        if (existing.a.row !== a.row) moved = true;
+        if (existing.a.data !== a.data || renderChanged) {
+          const content = render(a);
+          if (content) existing.el.replaceChildren(content);
+        }
+        existing.a = a;
+        continue;
+      }
       const content = render(a);
       if (!content) continue;
       const wrap = el('div', 'sd-annotation');
@@ -765,20 +839,21 @@ export class DiffGrid<A = unknown> {
           if (this.diff) this.relayout();
         }
       });
-      const info = { el: wrap, height: Math.max(1, wrap.offsetHeight || 40), ro };
-      this.annotationEls.set(a, info);
+      const info = { a, el: wrap, height: Math.max(1, wrap.offsetHeight || 40), ro };
+      this.annotationEls.set(key, info);
       ro.observe(wrap);
     }
+    if (moved && this.diff) this.relayout();
   }
 
   private positionAnnotations(): void {
     if (!this.annotationEls.size || !this.rows) return;
     const top = this.scroller.scrollTop;
     const byRow = new Map<number, HTMLElement[]>();
-    for (const [a, info] of this.annotationEls) {
-      const list = byRow.get(a.row) ?? [];
+    for (const info of this.annotationEls.values()) {
+      const list = byRow.get(info.a.row) ?? [];
       list.push(info.el);
-      byRow.set(a.row, list);
+      byRow.set(info.a.row, list);
     }
     const width = this.width - this.minimapWidth;
     for (const [row, els] of byRow) {
@@ -833,6 +908,143 @@ export class DiffGrid<A = unknown> {
     }
     this.drawMinimap();
     this.positionAnnotations();
+    this.syncA11y();
+  }
+
+  // ---- Accessibility ------------------------------------------------------
+
+  /**
+   * A visually hidden DOM copy of the visible window (ARIA grid rows and
+   * cells), so screen readers can read what the canvas draws. The selected
+   * cell is the grid's `aria-activedescendant`, so arrow keys announce it.
+   * Rebuilt only when the window, the selection or the diff changes.
+   */
+  private syncA11y(now = false): void {
+    if (this.options.accessibility === false) {
+      this.a11y?.replaceChildren();
+      return;
+    }
+    // Per frame, only compare scroll position and selection: rebuilding while
+    // scrolling waits until it settles; a new selection or diff applies at once.
+    const sel0 = this.selected;
+    const selNow = sel0 ? `${sel0.row}:${sel0.col}` : '';
+    const scrollNow = `${this.scroller.scrollTop}:${this.scroller.scrollLeft}:${this.rows.count}:${this.width}:${this.height}`;
+    if (!now && this.a11y && this.a11yDiff === this.diff && selNow === this.a11ySel) {
+      if (scrollNow === this.a11yScroll) return;
+      this.a11yScroll = scrollNow;
+      clearTimeout(this.a11yTimer);
+      this.a11yTimer = window.setTimeout(() => this.syncA11y(true), 150);
+      return;
+    }
+    this.a11yScroll = scrollNow;
+    const diff = this.diff!;
+    const rows = this.rows;
+    const cols = this.cols;
+    const scrollY = this.scroller.scrollTop;
+    const p = this.panes()[this.panes().length - 1];
+    const first = Math.max(0, rowAt(rows, scrollY));
+    let last = first;
+    while (last + 1 < rows.count && rows.offsets[last + 1] < scrollY + this.height - HEADER_HEIGHT) last++;
+    const view = p.width - p.gutter - cols.frozenWidth;
+    const fromCol = Math.max(cols.frozen, colAt(cols, cols.frozenWidth + this.scroller.scrollLeft));
+    const toCol = colAt(cols, cols.frozenWidth + this.scroller.scrollLeft + view);
+    const visible: number[] = [];
+    for (let vi = 0; vi < cols.frozen; vi++) visible.push(vi);
+    for (let vi = fromCol; vi <= toCol && vi < cols.cols.length; vi++) visible.push(vi);
+    const sel = this.selected;
+    const selKey = sel ? `${sel.row}:${sel.col}` : '';
+    const key = `${first}:${last}:${visible.join(',')}:${selKey}:${rows.count}:${this.layout}`;
+    if (key === this.a11yKey && this.a11yDiff === diff) return;
+    this.a11yKey = key;
+    this.a11yDiff = diff;
+    this.a11ySel = selKey;
+    if (!this.a11y) {
+      this.a11y = el('div', 'sd-a11y');
+      this.a11y.setAttribute('role', 'rowgroup');
+      this.scroller.appendChild(this.a11y);
+    }
+    const s = diff.stats;
+    const n = (k: number, one: string, many = `${one}s`) => `${k.toLocaleString()} ${k === 1 ? one : many}`;
+    const parts = [s.rowsModified && `${n(s.rowsModified, 'row')} modified`, s.rowsAdded && `${n(s.rowsAdded, 'row')} added`, s.rowsRemoved && `${n(s.rowsRemoved, 'row')} removed`, s.rowsMoved && `${n(s.rowsMoved, 'row')} moved`, s.cellsChanged && `${n(s.cellsChanged, 'cell')} changed`].filter(Boolean);
+    this.scroller.setAttribute('aria-label', this.options.ariaLabel ?? `Spreadsheet diff: ${parts.length ? parts.join(', ') : 'no changes'}`);
+    this.scroller.setAttribute('aria-rowcount', String(rows.count + 1));
+    this.scroller.setAttribute('aria-colcount', String(cols.cols.length + 1));
+    const id = (d: number, vi: number) => `${this.a11yId}-${d}-${vi}`;
+    const cell = (role: string, text: string, colIndex: number, cellId?: string) => {
+      const c = el('div', 'sd-a11y-cell');
+      c.setAttribute('role', role);
+      c.setAttribute('aria-colindex', String(colIndex));
+      if (cellId) c.id = cellId;
+      c.textContent = text;
+      return c;
+    };
+    const out: HTMLElement[] = [];
+    const header = el('div', 'sd-a11y-row');
+    header.setAttribute('role', 'row');
+    header.setAttribute('aria-rowindex', '1');
+    header.append(cell('columnheader', 'Row', 1));
+    for (const vi of visible) {
+      const c = diff.columns[cols.cols[vi]];
+      const name = c.status === 'renamed' ? `${c.name}, renamed from ${c.oldName}` : c.status === 'added' ? `${c.name}, added column` : c.status === 'removed' ? `${c.name}, removed column` : c.name;
+      header.append(cell('columnheader', name, vi + 2));
+    }
+    out.push(header);
+    let active = '';
+    for (let d = first; d <= last; d++) {
+      const kind = rows.kind[d];
+      if (kind === ROW_KIND.annotation) continue;
+      const row = el('div', 'sd-a11y-row');
+      row.setAttribute('role', 'row');
+      row.setAttribute('aria-rowindex', String(d + 2));
+      if (kind === ROW_KIND.separator) {
+        const region = rows.regions[rows.ref[d]];
+        const n = region.end - region.start;
+        row.append(cell('gridcell', `${n.toLocaleString()} unchanged ${n === 1 ? 'row' : 'rows'}, collapsed`, 1));
+        out.push(row);
+        continue;
+      }
+      const r = rows.ref[d];
+      row.append(cell('rowheader', this.describeRow(r), 1));
+      for (const vi of visible) {
+        const ci = cols.cols[vi];
+        const cid = id(d, vi);
+        row.append(cell('gridcell', this.describeCell(r, ci), vi + 2, cid));
+        if (sel && sel.row === r && sel.col === ci) active = cid;
+      }
+      if (sel && sel.row === r) row.setAttribute('aria-selected', 'true');
+      out.push(row);
+    }
+    this.a11y.replaceChildren(...out);
+    if (active) this.scroller.setAttribute('aria-activedescendant', active);
+    else this.scroller.removeAttribute('aria-activedescendant');
+  }
+
+  /** "Row 12, modified, moved from row 4" for the row header a screen reader announces. */
+  private describeRow(r: number): string {
+    const diff = this.diff!;
+    const oi = diff.oldRows[r];
+    const ni = diff.newRows[r];
+    const n = ni >= 0 ? ni + this.rowOffset('new') : oi + this.rowOffset('old');
+    const status = ROW_STATUS_NAMES[diff.status[r]];
+    let text = `Row ${n}${status === 'equal' ? '' : `, ${status}`}`;
+    if (diff.moved?.[r]) text += `, moved from row ${oi + this.rowOffset('old')}`;
+    return text;
+  }
+
+  /** A cell as words: its value, and for a change the old value, the delta and why it changed. */
+  private describeCell(r: number, ci: number): string {
+    const info = this.cellInfo(r, ci);
+    const v = (x: CellValue | undefined) => (x === undefined || x === null || x === '' ? 'empty' : formatCell(x));
+    if (info.status === 'added') return info.newValue === undefined ? 'not in the new table' : v(info.newValue);
+    if (info.status === 'removed') return v(info.oldValue);
+    if (info.column.status === 'added') return v(info.newValue);
+    if (info.column.status === 'removed') return `${v(info.oldValue)}, column removed`;
+    if (!info.changed) return v(info.newValue);
+    const d = numericDelta(info.oldValue ?? null, info.newValue ?? null);
+    const delta = d && d.delta !== 0 ? `, ${d.delta > 0 ? 'up' : 'down'} ${formatCell(Math.abs(d.delta))}${d.ratio === null ? '' : ` (${Math.abs(d.ratio * 100).toFixed(1)}%)`}` : '';
+    const why = info.kind === 'computed' ? ', recalculated result' : info.kind === 'formula' ? ', formula edited' : ', edited';
+    const formula = info.oldFormula !== info.newFormula && info.newFormula ? `, formula ${info.newFormula}` : '';
+    return `${v(info.newValue)}, was ${v(info.oldValue)}${delta}${why}${formula}`;
   }
 
   private drawPane(p: PaneGeometry): void {
@@ -953,7 +1165,7 @@ export class DiffGrid<A = unknown> {
         const y = bodyTop + rows.offsets[d] - scrollY;
         if (y > this.height || y + 100 < bodyTop) continue;
         const h = rows.offsets[d + 1] - rows.offsets[d];
-        ctx.strokeStyle = role === 'impact' ? t.computed : t.modified;
+        ctx.strokeStyle = role === 'impact' ? t.computedFg : t.modifiedFg;
         ctx.setLineDash(role === 'impact' ? [4, 3] : role === 'parent' ? [1.5, 2.5] : []);
         roundRect(ctx, colX(vi) + 1.5, y + 1.5, cols.widths[vi] - 3, h - 3, 3);
         ctx.stroke();
@@ -964,6 +1176,38 @@ export class DiffGrid<A = unknown> {
 
     this.drawHeader(p, firstScrolled, lastScrolled, colX);
     ctx.restore();
+  }
+
+  /** The side whose cells a pane shows for a row (unified: new, unless the row was removed). */
+  private sideOf(p: PaneGeometry, r: number): 'old' | 'new' {
+    return p.side === 'old' ? 'old' : p.side === 'new' ? 'new' : this.diff!.newRows[r] >= 0 ? 'new' : 'old';
+  }
+
+  /** The horizontal merge holding an unchanged cell on `side`, if any. */
+  private mergeAt(side: 'old' | 'new', r: number, ci: number): Merge | undefined {
+    const diff = this.diff!;
+    if (!diff.oldTable.merges && !diff.newTable.merges) return undefined;
+    if (diff.changedCells.get(r)?.[ci]) return undefined; // a change keeps its own box
+    if (this.merges?.diff !== diff) {
+      const index = (t: Table) => {
+        const m = new Map<number, Merge>();
+        const o = t.origin ?? { row: 1, col: 0 };
+        let budget = 200_000; // cells indexed: enough for real sheets, bounded for giant merges
+        for (const g of t.merges ?? []) {
+          if (g.c1 === g.c0) continue; // vertical merges cross row alignment; drawn cell by cell
+          const merge = { r0: g.r0 - o.row, r1: g.r1 - o.row, c0: g.c0 - o.col, c1: g.c1 - o.col };
+          for (let row = Math.max(0, merge.r0); row <= Math.min(t.rows.length - 1, merge.r1) && budget > 0; row++) {
+            for (let c = Math.max(0, merge.c0); c <= Math.min(t.columns.length - 1, merge.c1); c++, budget--) m.set(row * t.columns.length + c, merge);
+          }
+        }
+        return m;
+      };
+      this.merges = { diff, old: index(diff.oldTable), new: index(diff.newTable) };
+    }
+    const t = side === 'old' ? diff.oldTable : diff.newTable;
+    const row = side === 'old' ? diff.oldRows[r] : diff.newRows[r];
+    const c = side === 'old' ? diff.columns[ci].oldIndex : diff.columns[ci].newIndex;
+    return row < 0 || c < 0 ? undefined : this.merges[side].get(row * t.columns.length + c);
   }
 
   private drawCell(
@@ -983,8 +1227,13 @@ export class DiffGrid<A = unknown> {
     const ci = this.cols.cols[vi];
     const col = diff.columns[ci];
     const right = x + w;
-    vline(ctx, right, y, y + h, t.border);
+    // Merged with the next visible column (same merge, both unchanged): no gridline between them.
+    const side = this.sideOf(p, r);
+    const merge = missing ? undefined : this.mergeAt(side, r, ci);
+    const joinsNext = !!merge && vi + 1 < this.cols.cols.length && this.mergeAt(side, r, this.cols.cols[vi + 1]) === merge;
+    if (!joinsNext) vline(ctx, right, y, y + h, t.border);
     if (missing) return;
+    if (merge && vi > 0 && this.mergeAt(side, r, this.cols.cols[vi - 1]) === merge) return; // drawn by the merge's first visible cell
 
     const colMissing = (p.side === 'old' && col.status === 'added') || (p.side === 'new' && col.status === 'removed');
     if (colMissing) {
@@ -1034,7 +1283,10 @@ export class DiffGrid<A = unknown> {
       const v = p.side === 'old' ? oldV : p.side === 'new' ? newV : newV !== undefined ? newV : oldV;
       let color = t.fg;
       if (status === ROW_STATUS.removed || (p.side === 'unified' && col.status === 'removed')) color = t.fgMuted;
-      this.text(formatCell(v ?? null), x, y + h / 2 + 0.5, w, align, font, color, p.side === 'unified' && status === ROW_STATUS.removed);
+      // A merge's text spans its visible columns.
+      let span = w;
+      for (let k = vi + 1; merge && k < this.cols.cols.length && this.mergeAt(side, r, this.cols.cols[k]) === merge; k++) span += this.cols.widths[k];
+      this.text(formatCell(v ?? null), x, y + h / 2 + 0.5, span, span > w ? 'left' : align, font, color, p.side === 'unified' && status === ROW_STATUS.removed);
     }
     if (this.focus && !(this.selected?.row === r && this.selected.col === ci) && !this.focus.has(`${r}:${ci}`)) {
       ctx.fillStyle = t.dim;
@@ -1151,7 +1403,7 @@ export class DiffGrid<A = unknown> {
       if (mode === 'delta' && deltaText) {
         // Split rows are one line: the change sits on the opposite side of the value.
         this.text(newText, x, y + h / 2 + 0.5, w, align, font, t.fg);
-        this.text(this.fitDelta(deltaText, w / 2, tiny), x, y + h / 2 + 0.5, w, align === 'right' ? 'left' : 'right', tiny, deltaText.up ? t.added : t.removed);
+        this.text(this.fitDelta(deltaText, w / 2, tiny), x, y + h / 2 + 0.5, w, align === 'right' ? 'left' : 'right', tiny, deltaText.up ? t.addedFg : t.removedFg);
       } else {
         this.text(newText, x, y + h / 2 + 0.5, w, align, font, t.fg);
       }
@@ -1173,7 +1425,7 @@ export class DiffGrid<A = unknown> {
       const top = y + h * 0.36;
       const bottom = y + h * 0.72;
       this.text(newText, x, top, w, align, font, t.fg);
-      if (deltaText) this.text(this.fitDelta(deltaText, w, tiny), x, bottom, w, align, tiny, deltaText.up ? t.added : t.removed);
+      if (deltaText) this.text(this.fitDelta(deltaText, w, tiny), x, bottom, w, align, tiny, deltaText.up ? t.addedFg : t.removedFg);
       else this.text(`was ${oldText || '∅'}`, x, bottom, w, align, small, oldFg);
     } else {
       // inline: old → new on one line; falls back to the new value when narrow.
@@ -1242,14 +1494,20 @@ export class DiffGrid<A = unknown> {
       if (oi >= 0) this.text(String(oi + offOld), p.x + BAR_WIDTH, cy, numW, 'right', mono, numColor);
       if (ni >= 0) this.text(String(ni + offNew), p.x + BAR_WIDTH + numW, cy, numW, 'right', mono, numColor);
       const sign = status === ROW_STATUS.added ? '+' : status === ROW_STATUS.removed ? '−' : '';
-      if (status === ROW_STATUS.modified) {
-        ctx.fillStyle = accent!;
+      if (diff.moved?.[r]) {
+        // Moved (and maybe modified: the bar shows that): an up-down arrow in the sign slot.
+        ctx.font = `600 ${t.fontSize}px ${t.monoFontFamily}`;
+        ctx.fillStyle = t.modifiedFg;
+        ctx.textAlign = 'center';
+        ctx.fillText('↕', p.x + p.gutter - 9, cy);
+      } else if (status === ROW_STATUS.modified) {
+        ctx.fillStyle = t.modifiedFg;
         ctx.beginPath();
         ctx.arc(p.x + p.gutter - 9, cy - 0.5, 2.5, 0, Math.PI * 2);
         ctx.fill();
       } else if (sign) {
         ctx.font = `600 ${t.fontSize}px ${t.monoFontFamily}`;
-        ctx.fillStyle = accent!;
+        ctx.fillStyle = status === ROW_STATUS.added ? t.addedFg : t.removedFg;
         ctx.textAlign = 'center';
         ctx.fillText(sign, p.x + p.gutter - 9, cy);
       }
@@ -1257,6 +1515,7 @@ export class DiffGrid<A = unknown> {
       const idx = p.side === 'old' ? oi : ni;
       const off = p.side === 'old' ? offOld : offNew;
       if (idx >= 0) this.text(String(idx + off), p.x + BAR_WIDTH, cy, p.gutter - BAR_WIDTH, 'right', mono, numColor);
+      if (diff.moved?.[r] && p.side === 'new') this.text('↕', p.x + BAR_WIDTH + 2, cy, 12, 'left', `600 ${t.fontSize - 1}px ${t.monoFontFamily}`, t.modifiedFg);
     }
     vline(this.ctx, p.x + p.gutter, y, y + h, t.border);
   }
@@ -1328,11 +1587,11 @@ export class DiffGrid<A = unknown> {
       ctx.fillText(s, rightX, ly);
     };
     if (p.side !== 'unified') {
-      label(p.side === 'old' ? 'OLD' : 'NEW', p.x + p.gutter - CELL_PAD, p.side === 'old' ? t.removed : t.added);
+      label(p.side === 'old' ? 'OLD' : 'NEW', p.x + p.gutter - CELL_PAD, p.side === 'old' ? t.removedFg : t.addedFg);
     } else {
       const numW = (p.gutter - BAR_WIDTH - 16) / 2;
-      label('OLD', p.x + BAR_WIDTH + numW - CELL_PAD, t.removed);
-      label('NEW', p.x + BAR_WIDTH + numW * 2 - CELL_PAD, t.added);
+      label('OLD', p.x + BAR_WIDTH + numW - CELL_PAD, t.removedFg);
+      label('NEW', p.x + BAR_WIDTH + numW * 2 - CELL_PAD, t.addedFg);
     }
     vline(ctx, p.x + p.gutter, 0, HEADER_HEIGHT, t.border);
     hline(ctx, p.x, right, HEADER_HEIGHT, t.borderStrong);
@@ -1388,7 +1647,7 @@ export class DiffGrid<A = unknown> {
         const ow = Math.min(ctx.measureText(oldName).width, avail * 0.45);
         this.text(oldName, tx - CELL_PAD, cy, ow + CELL_PAD * 2, 'left', bold, t.fgMuted, true);
         tx += ow + 4;
-        this.text('→', tx - CELL_PAD, cy, 14 + CELL_PAD * 2, 'left', bold, t.modified);
+        this.text('→', tx - CELL_PAD, cy, 14 + CELL_PAD * 2, 'left', bold, t.modifiedFg);
         tx += 16;
         this.text(col.name, tx - CELL_PAD, cy, x + w - tx - (col.changes ? 28 : 0), 'left', bold, t.fg);
       }
@@ -1404,7 +1663,7 @@ export class DiffGrid<A = unknown> {
       ctx.fillStyle = mixAlpha(t.modified, t.dark ? 0.16 : 0.1);
       roundRect(ctx, bx, cy - 7.5, bw, 15, 7.5);
       ctx.fill();
-      ctx.fillStyle = t.modified;
+      ctx.fillStyle = t.modifiedFg;
       ctx.textAlign = 'center';
       ctx.fillText(label, bx + bw / 2, cy + 0.5);
     }
@@ -1429,37 +1688,54 @@ export class DiffGrid<A = unknown> {
     if (this.rows.count === 0 || trackH <= 0) return;
     const key = `${this.rows.count}:${total}:${trackH}`;
     if (this.minimapCache?.key !== key) {
-      const colors: (string | null)[] = new Array(Math.ceil(trackH)).fill(null);
+      // Density shading: each pixel row gets the share of its rows that
+      // changed (as opacity) and the most severe kind among them (as color).
+      // Without it, thousands of changes in a long sheet paint the strip solid.
+      const n = Math.ceil(trackH);
+      const rowsW = new Float64Array(n);
+      const changedW = new Float64Array(n);
+      const ranks = new Uint8Array(n);
       const rank = (s: number) => (s === ROW_STATUS.removed ? 3 : s === ROW_STATUS.added ? 2 : s === ROW_STATUS.modified ? 1 : 0);
-      const ranks = new Uint8Array(colors.length);
       for (let d = 0; d < this.rows.count; d++) {
         if (this.rows.kind[d] !== ROW_KIND.data) continue;
-        const s = this.diff!.status[this.rows.ref[d]];
-        const k = rank(s);
-        if (!k) continue;
+        const r = this.rows.ref[d];
+        const k = rank(this.diff!.status[r]) || (this.diff!.moved?.[r] ? 1 : 0);
         const y0 = Math.floor((this.rows.offsets[d] / total) * trackH);
         const y1 = Math.max(y0 + 1, Math.ceil((this.rows.offsets[d + 1] / total) * trackH));
-        for (let y = y0; y < y1 && y < colors.length; y++) {
-          if (k > ranks[y]) {
-            ranks[y] = k;
-            colors[y] = k === 3 ? t.removed : k === 2 ? t.added : t.modified;
-          }
+        const w = 1 / (y1 - y0);
+        for (let y = y0; y < y1 && y < n; y++) {
+          rowsW[y] += w;
+          if (!k) continue;
+          changedW[y] += w;
+          if (k > ranks[y]) ranks[y] = k;
         }
       }
-      this.minimapCache = { key, colors };
+      const colors: (string | null)[] = new Array(n).fill(null);
+      const alphas = new Float32Array(n);
+      for (let y = 0; y < n; y++) {
+        if (!ranks[y]) continue;
+        const k = ranks[y];
+        colors[y] = k === 3 ? t.removed : k === 2 ? t.added : t.modified;
+        // 35% for a lone change, solid where every row changed; 10 steps so runs merge.
+        alphas[y] = Math.round((0.35 + 0.65 * Math.min(1, changedW[y] / rowsW[y])) * 10) / 10;
+      }
+      this.minimapCache = { key, colors, alphas };
     }
-    const colors = this.minimapCache.colors;
+    const { colors, alphas } = this.minimapCache;
     let y = 0;
     while (y < colors.length) {
       const c = colors[y];
+      const al = alphas[y];
       let e = y + 1;
-      while (e < colors.length && colors[e] === c) e++;
+      while (e < colors.length && colors[e] === c && alphas[e] === al) e++;
       if (c) {
+        ctx.globalAlpha = al;
         ctx.fillStyle = c;
         ctx.fillRect(3, trackTop + y, mw - 5, e - y);
       }
       y = e;
     }
+    ctx.globalAlpha = 1;
     // Viewport indicator.
     const vt = (this.scroller.scrollTop / total) * trackH;
     const vh = Math.max(6, ((h - HEADER_HEIGHT) / total) * trackH);
@@ -1585,7 +1861,7 @@ export class DiffGrid<A = unknown> {
       const info = this.cellAt(hit);
       this.options.onCellHover?.(info);
       this.hideTooltip();
-      if (info?.changed && this.options.tooltips !== false) {
+      if ((info?.changed || info?.moved) && this.options.tooltips !== false) {
         this.tooltipTimer = window.setTimeout(() => this.showTooltip(info, hit), 260);
       }
     }
@@ -1767,6 +2043,7 @@ export class DiffGrid<A = unknown> {
       columnIndex,
       status,
       changed: diff.changedCells.get(row)?.[columnIndex] === 1,
+      moved: diff.moved?.[row] === 1,
       oldRow: oi,
       newRow: ni,
       oldValue: oi >= 0 && column.oldIndex >= 0 ? diff.oldTable.rows[oi][column.oldIndex] ?? null : undefined,
@@ -1794,6 +2071,11 @@ export class DiffGrid<A = unknown> {
         : esc(kind === 'removed' ? before : after);
     const rowLabel = info.newRow >= 0 ? `row ${info.newRow + this.rowOffset('new')}` : `row ${info.oldRow + this.rowOffset('old')}`;
     let html = `<div class="sd-tt-head"><span class="sd-tt-col">${esc(info.column.name)}</span><span>${rowLabel}</span></div>`;
+    if (info.moved) html += `<div class="sd-tt-moved">↕ Moved from row ${info.oldRow + this.rowOffset('old')}</div>`;
+    if (!info.changed) {
+      this.placeTooltip(html, hit);
+      return;
+    }
     html += `<div class="sd-tt-row sd-tt-old"><span class="sd-tt-sign">−</span><span class="sd-tt-val">${side('removed') || '<i>empty</i>'}</span></div>`;
     html += `<div class="sd-tt-row sd-tt-new"><span class="sd-tt-sign">+</span><span class="sd-tt-val">${side('added') || '<i>empty</i>'}</span></div>`;
     if (info.oldFormula || info.newFormula) {
@@ -1850,6 +2132,11 @@ export class DiffGrid<A = unknown> {
       }
       html += trace + '</div>';
     }
+    this.placeTooltip(html, hit);
+  }
+
+  /** Fill the tooltip and place it by the hovered cell. */
+  private placeTooltip(html: string, hit: Hit): void {
     this.tooltip.innerHTML = html;
     // Position under the cell, flipping above near the bottom edge.
     const panes = this.panes();
@@ -1872,11 +2159,15 @@ export class DiffGrid<A = unknown> {
     this.tooltip.style.left = `${left}px`;
     this.tooltip.style.top = `${top}px`;
     this.tooltip.setAttribute('data-open', '');
+    this.tooltip.removeAttribute('aria-hidden');
+    this.scroller.setAttribute('aria-describedby', this.tooltip.id);
   }
 
   private hideTooltip(): void {
     clearTimeout(this.tooltipTimer);
     this.tooltip.removeAttribute('data-open');
+    this.tooltip.setAttribute('aria-hidden', 'true');
+    this.scroller.removeAttribute('aria-describedby');
   }
 }
 

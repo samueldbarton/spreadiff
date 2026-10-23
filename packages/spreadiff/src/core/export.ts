@@ -2,7 +2,8 @@ import { formatCell } from './text.js';
 import { ROW_STATUS, type TableDiff } from './types.js';
 
 /**
- * daff-style "highlighter" CSV: a leading action column (`+++`, `---`, `->`)
+ * daff-style "highlighter" CSV: a leading action column (`+++`, `---`, `->`,
+ * `:` for a moved row)
  * and `old->new` in changed cells. Readable in any spreadsheet app.
  */
 export function toUnifiedCsv(diff: TableDiff): string {
@@ -20,7 +21,8 @@ export function toUnifiedCsv(diff: TableDiff): string {
     const o = diff.oldRows[r] >= 0 ? diff.oldTable.rows[diff.oldRows[r]] : null;
     const n = diff.newRows[r] >= 0 ? diff.newTable.rows[diff.newRows[r]] : null;
     const mask = diff.changedCells.get(r);
-    const action = st === ROW_STATUS.added ? '+++' : st === ROW_STATUS.removed ? '---' : st === ROW_STATUS.modified ? '->' : '';
+    // daff's ':' marks a reordered row; a moved row that also changed keeps '->'.
+    const action = st === ROW_STATUS.added ? '+++' : st === ROW_STATUS.removed ? '---' : st === ROW_STATUS.modified ? '->' : diff.moved?.[r] ? ':' : '';
     const cells = diff.columns.map((c, i) => {
       const ov = o && c.oldIndex >= 0 ? formatCell(o[c.oldIndex] ?? null) : '';
       const nv = n && c.newIndex >= 0 ? formatCell(n[c.newIndex] ?? null) : '';

@@ -1,43 +1,58 @@
 # spreadiff
 
-Spreadsheet diffs for the web: what [`@pierre/diffs`](https://diffs.com) does
-for code, for tables. Diff two CSV or XLSX files, then see the result as a
-canvas grid that scrolls a million rows, or as static HTML for a pull
-request or an email. For spreadsheets with formulas, spreadiff separates
-what someone *edited* from what *moved as a consequence*, and traces each
-changed result back to its causes.
+**See what changed between two spreadsheets, and why.**
 
-![The viewer: a financial model diff with downstream changes in amber, deltas under each value, and the outputs panel listing each changed result with its drivers](docs/images/viewer.png)
+spreadiff diffs CSV and Excel files the way a spreadsheet is read: by rows
+and columns, not lines of text. It shows the result as a canvas grid that
+scrolls a million rows, or as static HTML for a pull request or an email.
+For workbooks with formulas, it separates what someone *edited* from what
+*moved as a consequence*. It also traces every changed result back to the
+edits that caused it, with how much each one contributed. It's to
+spreadsheets what [`@pierre/diffs`](https://diffs.com) is to code.
 
-*Above: two versions of a small financial model. Price, EMEA units and the
-tax rate were edited, APAC's COGS formula was rewritten, and a LATAM row
-was added. The amber cells are formula
-results that changed because of those edits. Each shows its new value, the
-absolute change and the percent change. The panel lists the changed outputs
-and what drove each one.*
+![The viewer: a financial model diff with downstream changes in amber, deltas under each value, and an outputs panel listing each changed result with its drivers](docs/images/viewer.png)
 
-## What it does
+*Two versions of a small financial model. Price, EMEA units and the tax
+rate were edited, APAC's COGS formula was rewritten, and a LATAM row was
+added. The amber cells are formula results that moved because of those
+edits; the panel lists each changed output and what drove it.*
 
-- **Table-aware diffing.** Columns match by name, with renames detected
-  from their contents. Rows match by an id column when there is one, and
-  by sequence alignment when there isn't. An edited row reads as
-  *modified*, not as a deletion plus an insertion.
-- **Formula tracing.** Every changed cell is an `input` edit, a `formula`
-  edit, or a `computed` change: same formula, new result. Computed changes
-  link back to their root causes. Formulas are compared by what they point
-  at, so `=B5*C5` becoming `=B6*C6` after a row insert isn't a change.
-- **A canvas grid.** It's virtualized and themed with CSS variables, in
-  unified or split layouts. There are four ways to show a changed cell,
-  plus annotations, keyboard navigation and a change minimap.
-- **A lightweight HTML renderer.** `spreadiff/lite` is 12.0 KB gzip and
-  uses no DOM APIs, so it runs on a server. It renders a code-review style
-  side-by-side diff.
-- **Worker support.** Parse and diff off the main thread. Results come back
-  in a packed transferable encoding.
+## Why spreadiff
+
+- **It understands tables.**
+  - Columns match by name, and renamed columns are detected from their contents.
+  - Rows match by an id column when there is one, and by sequence alignment when there isn't.
+  - An edited row reads as *modified*, not as a deletion plus an insertion.
+  - A reordered row reads as *moved*.
+- **It explains formula changes.** Every changed cell is an input edit, a
+  formula edit, or a downstream result. For each result, spreadiff finds
+  the edits that actually moved it by undoing each one and recalculating
+  the workbook with its own formula engine. It also finds results that
+  were saved stale.
+- **It's verified against a real spreadsheet engine.**
+  - Causes and contributions are checked against LibreOffice's
+    recalculation on generated models and on real files saved by Excel.
+  - The same checks run in a browser, on a statically hosted build with
+    the network blocked.
+  - The numbers are [below](#how-correct-is-it).
+- **It's fast.**
+  - The grid draws only the visible cells, so a million-row diff scrolls
+    like a ten-row one.
+  - Parsing, diffing and tracing run in a Web Worker.
+- **It runs anywhere.**
+  - `spreadiff/lite` has no DOM dependency, so the same diff renders in
+    Node, in CI, or on an edge function.
+  - Nothing is sent to a server.
+  - It works under a strict Content-Security-Policy.
+- **It's accessible.**
+  - Screen readers get an ARIA grid of the visible cells, and the arrow
+    keys announce each cell.
+  - Text meets WCAG AA contrast in light and dark, checked by tests,
+    axe-core included.
 
 | Side by side | Downstream changes, traced |
 | --- | --- |
-| ![Split layout: old and new tables side by side, removed values in red, added in green](docs/images/grid-split.png) | ![Hovering a computed cell lists the six edits that caused it, each with its change](docs/images/trace-tooltip.png) |
+| ![Split layout: old and new tables side by side, removed values in red, added in green](docs/images/grid-split.png) | ![Hovering a computed cell lists the six edits that caused it, each with its change and contribution](docs/images/trace-tooltip.png) |
 
 | New value + Δ and % | Static HTML (`spreadiff/lite`) |
 | --- | --- |
@@ -45,68 +60,138 @@ and what drove each one.*
 
 ## Quick start
 
-spreadiff isn't on npm yet; see [Install](docs/getting-started.md#install)
-to build it from this repository.
+spreadiff isn't on npm yet. [Getting started → Install](docs/getting-started.md#install)
+builds it from this repository.
+
+**A grid in the browser:**
 
 ```ts
 import { DiffGrid, diffTables, parseCsv } from 'spreadiff';
 
-const diff = diffTables(parseCsv(before), parseCsv(after)); // matches rows by an id column if there is one
-const grid = new DiffGrid({ layout: 'split', cellDisplay: 'delta' });
-grid.render({ diff, container }); // give the container a height
+const diff = diffTables(parseCsv(before), parseCsv(after)); // rows match by an id column if there is one
+new DiffGrid({ layout: 'split', cellDisplay: 'delta' }).render({ diff, container }); // give the container a height
 ```
 
-With React:
+**Two Excel files, with formulas traced, off the main thread:**
+
+```ts
+import { DiffGrid } from 'spreadiff';
+import { createDiffWorker } from 'spreadiff/worker';
+
+const differ = createDiffWorker(new Worker(new URL('spreadiff/worker/worker.js', import.meta.url), { type: 'module' }));
+const { result, trace } = await differ.diffFiles(oldFile, newFile, {}, { trace: true });
+new DiffGrid({ trace: trace && { trace, workbook: result, sheet: 0 } }).render({ diff: result.sheets[0].diff, container });
+```
+
+**React:**
 
 ```tsx
 import { DiffGrid } from 'spreadiff/react';
 
-export const Review = () => <DiffGrid diff={diff} layout="unified" collapseUnchanged style={{ height: 600 }} />;
+export const Review = () => <DiffGrid diff={diff} layout="unified" style={{ height: 600 }} />;
 ```
 
-As HTML, anywhere:
+**HTML or text, on a server or in CI:**
 
 ```ts
-import { LITE_CSS, renderHTML } from 'spreadiff/lite';
+import { LITE_CSS, renderHTML, renderText } from 'spreadiff/lite';
 
 const html = `<style>${LITE_CSS}</style>` + renderHTML(diff, { layout: 'split' });
+const text = renderText(diff, { changedColumnsOnly: true }); // for a ```diff block in a PR comment
 ```
+
+[Recipes](docs/recipes.md) has complete versions of these and more:
+- explain why a result changed;
+- comment on a pull request;
+- diff two workbooks from the command line;
+- review comments on rows.
+
+## How correct is it?
+
+A diff tool is only useful if it's right, so the tracing is checked
+against LibreOffice, which really recalculates. The cases are five
+generated models and real workbooks from the
+[Apache POI](https://github.com/apache/poi) test corpus, almost all saved
+by Excel. Scripted edits are applied and recalculated, with each edit
+also left out in turn: that gives the ground truth for every cause and
+contribution.
+
+| Check | Result |
+| --- | --- |
+| Changed cells classified correctly (input, formula edit, downstream) | 100% of 2,172 |
+| Causes of downstream changes: precision / recall | 100% / 100% |
+| Contributions equal to LibreOffice's | 3,400 of 3,400 |
+| Formulas whose recalculated value matches the saved one | 99.6% of 46,249 |
+| Values computed for files saved without them | 12,560 of 12,560 |
+| The same checks, in Chromium, hosted, network blocked | 1,955 / 1,955 causes · 3,304 / 3,304 contributions |
+
+When spreadiff's engine can't reproduce a formula, it says so: that
+part of the trace falls back to following references, and is marked
+that way. [Tracing → How it was tested](docs/tracing.md#how-it-was-tested)
+has the method, every number, and the failure cases. `npm run bench:trace`
+and `npm run test:hosted` reproduce them.
 
 ## Entry points
 
 | Import | Contents | min + gzip |
 | --- | --- | --- |
-| `spreadiff/lite` | Diff engine, CSV parser, HTML and text renderers | 12.0 KB |
-| `spreadiff/core` | + XLSX reader, formula engine and tracing | 37.9 KB |
-| `spreadiff` | + canvas `DiffGrid` | 53.1 KB |
+| `spreadiff/lite` | Diff engine, CSV parser, HTML and text renderers. No DOM | 13.1 KB |
+| `spreadiff/core` | + XLSX reader, formula engine and tracing | 38.9 KB |
+| `spreadiff` | + canvas `DiffGrid` | 57.1 KB |
 | `spreadiff/react` | React component for `DiffGrid` | + React |
-| `spreadiff/worker` | Parse and diff in a Web Worker | |
+| `spreadiff/worker` | Parse, diff and trace in a Web Worker | |
 
-## Documentation
+## Performance
 
-- [Getting started](docs/getting-started.md)
-- Guides: [How diffing works](docs/diffing.md) · [Tracing](docs/tracing.md) · [The DiffGrid](docs/grid.md) · [spreadiff/lite](docs/lite.md) · [Theming](docs/theming.md) · [Workers](docs/workers.md)
-- Reference: [API](docs/api.md) · [Performance](docs/performance.md) · [Design notes](docs/design.md)
-
-## Performance, briefly
-
-At 1M rows × 12 columns in headless Chromium on a 4-core VM, the grid's
-95th-percentile frame time was 17.1–21.5 ms while scrolling every row, and
-a keyed diff took 1.1–1.3 s in a worker. One run in three had a single
-~220 ms frame at that size; the cause isn't confirmed yet.
+In headless Chromium on a 4-core VM, with 1M rows × 12 columns, the grid
+scrolled at a 95th-percentile frame time of 17–22 ms in the published
+runs (25–29 ms on a slower day, when Glide Data Grid was slower by the
+same factor). A keyed diff took about 1–1.3 s in a worker. Some runs have
+a single long frame at that size; the cause isn't confirmed. With tracing
+in the worker, the longest stall while loading a 10,000-formula model was
+41–102 ms.
 [Performance](docs/performance.md) has the method, all the numbers, and
 how they could be wrong.
 
+## Browser support
+
+The grid needs Chrome / Edge 111, Firefox 113 or Safari 16.2 (it uses
+CSS `color-mix()`). `lite` and `core` run in Node 18 and any 2022+
+runtime. Testing is in Chromium and Node; Firefox and Safari aren't
+tested yet. See [Browser support](docs/browser-support.md).
+
 ## Limits
 
-- Values come from the cached results in the file. Nothing is
-  recalculated, so tracing finds causes but can't split a change into
-  contributions.
-- The XLSX reader reads values and formulas: no styles, merged cells or
-  legacy `.xls`.
-- Canvas cells aren't exposed to screen readers yet.
+- **Files.** No legacy `.xls`, `.xlsb` or `.ods`. Styles and number
+  formats other than dates aren't read, so a change of format alone isn't
+  a change.
+- **One spreadsheet engine.** Recalculation is spreadiff's own engine,
+  checked against LibreOffice, not Excel. Files saved by different apps
+  can differ slightly with nothing edited.
+- **Untested.** Firefox and Safari aren't tested, and neither is manual
+  screen-reader use (automated accessibility checks pass).
+- **Memory.** Very large files hold both tables in the page's memory.
 
-More in [Design notes → Known gaps](docs/design.md#known-gaps).
+The full list, with what's been closed, is in
+[Design notes → Known gaps](docs/design.md#known-gaps).
+
+## Documentation
+
+- **Start:** [Getting started](docs/getting-started.md) · [Recipes](docs/recipes.md) · [Troubleshooting](docs/troubleshooting.md)
+- **Guides:**
+  - [How diffing works](docs/diffing.md)
+  - [Tracing](docs/tracing.md)
+  - [The DiffGrid](docs/grid.md)
+  - [spreadiff/lite](docs/lite.md)
+  - [Workers](docs/workers.md)
+  - [Theming](docs/theming.md)
+  - [Accessibility](docs/accessibility.md)
+- **Reference:**
+  - [API](docs/api.md)
+  - [Browser support](docs/browser-support.md)
+  - [Performance](docs/performance.md)
+  - [Design notes](docs/design.md)
+  - [Changelog](CHANGELOG.md)
 
 ## This repository
 
@@ -114,8 +199,9 @@ More in [Design notes → Known gaps](docs/design.md#known-gaps).
 | --- | --- |
 | `packages/spreadiff` | The library |
 | `apps/viewer` | A drag-and-drop viewer built on it, with a Glide Data Grid mode for comparison |
-| `bench/` | Scroll benchmark, bundle sizes, browser tests and the render fuzzer |
-| `scripts/` | Documentation checks, screenshot generation, the bundling test |
+| `test/hosted` | Real `.xlsx` fixtures with LibreOffice's answers, for the in-browser test |
+| `bench/` | Scroll benchmark, bundle sizes, browser tests, the render fuzzer, the trace evaluation |
+| `scripts/` | Documentation checks, screenshots, the bundling and hosted tests |
 | `docs/` | The documentation |
 
 ```bash
@@ -125,3 +211,4 @@ npm test           # unit tests
 ```
 
 [CONTRIBUTING.md](CONTRIBUTING.md) lists every check and when to run it.
+spreadiff is [MIT licensed](LICENSE).

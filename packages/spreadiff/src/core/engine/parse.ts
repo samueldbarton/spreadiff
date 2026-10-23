@@ -147,7 +147,14 @@ export function lex(src: string): Tok[] {
         let sheetTo = q[2];
         if (q[0].startsWith("'") && sheet.includes(':')) [sheet, sheetTo] = sheet.split(':');
         const r = refAt(i + q[0].length, sheet, sheetTo);
-        if (!r) throw new Unsupported('sheet-scoped name');
+        if (!r) {
+          // A sheet-scoped name from another sheet (Sheet1!Rate).
+          const id = !sheetTo ? at(IDENT, s, i + q[0].length) : null;
+          if (!id || s[i + q[0].length + id[0].length] === '(') throw new Unsupported('sheet-qualified name');
+          out.push({ k: 'ident', v: `${sheet}!${id[0]}` });
+          i += q[0].length + id[0].length;
+          continue;
+        }
         out.push({ k: 'ref', ref: r.ref });
         i = r.end;
         continue;

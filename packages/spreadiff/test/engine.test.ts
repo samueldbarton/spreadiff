@@ -217,3 +217,24 @@ describe('numericDelta', () => {
     expect(numericDelta(1e-20, 2e-20)!.delta).toBe(1e-20);
   });
 });
+
+describe('but-for of a formula edit', () => {
+  // Old: C1 = B1*B2 = 30, D1 = C1+1 = 31. New: price 10 → 12 and C1 rewritten to B1*B2*2.
+  const t = (price: number, f: string, c: number) => ({
+    name: 'S',
+    columns: ['A', 'B', 'C', 'D'],
+    rows: [['price', price, c, c + 1], ['qty', 3, null, null]],
+    formulas: [[null, null, f, '=C1+1'], []],
+    origin: { row: 0, col: 0 },
+  });
+  it('undoes the formula on today\'s inputs, not by restoring its old result', () => {
+    const d = diffWorkbooks({ name: 'a', sheets: [t(10, '=B1*B2', 30)] }, { name: 'b', sheets: [t(12, '=B1*B2*2', 72)] });
+    const tr = traceWorkbook(d);
+    const width = d.sheets[0].diff.columns.length;
+    const d1 = tr.get({ sheet: 0, row: 0, col: 3 })!;
+    expect(d1.method).toBe('recalculated');
+    const by = Object.fromEntries(d1.causes.map((c, i) => [c.row * width + c.col, d1.contributions![i]]));
+    expect(by[0 * width + 2]).toBe(36); // the formula edit: 73 − (12×3 + 1)
+    expect(by[0 * width + 1]).toBe(12); // the price: 73 − (10×3×2 + 1)
+  });
+});

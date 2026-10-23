@@ -86,6 +86,39 @@ inserted and deleted, and edits are still found.
 
 `diff.keyColumns` tells you which strategy ran: empty means "by order".
 
+### Moved rows
+
+Matching by key finds rows wherever they went, so a reordered row is a
+change of its own: **moved**. spreadiff flags the fewest rows whose moving
+explains the new order: the rows outside a longest run that kept its
+relative order. Move one row up five places, and that row is flagged,
+not the five it jumped over. Swap two, and both are.
+
+`diff.moved[r]` is `1` for a moved row and `diff.stats.rowsMoved` counts
+them. A move is independent of the row's status: a moved row can also be
+modified. Moves count as changes for `hasChanges`.
+
+<!-- example: moved -->
+```ts
+import { diffTables, parseCsv } from 'spreadiff';
+
+const d = diffTables(parseCsv('id,v\n1,a\n2,b\n3,c\n4,d'), parseCsv('id,v\n1,a\n4,D\n2,b\n3,c'), { keys: ['id'] });
+for (let r = 0; r < d.rowCount; r++) if (d.moved[r]) console.log('moved:', d.newTable.rows[d.newRows[r]].join(','));
+console.log(d.stats.rowsMoved, d.stats.rowsModified);
+```
+
+<!-- output: moved -->
+```text
+moved: 4,D
+1 1
+```
+
+The grid marks a moved row with `↕` in the gutter and says where it came
+from in its tooltip. `spreadiff/lite` marks it the same way, the text
+renderer with `~` and "(moved from row N)", and `toUnifiedCsv` with daff's
+`:`. Rows matched **by order** can't move: sequence alignment keeps order
+by construction, so a reordered row there reads as removed + added.
+
 ### By order (when they don't)
 
 Without keys, rows are aligned like lines in a text diff:
@@ -177,6 +210,8 @@ sheet's alignment.
 | Dates | text | ISO strings, from the number format (`2026-01-31`) |
 | Formulas | — | text of each cell, shared and array formulas expanded; values are the cached results, and formulas without one are computed |
 | Header | first row (`header: false` for none) | first non-empty row of the used range, unless it looks like data (`header: 'auto'`) |
+| Merged cells | — | read into `Table.merges`; the value is the top-left cell's |
+| Defined names | — | workbook names in `Workbook.names`, sheet-scoped ones in `Table.names` |
 
 `parseFile(name, bytes)` picks the parser: zip content means XLSX, `.tsv`
 means tab-delimited, anything else is CSV. Legacy `.xls` (BIFF) files are
@@ -204,6 +239,7 @@ strings.
 
 **"Every row shows as changed."** The rows were probably reordered and no
 key was found. Check `diff.keyColumns`; if it's empty, pass `keys: ['your id column']`.
+With a key, reordered rows read as moved, not changed.
 
 **"A row I edited shows as removed + added."** More than half its cells
 changed, so it no longer looks like the same row. If rows have an id, match

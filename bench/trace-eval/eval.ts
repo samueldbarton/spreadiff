@@ -20,6 +20,18 @@ function addressOf(wd: WorkbookDiff, ref: CellRef, side: 'new' | 'old' = 'new'):
   return `${t.name}!${columnLabel(ci + o.col)}${ri + o.row + 1}`;
 }
 
+/** A cell's value by "Sheet!A1" address. */
+function valueAt(wb: ReturnType<typeof read>, address: string) {
+  const bang = address.lastIndexOf('!');
+  const t = wb.sheets.find((x) => x.name === address.slice(0, bang));
+  const m = /^([A-Z]+)(\d+)$/.exec(address.slice(bang + 1));
+  if (!t || !m) return undefined;
+  let c = 0;
+  for (const ch of m[1]) c = c * 26 + ch.charCodeAt(0) - 64;
+  const o = t.origin ?? { row: 1, col: 0 };
+  return t.rows[Number(m[2]) - 1 - o.row]?.[c - 1 - o.col];
+}
+
 /** Every changed cell of a workbook diff, by address. */
 function changedAddresses(wd: WorkbookDiff): Set<string> {
   const out = new Set<string>();
@@ -40,7 +52,7 @@ const time = <T>(f: () => T): [T, number] => {
   return [r, performance.now() - t];
 };
 
-const totals = { cells: 0, kindOk: 0, pairsTP: 0, pairsFP: 0, pairsFN: 0, exact: 0, computed: 0, roundtripFiles: 0, roundtripDirty: 0, roundtripCells: 0, trace: 0 };
+const totals = { contribOk: 0, contribTotal: 0, cells: 0, kindOk: 0, pairsTP: 0, pairsFP: 0, pairsFN: 0, exact: 0, computed: 0, roundtripFiles: 0, roundtripDirty: 0, roundtripCells: 0, trace: 0 };
 const cases = (only.length ? only : readdirSync(dir)).filter((c) => existsSync(join(dir, c, 'manifest.json')));
 for (const name of cases) {
   const base = join(dir, name);
@@ -68,10 +80,13 @@ for (const name of cases) {
   });
   // But-for oracle: edit i caused C if C differs between new and new-without-i.
   const butFor = new Map<string, Set<number>>();
+  const looBooks = new Map<number, ReturnType<typeof read>>(); // edit → LibreOffice's "all edits but this one"
   m.edits.forEach((e: any, i: number) => {
     const loo = e.loo ?? (m.edits.length === 1 ? 'old.xlsx' : null);
     if (!loo) return;
-    const ld = diffWorkbooks(read(join(base, loo)), newWb);
+    const lw = read(join(base, loo));
+    looBooks.set(i, lw);
+    const ld = diffWorkbooks(lw, newWb);
     for (const a of changedAddresses(ld)) {
       if (!butFor.has(a)) butFor.set(a, new Set());
       butFor.get(a)!.add(i);
@@ -82,7 +97,7 @@ for (const name of cases) {
     return bf && bf.size ? bf : movedBy.get(a) ?? new Set<number>();
   };
   const hasInsert = m.edits.some((e: any) => e.kind === 'insert');
-  let cells = 0, kindOk = 0, tp = 0, fp = 0, fn = 0, exact = 0, computed = 0;
+  let cells = 0, kindOk = 0, tp = 0, fp = 0, fn = 0, exact = 0, computed = 0, contribOk = 0, contribTotal = 0;
   const problems: string[] = [];
   wd.sheets.forEach((s, si) => {
     for (const [k, t] of tr.sheet(si)) {
@@ -113,6 +128,20 @@ for (const name of cases) {
       for (const i of got) if (want.has(i)) tp++; else { fp++; ok = false; problems.push(`extra cause ${a} ← edit ${i} (${m.edits[i].sheet}!${m.edits[i].newAddress})`); }
       for (const i of want) if (!got.has(i)) { fn++; ok = false; problems.push(`missing cause ${a} ← edit ${i} (${m.edits[i].sheet}!${m.edits[i].newAddress})`); }
       if (ok) exact++;
+      // Contributions: new value − LibreOffice's value without that edit.
+      t.causes.forEach((c, j) => {
+        const share = t.contributions?.[j];
+        const ca = addressOf(wd, c);
+        const i = ca ? editIndex.get(ca) : undefined;
+        const lw = i !== undefined ? looBooks.get(i) : undefined;
+        if (typeof share !== 'number' || !lw || t.method !== 'recalculated') return;
+        const now = valueAt(newWb, a), before = valueAt(lw, a);
+        if (typeof now !== 'number' || typeof before !== 'number') return;
+        const truth = now - before;
+        contribTotal++;
+        if (Math.abs(share - truth) <= 1e-9 * Math.max(1, Math.abs(truth))) contribOk++;
+        else problems.push(`contribution ${a} ← edit ${i}: got ${share}, LibreOffice ${truth}`);
+      });
     }
   });
   // Edits the diff should have flagged as changed.
@@ -120,6 +149,7 @@ for (const name of cases) {
     const found = [...changedAddresses(wd)].includes(a);
     if (!found) problems.push(`edit not detected: ${a}`);
   }
+  totals.contribOk += contribOk; totals.contribTotal += contribTotal;
   totals.cells += cells; totals.kindOk += kindOk; totals.pairsTP += tp; totals.pairsFP += fp; totals.pairsFN += fn; totals.exact += exact; totals.computed += computed; totals.trace += tTrace;
   console.log(`\n## ${name}: ${cells} changed cells, ${computed} computed · kinds ${kindOk}/${cells} · causes exact ${exact}/${computed} (pairs tp ${tp} fp ${fp} fn ${fn})`);
   console.log(`   parse ${tParse.toFixed(0)} ms · diff ${tDiff.toFixed(1)} ms · trace ${tTrace.toFixed(1)} ms · stats ${JSON.stringify(tr.stats)}${tr.truncated ? ' TRUNCATED' : ''}`);
@@ -145,4 +175,4 @@ for (const name of cases) {
 }
 const pct = (a: number, b: number) => (b ? ((100 * a) / b).toFixed(1) + '%' : 'n/a');
 console.log(`\nround trips: ${totals.roundtripDirty}/${totals.roundtripFiles} files changed, ${totals.roundtripCells} cells · total trace time ${totals.trace.toFixed(0)} ms`);
-console.log(`TOTAL kinds ${pct(totals.kindOk, totals.cells)} of ${totals.cells} · computed cells with exact causes ${pct(totals.exact, totals.computed)} of ${totals.computed} · cause precision ${pct(totals.pairsTP, totals.pairsTP + totals.pairsFP)} recall ${pct(totals.pairsTP, totals.pairsTP + totals.pairsFN)}`);
+console.log(`TOTAL kinds ${pct(totals.kindOk, totals.cells)} of ${totals.cells} · computed cells with exact causes ${pct(totals.exact, totals.computed)} of ${totals.computed} · cause precision ${pct(totals.pairsTP, totals.pairsTP + totals.pairsFP)} recall ${pct(totals.pairsTP, totals.pairsTP + totals.pairsFN)} · contributions equal to LibreOffice's ${totals.contribOk}/${totals.contribTotal}`);

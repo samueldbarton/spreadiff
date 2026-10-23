@@ -12,7 +12,8 @@
     <script type="module">
       // Exposes the library on window for bench/browser-test.mjs.
       import * as sd from 'spreadiff';
-      window.sd = sd;
+      import * as lite from 'spreadiff/lite';
+      window.sd = { ...sd, ...lite };
       window.ready = true;
     </script>
   </body>

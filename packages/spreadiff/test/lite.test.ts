@@ -53,7 +53,7 @@ describe('lite', () => {
     expect(renderText(diffTables(a, b), { context: 0 })).toBe(
       [
         '   id  name      price',
-        '⋯  1 unchanged rows',
+        '⋯  1 unchanged row',
         '-  2   Chair     20',
         '+  2   Armchair  25',
         '⋯  4 unchanged rows',
@@ -65,4 +65,19 @@ describe('lite', () => {
   });
 
   it('ships its CSS', () => expect(LITE_CSS).toContain('.sdl-split'));
+});
+
+describe('changedColumnsOnly keeps what names the rows', () => {
+  it('keeps the row-label column when rows were matched by order', async () => {
+    const { diffTables, parseCsv, renderText } = await import('../src/lite');
+    const d = diffTables(parseCsv('line,a,b\nRevenue,1,2\nCosts,3,4'), parseCsv('line,a,b\nRevenue,1,9\nCosts,3,4'), { keys: 'none' });
+    expect(renderText(d, { changedColumnsOnly: true, context: 0 }).split('\n')[0].trim().split(/\s+/)).toEqual(['line', 'b']);
+  });
+  it('keeps only keys when there are keys, and no label column for numbers', async () => {
+    const { diffTables, parseCsv, renderText } = await import('../src/lite');
+    const keyed = diffTables(parseCsv('id,name,b\n1,x,2\n2,y,4'), parseCsv('id,name,b\n1,x,9\n2,y,4'), { keys: ['id'] });
+    expect(renderText(keyed, { changedColumnsOnly: true, context: 0 }).split('\n')[0].trim().split(/\s+/)).toEqual(['id', 'b']);
+    const numeric = diffTables(parseCsv('a,b\n1,2\n3,4'), parseCsv('a,b\n1,9\n3,4'), { keys: 'none' });
+    expect(renderText(numeric, { changedColumnsOnly: true, context: 0 }).split('\n')[0].trim().split(/\s+/)).toEqual(['b']);
+  });
 });

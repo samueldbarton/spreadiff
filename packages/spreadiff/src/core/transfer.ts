@@ -36,6 +36,10 @@ export interface PackedTable {
   header?: Table['header'];
   /** `Table.arrays`, unchanged. */
   arrays?: Table['arrays'];
+  /** `Table.names`, unchanged. */
+  names?: Table['names'];
+  /** `Table.merges`, unchanged. */
+  merges?: Table['merges'];
 }
 
 const SEP = '\u0000';
@@ -65,7 +69,7 @@ export function packTable(t: Table): PackedTable {
       } else types[i] = v ? 3 : 4;
     }
   }
-  return { name: t.name, columns: t.columns, width, height, types, numbers, strings: parts.join(SEP), formulas: t.formulas && packFormulas(t.formulas), origin: t.origin, header: t.header, arrays: t.arrays };
+  return { name: t.name, columns: t.columns, width, height, types, numbers, strings: parts.join(SEP), formulas: t.formulas && packFormulas(t.formulas), origin: t.origin, header: t.header, arrays: t.arrays, names: t.names, merges: t.merges };
 }
 
 function packFormulas(f: (string | null)[][]): NonNullable<PackedTable['formulas']> {
@@ -124,6 +128,8 @@ export function unpackTable(p: PackedTable): Table {
   if (p.origin) t.origin = p.origin;
   if (p.header) t.header = p.header;
   if (p.arrays) t.arrays = p.arrays;
+  if (p.names) t.names = p.names;
+  if (p.merges) t.merges = p.merges;
   return t;
 }
 
@@ -154,7 +160,7 @@ export function packWorkbookDiff(d: WorkbookDiff): { packed: PackedWorkbookDiff;
         transfer.push(p.types.buffer as ArrayBuffer, p.numbers.buffer as ArrayBuffer);
         if (p.formulas) transfer.push(p.formulas.cells.buffer as ArrayBuffer, p.formulas.lengths.buffer as ArrayBuffer);
       }
-      transfer.push(s.diff.oldRows.buffer as ArrayBuffer, s.diff.newRows.buffer as ArrayBuffer, s.diff.status.buffer as ArrayBuffer);
+      transfer.push(s.diff.oldRows.buffer as ArrayBuffer, s.diff.newRows.buffer as ArrayBuffer, s.diff.status.buffer as ArrayBuffer, s.diff.moved.buffer as ArrayBuffer);
       return { name: s.name, status: s.status, diff: { ...s.diff, oldTable, newTable } };
     }),
     names: d.names,

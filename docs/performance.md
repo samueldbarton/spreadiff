@@ -13,7 +13,7 @@ on this page is a range across repeated runs. Single runs varied by up to
 | How long does the diff take? | 1.1–1.3 s keyed in the browser's worker; 2.9–5.0 s in Node without a key |
 | How long until it's on screen? | 7.4–8.4 s in the benchmark: generate + parse 4.8–4.9 s, diff 1.1–1.3 s, transfer 1.5–2.2 s |
 | How long does a recalculated trace take? | 0.24–0.36 s for a 10,000-formula model; 4.2–5.9 s for 300,000 formulas, 3–5× the references-only trace. See [Tracing → Cost](tracing.md#cost) |
-| What does it cost to ship? | 12.0 KB gzip for `spreadiff/lite`, 53.1 KB for everything |
+| What does it cost to ship? | 13.1 KB gzip for `spreadiff/lite`, 57.1 KB for everything |
 
 The rest of the page shows where each number comes from.
 
@@ -135,15 +135,33 @@ tree-shaken):
 
 | Entry | min | gzip | Contents |
 | --- | --- | --- | --- |
-| `spreadiff/lite` | 30.6 KB | **12.0 KB** | Diff engine, CSV parser, HTML/text renderer |
-| `spreadiff/core` | 99.4 KB | 37.9 KB | + XLSX reader, formula engine and tracing |
-| `spreadiff` | 147.1 KB | 53.1 KB | + canvas `DiffGrid` |
+| `spreadiff/lite` | 33.6 KB | **13.1 KB** | Diff engine, CSV parser, HTML/text renderer |
+| `spreadiff/core` | 102.0 KB | 38.9 KB | + XLSX reader, formula engine and tracing |
+| `spreadiff` | 159.1 KB | 57.1 KB | + canvas `DiffGrid` |
 
 The XLSX reader uses [fflate](https://github.com/101arrowz/fflate), which is
 counted in `core`. Most of `core` is now the formula engine used for
 recalculating traces and computing missing values: before it, `core` was
 about 16 KB gzip. `lite` doesn't import it. `spreadiff/react` adds a thin wrapper on top of
 `spreadiff`. React itself isn't counted.
+
+### The accessibility mirror
+
+The grid keeps a hidden ARIA copy of the visible cells
+([Accessibility](accessibility.md)). To check that it costs nothing
+while scrolling, the scroll benchmark was run with it on and off, in the
+same session, on the same machine. That session was slower overall: Glide
+Data Grid was about 1.6× slower than in the table above.
+
+| Rows | Frame p95, mirror off | Frame p95, mirror on |
+| --- | --- | --- |
+| 100k | 22.3–23.5 ms (3 runs) | 21.5–23.4 ms (4 runs) |
+| 1M | 22.3–28.7 ms (3 runs) | 25.2–26.6 ms (4 runs) |
+
+The ranges overlap. The first single pair of runs at 1M (22.3 against
+26.3 ms) suggested a cost; more runs didn't bear it out. The mirror
+compares only scroll position and selection each frame, and rebuilds
+once scrolling settles.
 
 ## How these numbers could be wrong
 

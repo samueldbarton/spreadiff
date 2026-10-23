@@ -58,8 +58,9 @@ From `spreadiff`, `spreadiff/core`.
 hasChanges(diff: TableDiff): boolean
 ```
 
-True when any row was added, removed or modified, or any column added,
-removed or renamed.
+True when any row was added, removed, modified or moved, or any column
+added, removed or renamed.
+From `spreadiff`, `spreadiff/core`, `spreadiff/lite`.
 
 ### cellsEqual
 
@@ -97,6 +98,7 @@ The result of diffing two tables.
 | `oldRows` | `Int32Array` | Old row per aligned row, `-1` if added |
 | `newRows` | `Int32Array` | New row per aligned row, `-1` if removed |
 | `status` | `Uint8Array` | Row status per aligned row, as [`ROW_STATUS`](#row_status) numbers |
+| `moved` | `Uint8Array` | `1` where a row matched by key moved: the fewest rows whose moving explains the new order. Independent of `status` (a moved row can also be modified). Always `0` when rows were matched by order. See [Moved rows](diffing.md#moved-rows) |
 | `changedCells` | `Map<number, Uint8Array>` | Aligned row → mask over `columns`, `1` where the cell changed. Only modified rows |
 | `formulaChanged` | `Map<number, Uint8Array>` | Same shape: cells whose formula changed in meaning |
 | `keyColumns` | `string[]` | Key columns used; empty when matched by order |
@@ -116,10 +118,11 @@ The result of diffing two tables.
 
 ### DiffStats
 
-`rowsAdded`, `rowsRemoved`, `rowsModified`, `rowsEqual`, `cellsChanged`,
-`columnsAdded`, `columnsRemoved`, `columnsRenamed`, all numbers.
-`cellsChanged` counts changed cells in modified rows only; cells of
-added/removed rows and columns aren't included.
+`rowsAdded`, `rowsRemoved`, `rowsModified`, `rowsEqual`, `rowsMoved`,
+`cellsChanged`, `columnsAdded`, `columnsRemoved`, `columnsRenamed`, all
+numbers. `cellsChanged` counts changed cells in modified rows only; cells
+of added/removed rows and columns aren't included. `rowsMoved` overlaps
+`rowsEqual` and `rowsModified`: a moved row is also one of those.
 
 ### RowStatus
 
@@ -179,6 +182,8 @@ strings: `"2026-01-31"`, `"2026-01-31 14:05:00"` or `"14:05:00"`.
 | `origin` | `{ row, col }?` | Sheet position of `rows[0][0]`, 0-based. Default `{ row: 1, col: 0 }` (A2) |
 | `header` | `CellValue[]?` | The header row's original cells, when the first row became column names. Formula evaluation reads them on the row above `origin.row` |
 | `arrays` | `{ r0, c0, r1, c1 }[]?` | Array-formula and spill blocks, 0-based inclusive sheet coordinates. Every cell of a block holds the block's formula |
+| `merges` | `{ r0, c0, r1, c1 }[]?` | Merged ranges, 0-based inclusive sheet coordinates. The value is in the top-left cell. `DiffGrid` draws an unchanged horizontal merge as one cell |
+| `names` | `Record<string, string>?` | Defined names scoped to this sheet. Its formulas see them over `Workbook.names`; other sheets reach them as `Sheet!Name`. See `scopedNames` |
 
 Build tables by hand when your data isn't a file:
 
@@ -489,6 +494,24 @@ Resolve a structured reference to a sheet range: `structuredRange('Sales',
 `#Totals`, `#This Row` / `@` and column spans. `null` when the table or a
 column isn't known.
 
+### scopedNames
+
+```ts signature
+scopedNames(workbookNames: Record<string, string> | undefined, sheets: readonly { name: string; names?: Record<string, string> }[], sheet: string): Record<string, string> | undefined
+```
+
+The defined names a formula on `sheet` sees: the workbook's, then that
+sheet's own (`Table.names`, which win), plus every sheet's own as
+`Sheet!Name`. Pass the result as `names` to `formulaRefs`:
+
+```ts
+import { formulaRefs, scopedNames, type Workbook } from 'spreadiff';
+declare const wb: Workbook;
+
+const names = scopedNames(wb.names, wb.sheets, 'Inputs');
+const refs = formulaRefs('=A1*Rate', names); // Inputs' own Rate, if it has one
+```
+
 ### SheetRange
 
 `{ sheet, r0, c0, r1, c1 }`: 0-based, inclusive sheet coordinates. `sheet`
@@ -555,7 +578,7 @@ behavior: `layout`, `cellDisplay`, `collapseUnchanged`, `context`,
 `hideUnchangedColumns`, `frozenColumns`, `columnWidths`, `rowNumberOffset`,
 `theme`, `minimap`, `tooltips`, `highlightComputed`, `trace`, `traceFocus`,
 `annotations`, `renderAnnotation`, `onCellClick`, `onCellHover`,
-`onSelectionChange`.
+`onSelectionChange`, `accessibility`, `ariaLabel`.
 
 ### DiffGridRenderProps
 
@@ -579,6 +602,7 @@ change](grid.md#displaying-a-change).
 | `columnIndex` | `number` | Aligned column index |
 | `status` | `RowStatus` | Row status |
 | `changed` | `boolean` | The cell changed |
+| `moved` | `boolean` | The row moved (see `TableDiff.moved`) |
 | `oldRow`, `newRow` | `number` | Row indexes, `-1` when missing |
 | `oldValue`, `newValue` | `CellValue \| undefined` | `undefined` when the cell doesn't exist on that side |
 | `oldFormula`, `newFormula` | `string \| null \| undefined` | Formula text, `null` if none |
@@ -587,8 +611,12 @@ change](grid.md#displaying-a-change).
 
 ### CellAnnotation
 
-`{ row: number; column?: string; data: A }`: a note rendered below aligned
-row `row`; `column` also marks that cell. See [Annotations](grid.md#annotations).
+`{ row: number; column?: string; data: A; id?: string | number }`: a note
+rendered below aligned row `row`; `column` also marks that cell.
+Annotations are matched across `setOptions` calls by `id`, or else by row
+and column, so a fresh array of equal annotations keeps its elements; one
+is re-rendered only when its `data` changes (`===`). See
+[Annotations](grid.md#annotations).
 
 ### TraceContext
 
@@ -651,7 +679,7 @@ logs and ```` ```diff ```` blocks. `maxWidth` (default 24) caps column width.
 | `layout` | `'split'` | `'split'` or `'unified'` |
 | `display` | `'stacked'` | How changed cells read |
 | `context` | `2` | Unchanged rows around each change |
-| `changedColumnsOnly` | `false` | Only changed columns (and keys) |
+| `changedColumnsOnly` | `false` | Only changed columns, plus keys (or the row-label column when rows were matched by order) |
 | `maxRows` | `2000` | Rows of output before truncating |
 | `kindOf` | — | `(row, col) => ChangeKind \| undefined` override |
 | `rowNumberOffset` | from `origin` | Displayed number of row index 0 |
@@ -717,7 +745,8 @@ toUnifiedCsv(diff: TableDiff): string
 
 The diff as a CSV readable in any spreadsheet app, in daff's "highlighter"
 style:
-- a first column of `+++` (added), `---` (removed) or `->` (modified);
+- a first column of `+++` (added), `---` (removed), `->` (modified) or
+  `:` (moved, otherwise unchanged);
 - changed cells as `old->new`.
 
 Cells that would run as formulas when opened (`=`, `+`, `-`, `@`, except

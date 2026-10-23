@@ -11,14 +11,17 @@
  * re-resolve when the color scheme or host attributes change.
  */
 
-export const STYLE = /* css */ `
+import { lightDarkFallback } from '../core/lightdark.js';
+
+const BASE_STYLE = /* css */ `
 :host, .sd-root {
   color-scheme: light dark;
   --sdi-mixer: var(--sd-mixer, light-dark(#000, #fff));
   --sdi-bg: var(--sd-bg, light-dark(#ffffff, #0b0b0c));
   --sdi-fg: var(--sd-fg, light-dark(#0b0b0c, #ededef));
-  --sdi-fg-muted: var(--sd-fg-muted, color-mix(in srgb, var(--sdi-fg) 52%, var(--sdi-bg)));
-  --sdi-fg-faint: var(--sd-fg-faint, color-mix(in srgb, var(--sdi-fg) 32%, var(--sdi-bg)));
+  /* Secondary text tiers, both WCAG AA (4.5:1) on the backgrounds they're drawn on. */
+  --sdi-fg-muted: var(--sd-fg-muted, color-mix(in srgb, var(--sdi-fg) 66%, var(--sdi-bg)));
+  --sdi-fg-faint: var(--sd-fg-faint, color-mix(in srgb, var(--sdi-fg) 58%, var(--sdi-bg)));
   --sdi-border: var(--sd-border, color-mix(in srgb, var(--sdi-bg) 90%, var(--sdi-mixer)));
   --sdi-border-strong: var(--sd-border-strong, color-mix(in srgb, var(--sdi-bg) 80%, var(--sdi-mixer)));
   --sdi-header-bg: var(--sd-header-bg, color-mix(in srgb, var(--sdi-bg) 97%, var(--sdi-mixer)));
@@ -32,11 +35,14 @@ export const STYLE = /* css */ `
   --sdi-removed-bg: var(--sd-removed-bg, light-dark(color-mix(in srgb, var(--sdi-removed) 9%, var(--sdi-bg)), color-mix(in srgb, var(--sdi-removed) 12%, var(--sdi-bg))));
   --sdi-added-emphasis: var(--sd-added-emphasis, light-dark(color-mix(in srgb, var(--sdi-added) 22%, var(--sdi-bg)), color-mix(in srgb, var(--sdi-added) 28%, var(--sdi-bg))));
   --sdi-removed-emphasis: var(--sd-removed-emphasis, light-dark(color-mix(in srgb, var(--sdi-removed) 20%, var(--sdi-bg)), color-mix(in srgb, var(--sdi-removed) 26%, var(--sdi-bg))));
-  --sdi-added-fg: var(--sd-added-fg, color-mix(in srgb, var(--sdi-added) 70%, var(--sdi-fg)));
-  --sdi-removed-fg: var(--sd-removed-fg, color-mix(in srgb, var(--sdi-removed) 70%, var(--sdi-fg)));
+  /* Text in the added/removed hues: WCAG AA (4.5:1) on the background and on the tinted cells. */
+  --sdi-added-fg: var(--sd-added-fg, light-dark(color-mix(in srgb, var(--sdi-added) 62%, #000), color-mix(in srgb, var(--sdi-added) 70%, var(--sdi-fg))));
+  --sdi-removed-fg: var(--sd-removed-fg, light-dark(color-mix(in srgb, var(--sdi-removed) 62%, #000), color-mix(in srgb, var(--sdi-removed) 70%, var(--sdi-fg))));
+  --sdi-modified-fg: var(--sd-modified-fg, light-dark(color-mix(in srgb, var(--sdi-modified) 62%, #000), var(--sdi-modified)));
   --sdi-selection: var(--sd-selection, var(--sdi-modified));
   /* Downstream (computed) changes: same formula, new result. */
   --sdi-computed: var(--sd-computed, light-dark(#e08a00, #f5b83d));
+  --sdi-computed-fg: var(--sd-computed-fg, light-dark(color-mix(in srgb, var(--sdi-computed) 62%, #000), var(--sdi-computed)));
   --sdi-computed-emphasis: var(--sd-computed-emphasis, light-dark(color-mix(in srgb, var(--sdi-computed) 13%, var(--sdi-bg)), color-mix(in srgb, var(--sdi-computed) 15%, var(--sdi-bg))));
   /* Formula edits. */
   --sdi-formula: var(--sd-formula, light-dark(#7c3aed, #a78bfa));
@@ -60,6 +66,11 @@ export const STYLE = /* css */ `
 :host([data-theme="light"]), .sd-root[data-theme="light"] { color-scheme: light; }
 :host([data-theme="dark"]), .sd-root[data-theme="dark"] { color-scheme: dark; }
 
+.sd-a11y {
+  /* Visually hidden, still read by screen readers. */
+  position: absolute; top: 0; left: 0; width: 1px; height: 1px;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; pointer-events: none;
+}
 .sd-scroller {
   position: absolute; inset: 0;
   overflow: auto;
@@ -105,8 +116,8 @@ export const STYLE = /* css */ `
 .sd-tooltip .sd-tt-row { display: grid; grid-template-columns: 14px 1fr; gap: 6px; align-items: start; }
 .sd-tooltip .sd-tt-sign { font-family: var(--sdi-mono-font-family); color: var(--sdi-fg-muted); }
 .sd-tooltip .sd-tt-val { font-family: var(--sdi-mono-font-family); word-break: break-word; white-space: pre-wrap; }
-.sd-tooltip .sd-tt-old .sd-tt-sign { color: var(--sdi-removed); }
-.sd-tooltip .sd-tt-new .sd-tt-sign { color: var(--sdi-added); }
+.sd-tooltip .sd-tt-old .sd-tt-sign { color: var(--sdi-removed-fg); }
+.sd-tooltip .sd-tt-new .sd-tt-sign { color: var(--sdi-added-fg); }
 .sd-tooltip del { background: var(--sdi-removed-emphasis); text-decoration: none; border-radius: 3px; }
 .sd-tooltip ins { background: var(--sdi-added-emphasis); text-decoration: none; border-radius: 3px; }
 .sd-tooltip .sd-tt-delta {
@@ -115,26 +126,39 @@ export const STYLE = /* css */ `
   font-family: var(--sdi-mono-font-family);
   color: var(--sdi-fg-muted);
 }
-.sd-tooltip .sd-tt-delta b[data-sign="+"] { color: var(--sdi-added); font-weight: 600; }
-.sd-tooltip .sd-tt-delta b[data-sign="-"] { color: var(--sdi-removed); font-weight: 600; }
+.sd-tooltip .sd-tt-delta b[data-sign="+"] { color: var(--sdi-added-fg); font-weight: 600; }
+.sd-tooltip .sd-tt-delta b[data-sign="-"] { color: var(--sdi-removed-fg); font-weight: 600; }
 .sd-tooltip .sd-tt-trace { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--sdi-border); }
 .sd-tooltip .sd-tt-trace-title { color: var(--sdi-fg-muted); font-size: 11px; margin-bottom: 4px; }
 .sd-tooltip .sd-tt-kind { font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; padding: 1px 5px; border-radius: 4px; }
-.sd-tooltip .sd-tt-kind[data-kind="computed"] { color: var(--sdi-computed); background: var(--sdi-computed-emphasis); }
-.sd-tooltip .sd-tt-kind[data-kind="input"] { color: var(--sdi-modified); background: color-mix(in srgb, var(--sdi-modified) 14%, transparent); }
+.sd-tooltip .sd-tt-kind[data-kind="computed"] { color: var(--sdi-computed-fg); background: var(--sdi-computed-emphasis); }
+.sd-tooltip .sd-tt-kind[data-kind="input"] { color: var(--sdi-modified-fg); background: color-mix(in srgb, var(--sdi-modified) 14%, transparent); }
 .sd-tooltip .sd-tt-kind[data-kind="formula"] { color: var(--sdi-formula); background: color-mix(in srgb, var(--sdi-formula) 14%, transparent); }
 .sd-tooltip .sd-tt-cause { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; font-family: var(--sdi-mono-font-family); font-size: 11px; line-height: 1.6; }
 .sd-tooltip .sd-tt-cause .sd-tt-ref { color: var(--sdi-fg-muted); }
-.sd-tooltip .sd-tt-cause .sd-tt-d[data-sign="+"] { color: var(--sdi-added); }
-.sd-tooltip .sd-tt-cause .sd-tt-d[data-sign="-"] { color: var(--sdi-removed); }
+.sd-tooltip .sd-tt-cause .sd-tt-d[data-sign="+"] { color: var(--sdi-added-fg); }
+.sd-tooltip .sd-tt-cause .sd-tt-d[data-sign="-"] { color: var(--sdi-removed-fg); }
 .sd-tooltip .sd-tt-cause.sd-tt-has-share { grid-template-columns: auto 1fr auto 4.5em; }
 .sd-tooltip .sd-tt-share { text-align: right; font-weight: 600; color: var(--sdi-fg); }
 .sd-tooltip .sd-tt-note { margin-top: 4px; color: var(--sdi-fg-faint); font-size: 10.5px; line-height: 1.35; }
 .sd-tooltip .sd-tt-stale { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--sdi-border); color: var(--sdi-fg-muted); font-size: 11px; }
+.sd-tooltip .sd-tt-moved { margin: 2px 0 4px; color: var(--sdi-modified-fg); font-size: 11.5px; font-weight: 500; }
 .sd-tooltip .sd-tt-stale b { color: var(--sdi-fg); font-family: var(--sdi-mono-font-family); font-weight: 600; }
 .sd-tooltip .sd-tt-formula { color: var(--sdi-fg-muted); font-family: var(--sdi-mono-font-family); font-size: 11px; }
 .sd-probe { position: absolute; width: 0; height: 0; visibility: hidden; pointer-events: none; }
 `;
+
+/** The tokens block above, for deriving the no-`light-dark()` fallback. */
+const TOKENS = /:host, \.sd-root \{([\s\S]*?)\n\}/.exec(BASE_STYLE)![1].replace(/\/\*[\s\S]*?\*\//g, '');
+
+/** The grid's stylesheet, with a fallback for browsers without `light-dark()`. */
+export const STYLE =
+  BASE_STYLE +
+  lightDarkFallback(TOKENS, {
+    light: ':host, .sd-root',
+    darkWhenSystem: ':host(:not([data-theme="light"])), .sd-root:not([data-theme="light"])',
+    darkForced: ':host([data-theme="dark"]), .sd-root[data-theme="dark"]',
+  });
 
 export interface Theme {
   bg: string;
@@ -156,6 +180,10 @@ export interface Theme {
   removedEmphasis: string;
   addedFg: string;
   removedFg: string;
+  /** Text and glyphs in the modified hue (AA contrast). */
+  modifiedFg: string;
+  /** Text and outlines in the computed hue (AA contrast). */
+  computedFg: string;
   selection: string;
   computed: string;
   computedEmphasis: string;
@@ -189,6 +217,8 @@ const COLOR_TOKENS: [keyof Theme, string][] = [
   ['removedEmphasis', '--sdi-removed-emphasis'],
   ['addedFg', '--sdi-added-fg'],
   ['removedFg', '--sdi-removed-fg'],
+  ['modifiedFg', '--sdi-modified-fg'],
+  ['computedFg', '--sdi-computed-fg'],
   ['computed', '--sdi-computed'],
   ['computedEmphasis', '--sdi-computed-emphasis'],
   ['formula', '--sdi-formula'],

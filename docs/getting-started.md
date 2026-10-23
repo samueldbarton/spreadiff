@@ -14,19 +14,25 @@ cd spreadiff && npm install && npm run build -w spreadiff
 cd /path/to/your/app && npm install /path/to/spreadiff/packages/spreadiff
 ```
 
-Requirements: a bundler that understands package `exports` (Vite, webpack 5,
-esbuild, Rollup) and an ES2022 target. React 18+ is needed only for
-`spreadiff/react`.
+Requirements:
+- a bundler that understands package `exports` (Vite, webpack 5, esbuild,
+  Rollup) and an ES2022 target;
+- for the grid, a browser from 2023 or later (Chrome / Edge 111, Firefox
+  113, Safari 16.2). `lite` and `core` also run in Node 18+;
+- React 18+, only for `spreadiff/react`.
+
+Details, including CSP and server-side rendering, are in
+[Browser support](browser-support.md).
 
 ## Pick an entry point
 
 | Import | Use it for | Size (min+gzip) |
 | --- | --- | --- |
-| `spreadiff/lite` | Diff + CSV + an HTML/text renderer. No canvas or DOM APIs, so it runs on servers too | 12.0 KB |
-| `spreadiff/core` | The diff engine, CSV and XLSX parsers, formula tracing. No rendering | 37.9 KB |
-| `spreadiff` | Everything in core plus the canvas `DiffGrid` | 53.1 KB |
+| `spreadiff/lite` | Diff + CSV + an HTML/text renderer. No canvas or DOM APIs, so it runs on servers too | 13.1 KB |
+| `spreadiff/core` | The diff engine, CSV and XLSX parsers, formula tracing. No rendering | 38.9 KB |
+| `spreadiff` | Everything in core plus the canvas `DiffGrid` | 57.1 KB |
 | `spreadiff/react` | The `DiffGrid` React component | + React |
-| `spreadiff/worker` | Parse and diff in a Web Worker | small client + worker |
+| `spreadiff/worker` | Parse, diff and trace in a Web Worker | small client + worker |
 
 Rule of thumb:
 - To review a handful of edits, especially outside a browser, use `lite`.
@@ -115,10 +121,12 @@ import { createDiffWorker } from 'spreadiff/worker';
 const differ = createDiffWorker(
   new Worker(new URL('spreadiff/worker/worker.js', import.meta.url), { type: 'module' }),
 );
-const { result } = await differ.diffFiles(oldFile, newFile);
+const { result, trace } = await differ.diffFiles(oldFile, newFile, {}, { trace: true });
 ```
 
-See [Workers](workers.md) for bundler notes and what crosses the boundary.
+`{ trace: true }` also traces formulas in the worker (next section), which
+can take seconds on a large model. See [Workers](workers.md) for bundler
+notes and what crosses the boundary.
 
 ## 4. Spreadsheets with formulas
 
@@ -134,11 +142,16 @@ const grid = new DiffGrid({ trace: { trace, workbook: workbookDiff, sheet: 0 } }
 ```
 
 Downstream changes show in amber, and hovering one lists the edits that
-caused it. See [Tracing downstream changes](tracing.md).
+caused it, each with how much it contributed. The trace recalculates the
+workbook to find them, so it also notices a file saved with stale
+results. See [Tracing downstream changes](tracing.md).
 
 ## Next steps
 
-- [How diffing works](diffing.md): keys, row order, renames, options, and when results surprise you.
+- [Recipes](recipes.md): complete solutions to common jobs.
+- [How diffing works](diffing.md): keys, moved rows, renames, options, and when results surprise you.
 - [The DiffGrid](grid.md): layouts, display modes, annotations, events, keyboard.
 - [Theming](theming.md): colors, fonts and dark mode through CSS variables.
+- [Accessibility](accessibility.md): what screen-reader and keyboard users get.
+- [Troubleshooting](troubleshooting.md): symptoms, causes and fixes.
 - [API reference](api.md): every export.

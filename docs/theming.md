@@ -47,24 +47,26 @@ some other way from script, call `grid.refreshTheme()`.
 | `--sd-bg` | `#ffffff` / `#0b0b0c` | Background |
 | `--sd-fg` | `#0b0b0c` / `#ededef` | Text |
 | `--sd-mixer` | `#000` / `#fff` | Mixed into `--sd-bg` to derive surfaces below |
-| `--sd-fg-muted` | 52% fg | Secondary text: removed rows, separators, old values of computed changes |
-| `--sd-fg-faint` | 32% fg | Row numbers, column letters |
+| `--sd-fg-muted` | 66% fg | Secondary text: removed rows, separators, old values of computed changes |
+| `--sd-fg-faint` | 58% fg | Row numbers, column letters |
 | `--sd-border` | bg + 10% mixer | Grid lines |
 | `--sd-border-strong` | bg + 20% mixer | Header rule, frozen-column edge, split divider |
 | `--sd-header-bg` | bg + 3% mixer | Column header row |
 | `--sd-gutter-bg` | bg + 2% mixer | Row-number gutter, annotation rows, minimap |
 | `--sd-separator-bg` | bg + 4.5% mixer | "N unchanged rows" separators; the old-value band of computed changes |
 | `--sd-hover` | 4% fg | Hover highlight |
-| `--sd-added` | `#0dbe4e` / `#5ecc71` | Added: row bars, `+` signs, minimap, positive deltas |
-| `--sd-removed` | `#ff2e3f` / `#ff6762` | Removed: row bars, `−` signs, minimap, negative deltas |
-| `--sd-modified` | `#009fff` / `#69b1ff` | Modified rows' bar and dot, change-count badges, rename arrows, annotation markers, cause outlines |
+| `--sd-added` | `#0dbe4e` / `#5ecc71` | Added: row bars, tints, minimap |
+| `--sd-removed` | `#ff2e3f` / `#ff6762` | Removed: row bars, tints, minimap |
+| `--sd-modified` | `#009fff` / `#69b1ff` | Modified rows' bar, selection ring, badge tint, annotation markers |
+| `--sd-modified-fg` | modified + 38% black / modified | Text and glyphs in the modified hue: the modified dot, `↕` for moved rows, change counts, rename arrows, cause outlines |
 | `--sd-added-bg` | added at 9% / 12% | Tint of added rows and columns |
 | `--sd-removed-bg` | removed at 9% / 12% | Tint of removed rows and columns |
 | `--sd-added-emphasis` | added at 22% / 28% | Background of a changed cell's new value |
 | `--sd-removed-emphasis` | removed at 20% / 26% | Background of a changed cell's old value |
-| `--sd-added-fg` | 70% added | Names of added columns |
-| `--sd-removed-fg` | 70% removed | Old values in `stacked` display, names of removed columns |
-| `--sd-computed` | `#e08a00` / `#f5b83d` | Downstream changes: tint base, impact outlines, the tooltip's kind label |
+| `--sd-added-fg` | added + 38% black / 70% added | Text in the added hue: `+` signs, positive deltas, names of added columns, NEW labels |
+| `--sd-removed-fg` | removed + 38% black / 70% removed | Text in the removed hue: `−` signs, negative deltas, old values in `stacked` display, names of removed columns |
+| `--sd-computed` | `#e08a00` / `#f5b83d` | Downstream changes: tint base |
+| `--sd-computed-fg` | computed + 38% black / computed | Text and outlines in the computed hue: impact outlines, the tooltip's kind label |
 | `--sd-computed-emphasis` | computed at 13% / 15% | Background of downstream changes |
 | `--sd-formula` | `#7c3aed` / `#a78bfa` | The `ƒ` on formula edits |
 | `--sd-selection` | `--sd-modified` | Selected-cell ring |
@@ -79,10 +81,20 @@ some other way from script, call `grid.refreshTheme()`.
 Percentages are `color-mix(in srgb, …)` with the background, so a token
 stays legible whatever the base colors are.
 
+**Contrast.** The defaults meet WCAG AA: text and glyphs are 4.5:1 or
+better against every background they're drawn on, in light and dark. A
+browser test checks the canvas colors, and axe-core checks the DOM. The
+bright status colors stay on bars and tints. Wherever a status color is
+*text*, the grid uses its `-fg` variant, which is darkened in light mode.
+If you set `--sd-added`, `--sd-removed`, `--sd-modified` or
+`--sd-computed`, the `-fg` variants follow. Check a custom palette's text
+contrast yourself, though: a pale base color can still give a pale `-fg`.
+See [Accessibility](accessibility.md).
+
 [`spreadiff/lite`](lite.md#styling) reads the base colors and fonts too:
 `--sd-bg`, `--sd-fg`, `--sd-added`, `--sd-removed`, `--sd-modified`,
-`--sd-computed`, `--sd-formula`, `--sd-font-family` and
-`--sd-mono-font-family`.
+`--sd-computed`, `--sd-formula`, `--sd-added-fg`, `--sd-removed-fg`,
+`--sd-modified-fg`, `--sd-font-family` and `--sd-mono-font-family`.
 
 ## How it works
 

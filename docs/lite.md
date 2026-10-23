@@ -2,7 +2,7 @@
 
 `spreadiff/lite` renders a diff as an **HTML string** or as **plain text**.
 It uses no canvas, no DOM APIs and no workers, so the same call works in a
-browser, a Node server, a CI job or a static-site build. At 12.0 KB
+browser, a Node server, a CI job or a static-site build. At 13.1 KB
 (min+gzip) for the diff engine, the CSV parser and both renderers, it's the
 lightest way to use spreadiff.
 
@@ -40,7 +40,7 @@ Cell values are HTML-escaped: rendering an untrusted file is safe.
 | `layout` | `'split'` | `'split'` or `'unified'` |
 | `display` | `'stacked'` | `'stacked'`, `'new'`, `'delta'` or `'inline'`, as in the [grid](grid.md#displaying-a-change) |
 | `context` | `2` | Unchanged rows shown around each change |
-| `changedColumnsOnly` | `false` | Only columns with changes (plus key columns) |
+| `changedColumnsOnly` | `false` | Only columns with changes, plus key columns (or, when rows were matched by order, the first mostly-text column, which names the rows) |
 | `maxRows` | `2000` | Stop after this many rows; a note says how many more changed rows exist |
 | `kindOf` | local | `(row, col) => ChangeKind` override, e.g. from a [trace](tracing.md) |
 | `rowNumberOffset` | from `origin` | Row number of row index 0 |
@@ -74,7 +74,7 @@ console.log(renderText(diffTables(before, after), { context: 0 }));
 <!-- output: render-text -->
 ```text
    id  name      price
-⋯  1 unchanged rows
+⋯  1 unchanged row
 -  2   Chair     20
 +  2   Armchair  25
 ⋯  4 unchanged rows
@@ -85,16 +85,21 @@ console.log(renderText(diffTables(before, after), { context: 0 }));
 Columns are padded to their widest value (capped by `maxWidth`, default 24
 characters) and line breaks inside cells become spaces.
 
+When rows are matched by key, a row that [moved](diffing.md#moved-rows) is
+marked: `~` and "(moved from row N)" in text, `↕` with the same title in
+HTML. A moved row that also changed shows its `-`/`+` pair, with the note
+on the `+` line.
+
 ## Recipes
 
 ### A pull-request comment from CI
 
 ```ts
 import { readFileSync } from 'node:fs';
-import { diffTables, parseCsv, renderText } from 'spreadiff/lite';
+import { diffTables, hasChanges, parseCsv, renderText } from 'spreadiff/lite';
 
 const d = diffTables(parseCsv(readFileSync('prices.base.csv', 'utf8')), parseCsv(readFileSync('prices.csv', 'utf8')));
-const body = d.stats.rowsAdded + d.stats.rowsRemoved + d.stats.rowsModified === 0
+const body = !hasChanges(d)
   ? 'No changes to prices.csv'
   : `**prices.csv**: ${d.stats.rowsModified} edited, ${d.stats.rowsAdded} added, ${d.stats.rowsRemoved} removed\n\n` +
     '```diff\n' + renderText(d, { changedColumnsOnly: true }) + '```';

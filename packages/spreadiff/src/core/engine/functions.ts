@@ -464,7 +464,7 @@ function indirectFn(args: Node[], ctx: Ctx): Value {
     node = parseFormula(t);
   } catch {
     // A defined name?
-    if (lookupName(ctx.host.names, t) !== undefined) node = { t: 'name', name: t };
+    if (lookupName(ctx.host.namesFor ? ctx.host.namesFor(ctx.sheet) : ctx.host.names, t) !== undefined) node = { t: 'name', name: t };
     else return ERR.ref;
   }
   if (node.t !== 'ref' && node.t !== 'name' && !(node.t === 'binary' && node.op === ':')) return ERR.ref;

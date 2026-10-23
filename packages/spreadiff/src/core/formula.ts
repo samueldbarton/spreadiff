@@ -161,7 +161,16 @@ export function tokenizeFormula(formula: string): {
           i = ref.end;
           continue;
         }
-        // Sheet-scoped name (Sheet1!Rate) or 3-D ref: can't resolve.
+        // Sheet-scoped name from another sheet (Sheet1!Rate), resolved as "Sheet1!Rate".
+        const nm = at(IDENT, f, i + q[0].length);
+        if (nm && f[i + q[0].length + nm[0].length] !== '(' && colon < 0) {
+          const qualified = `${sheet}!${nm[0]}`;
+          names.push(qualified);
+          flush();
+          tokens.push({ type: 'text', text: `\u0000name:${qualified.toUpperCase()}\u0000` });
+          i += q[0].length + nm[0].length;
+          continue;
+        }
         dynamic = true;
         text += q[0];
         i += q[0].length;
@@ -366,6 +375,33 @@ export function structuredRange(table: string, spec: string, context?: FormulaCo
   }
   if (r0 > r1) return null;
   return { sheet: def.sheet, r0, r1, c0, c1 };
+}
+
+/**
+ * The defined names a formula on `sheet` sees: the workbook's, then that
+ * sheet's own (`Table.names`, which win), plus every sheet's own as
+ * `Sheet!Name`. Pass the result as `names` to {@link formulaRefs}.
+ */
+export function scopedNames(
+  workbookNames: Record<string, string> | undefined,
+  sheets: readonly { name: string; names?: Record<string, string> }[],
+  sheet: string,
+): Record<string, string> | undefined {
+  if (!sheets.some((s) => s.names)) return workbookNames;
+  const out: Record<string, string> = { ...workbookNames };
+  for (const s of sheets) {
+    if (!s.names) continue;
+    for (const [k, v] of Object.entries(s.names)) out[`${s.name}!${k}`] = qualify(v, s.name);
+  }
+  const own = sheets.find((s) => s.name === sheet)?.names;
+  if (own) for (const [k, v] of Object.entries(own)) out[k] = qualify(v, sheet);
+  return out;
+}
+
+/** A sheet-scoped name's unqualified references ($B$2) point at its own sheet. */
+function qualify(formula: string, sheet: string): string {
+  const prefix = /^[A-Za-z_][\w.]*$/.test(sheet) ? sheet : `'${sheet.replace(/'/g, "''")}'`;
+  return formula.replace(/("[^"]*")|((?:'(?:[^']|'')+'|[A-Za-z_][\w.]*)!)?(\$?[A-Z]{1,3}\$?\d+(?::\$?[A-Z]{1,3}\$?\d+)?)(?![\w(!])/g, (all, str, q, ref) => (str || q ? all : `${prefix}!${ref}`));
 }
 
 export function lookupName(names: Record<string, string> | undefined, name: string): string | undefined {

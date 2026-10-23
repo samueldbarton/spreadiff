@@ -53,7 +53,7 @@ Props are the [options](#options) plus `diff`, `className` and `style`. The
 
 | `layout: 'unified'` | `layout: 'split'` |
 | --- | --- |
-| One grid. A changed cell shows old and new together. Two row-number gutters (old, new) and a `+`, `−` or dot marker per row | Old on the left, new on the right, rows aligned and scrolled together. Rows and columns that exist on one side only are hatched on the other |
+| One grid. A changed cell shows old and new together. Two row-number gutters (old, new) and a marker per row: `+` added, `−` removed, a dot for modified, `↕` for moved | Old on the left, new on the right, rows aligned and scrolled together. Rows and columns that exist on one side only are hatched on the other |
 | ![](images/grid-unified.png) | ![](images/grid-split.png) |
 
 For a code-review-style split view rendered as HTML instead of canvas, see
@@ -77,7 +77,13 @@ In every display:
 - downstream (computed) changes are **amber**, and formula edits carry an
   `ƒ` in the corner ([Tracing](tracing.md));
 - the hover popover always shows the full old → new, a character-level
-  diff for text, and the Δ for numbers.
+  diff for text, and the Δ for numbers;
+- a row that moved (rows matched by key) shows `↕` in the gutter, and its
+  popover says which row it moved from ([Moved rows](diffing.md#moved-rows));
+- an XLSX merge across columns (a title over a block, say) draws as one
+  cell where nothing in it changed. A changed cell inside a merge keeps its
+  own box, so both values stay visible. Merges down rows are drawn cell by
+  cell: an inserted row can split them.
 
 ## Options
 
@@ -87,7 +93,7 @@ In every display:
 | `cellDisplay` | `'stacked'` | `'stacked'`, `'new'`, `'delta'` or `'inline'` |
 | `collapseUnchanged` | `true` | Fold runs of unchanged rows into separators. Click one to expand it |
 | `context` | `2` | Unchanged rows kept around each change when folding |
-| `hideUnchangedColumns` | `false` | Hide columns with no changed cells (key, added, removed, renamed columns stay) |
+| `hideUnchangedColumns` | `false` | Hide columns with no changed cells. Key, added, removed and renamed columns stay; without keys, so does the first mostly-text column, which names the rows |
 | `frozenColumns` | `'keys'` | Pin columns while scrolling sideways: `'keys'` moves the key columns to the front and pins them; a number pins that many leading columns |
 | `columnWidths` | — | Fixed widths in px, by column name. Others size to their content (also resizable by dragging a header edge) |
 | `rowNumberOffset` | from `origin` | Added to row indexes for display. By default numbers match the sheet |
@@ -102,10 +108,12 @@ In every display:
 | `onCellClick` | — | `(cell, event)`, on pointer down on a cell |
 | `onCellHover` | — | `(cell \| null)`, when the pointer enters a cell or leaves the cells |
 | `onSelectionChange` | — | `(cell \| null)`, whenever the selection changes, by any means |
+| `accessibility` | `true` | Mirror the visible cells as hidden ARIA rows and cells for screen readers; see [Accessibility](#accessibility) |
+| `ariaLabel` | a change summary | The grid's accessible name, e.g. "Spreadsheet diff: 3 rows modified, 1 row added, 7 cells changed" |
 
 Callbacks receive a [`CellInfo`](api.md#cellinfo): the aligned row and
 column, row status, old and new values and formulas, whether the cell
-changed, its change kind, and its trace.
+changed or its row moved, its change kind, and its trace.
 
 ## Methods
 
@@ -133,7 +141,7 @@ changed, its change kind, and its trace.
 | Esc | Clear the selection |
 | Tab | Leave the grid (never trapped) |
 | Click a cell | Select it |
-| Hover a changed cell | Popover after a short delay |
+| Hover a changed cell, or a cell of a moved row | Popover after a short delay |
 | Click a "N unchanged rows" separator | Expand it |
 | Click the minimap | Jump there |
 | Drag a header's right edge | Resize the column |
@@ -180,16 +188,29 @@ export function Annotated() {
 }
 ```
 
-Keep the `annotations` array referentially stable (`useMemo`): a new array
-re-creates every annotation element.
+**Identity.** Across updates, annotations are matched by `id` when you
+give one, and otherwise by row and column. A fresh array of equal
+annotations keeps its elements, and an annotation is re-rendered only when
+its `data` changes (by `===`). So you don't have to memoize the array.
+Give an `id` when an annotation can move to another row and should keep
+its element (and any state in it, such as a half-typed reply).
 
 ## Accessibility
 
-The grid has `role="grid"` and full keyboard navigation, and its popovers
-are real DOM. Cell contents are painted on a canvas, though, so **screen
-readers can't read them**. If assistive technology matters for your page,
-render with [`spreadiff/lite`](lite.md), which outputs a semantic HTML
-`<table>`, or offer it as an alternative view.
+Cells are painted on a canvas, which screen readers can't see, so the grid
+keeps a visually hidden copy of the visible window as an ARIA grid:
+column headers, a row header per row ("Row 12, modified, moved from row
+4"), and a cell per visible column that reads the change in words
+("70.63, was 65.4, up 5.23 (8.0%), edited"). The selected cell is the
+grid's `aria-activedescendant`, so moving with the arrow keys announces
+each cell. The grid's accessible name summarises the diff, and the hover
+popover is attached with `aria-describedby` while it's open.
+
+Text and status colours meet WCAG AA contrast in light and dark. The
+tests check the canvas colours themselves, and run axe-core over the
+grid, `spreadiff/lite` and the viewer. [Accessibility](accessibility.md)
+has what's covered, how it's tested, and what isn't (no manual
+screen-reader testing yet).
 
 ## Performance notes
 
@@ -197,6 +218,10 @@ render with [`spreadiff/lite`](lite.md), which outputs a semantic HTML
   and 1M rows; see [Performance](performance.md) for measurements.
 - Layout work (folding regions, row heights) is linear in the number of
   aligned rows and runs only when the diff or a layout option changes.
-- Memory is dominated by the two tables themselves. The diff adds 9 bytes
-  per aligned row (two `Int32Array`s and a `Uint8Array`) plus a mask per
-  modified row; the grid's layout adds about 17 bytes per displayed row.
+- Memory is dominated by the two tables themselves. The diff adds 10 bytes
+  per aligned row (two `Int32Array`s and two `Uint8Array`s) plus a mask
+  per modified row; the grid's layout adds about 17 bytes per displayed row.
+- The accessibility mirror holds DOM for the visible window only (tens of
+  rows), rebuilt when scrolling settles rather than every frame. Scrolling
+  benchmarks with it on and off didn't differ (p95 21.5–23.4 ms vs.
+  22.3–23.5 ms at 100k rows). `accessibility: false` skips it.

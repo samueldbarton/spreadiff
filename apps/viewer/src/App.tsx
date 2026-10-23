@@ -262,7 +262,7 @@ export function App() {
       <header className="topbar">
         <div className="brand">
           <Logo />
-          <span>spreadiff</span>
+          <h1>spreadiff</h1>
         </div>
         {loaded && (
           <div className="files">
@@ -286,8 +286,8 @@ export function App() {
       </header>
 
       {loaded && diff ? (
-        <>
-          <div className="toolbar">
+        <main className="main">
+          <div className="toolbar" role="toolbar" aria-label="View">
             <Segmented
               value={layout}
               onChange={setLayout}
@@ -419,7 +419,7 @@ export function App() {
           )}
           {missingNote(loaded.result) && <div className="banner info"><span>{missingNote(loaded.result)}</span></div>}
           <div className="work">
-            <main className="grid-wrap">
+            <section className="grid-wrap" aria-label="Diff">
               {renderer === 'spreadiff' ? (
                 <DiffGrid
                   key={`${loaded.names.join()}:${sheet}`}
@@ -440,7 +440,7 @@ export function App() {
                 <GlideDiff diff={diff} dark={dark} />
               )}
               {busy && <div className="busy"><span className="spinner" />{busy}…</div>}
-            </main>
+            </section>
             {trace && panel && (
               <TracePanel wb={shown!} trace={trace} sheet={sheet} selected={selectedRef} view={traceView} onView={setTraceView} onPick={pick} />
             )}
@@ -453,7 +453,7 @@ export function App() {
               {fmt(diff.oldTable.rows.length)} → {fmt(diff.newTable.rows.length)} rows · {diff.columns.length} cols · {source.current?.kind === 'synthetic' ? 'generate + parse' : 'parse'} {ms(loaded.timings.parse)} · diff {ms(loaded.timings.diff)}{loaded.trace ? ` · trace ${ms(loaded.timings.trace)}` : ''} · transfer {ms(loaded.timings.transfer)}
             </span>
           </footer>
-        </>
+        </main>
       ) : (
         <Landing busy={busy} error={error} files={files} setFile={setFile} loadSample={loadSample} loadModel={loadModel} loadSynthetic={loadSynthetic} />
       )}
@@ -485,7 +485,7 @@ function Landing(props: {
   loadSynthetic: (rows: number) => void;
 }) {
   return (
-    <div className="landing">
+    <main className="landing">
       <div className="hero">
         <h1>Diff spreadsheets, beautifully.</h1>
         <p className="lede">
@@ -522,7 +522,7 @@ function Landing(props: {
       {props.busy && <p className="busy-inline"><span className="spinner" />{props.busy}…</p>}
       {props.error && <p className="error">{props.error}</p>}
       <p className="privacy"><Icon name="lock" />Files never leave your browser. Parsing and diffing run in a Web Worker.</p>
-    </div>
+    </main>
   );
 }
 

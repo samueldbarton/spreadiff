@@ -18,6 +18,8 @@ export default defineConfig({
   },
   worker: { format: 'es' },
   build: {
+    // Never inline assets as data: URLs, so the build runs under a CSP of font-src/img-src 'self'.
+    assetsInlineLimit: 0,
     rollupOptions: { input: { main: fileURLToPath(new URL('index.html', import.meta.url)), vanilla: fileURLToPath(new URL('vanilla.html', import.meta.url)) } },
   },
   base: './',

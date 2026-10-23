@@ -24,6 +24,8 @@ export interface EngineHost {
   sheets: string[];
   /** Workbook-scoped defined names. */
   names?: Record<string, string>;
+  /** The names a formula on `sheet` sees, sheet-scoped ones included (see `scopedNames`). Defaults to `names`. */
+  namesFor?(sheet: string): Record<string, string> | undefined;
   /** Excel tables, for structured references. */
   tables?: TableDefinition[];
   /** The workbook uses the 1904 date system. */
@@ -299,7 +301,7 @@ class EvalContext implements Ctx {
       case 'ref':
         return n.ref.sheetTo !== undefined ? this.threeD(n.ref) : this.rangeOf(n.ref);
       case 'name': {
-        const target = lookupName(this.host.names, n.name);
+        const target = lookupName(this.host.namesFor ? this.host.namesFor(this.sheet) : this.host.names, n.name);
         if (target === undefined) return ERR.name;
         if (this.depth > 8) throw new Unsupported('name nesting');
         // Names are workbook formulas (Inputs!$B$2, or a constant/expression), absolute.

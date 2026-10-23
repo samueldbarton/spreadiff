@@ -8,7 +8,7 @@ import { applyRecalculation, columnLabel, DiffGrid, traceWorkbook, type CellValu
 interface Expected {
   source: string;
   files: Record<string, string>;
-  cells: Record<string, { kind: string; causes: string[] | null }>;
+  cells: Record<string, { kind: string; causes: string[] | null; contributions?: Record<string, number> }>;
   values: Record<string, CellValue>;
   staleCheck: string[];
 }
@@ -22,6 +22,9 @@ setInterval(() => {
   longestGap = Math.max(longestGap, now - lastTick);
   lastTick = now;
 }, 10);
+
+// Sized through the CSSOM: the page is served with a CSP that forbids inline style attributes.
+Object.assign(document.getElementById('grid')!.style, { width: '900px', height: '500px' });
 
 const worker = createDiffWorker(new Worker(new URL('spreadiff/worker/worker.js', import.meta.url), { type: 'module' }));
 const bytes = async (url: string) => (await fetch(url)).arrayBuffer();
@@ -65,6 +68,8 @@ for (const name of cases) {
   const elapsed = performance.now() - t0;
   if (!trace) problems.push('no trace returned');
   let scored = 0;
+  let contribOk = 0;
+  let contribChecked = 0;
   const seen = new Set<string>();
   result.sheets.forEach((s, si) => {
     for (const [row, mask] of s.diff.changedCells) for (let col = 0; col < mask.length; col++) {
@@ -85,6 +90,18 @@ for (const name of cases) {
       if (got.causeCount > got.causes.length) problems.push(`causes of ${a} truncated`);
       if (JSON.stringify(causes) !== JSON.stringify(want.causes)) problems.push(`causes ${a}: got ${causes.join(' ')}, want ${want.causes.join(' ')}`);
       else scored++;
+      // Each cause's contribution against LibreOffice's leave-one-out value.
+      if (want.contributions && got.method === 'recalculated') {
+        got.causes.forEach((c, j) => {
+          const at = addressOf(result, c.sheet, c.row, c.col);
+          const truth = at ? want.contributions![at] : undefined;
+          const share = got.contributions?.[j];
+          if (truth === undefined || typeof share !== 'number') return;
+          contribChecked++;
+          if (Math.abs(share - truth) <= 1e-9 * Math.max(1, Math.abs(truth))) contribOk++;
+          else problems.push(`contribution ${a} ← ${at}: got ${share}, LibreOffice ${truth}`);
+        });
+      }
     }
   });
   for (const a of Object.keys(exp.cells)) if (!seen.has(a)) problems.push(`missed change ${a}`);
@@ -118,7 +135,7 @@ for (const name of cases) {
   grid.cleanUp();
 
   report.push({
-    name, source: exp.source, cells: Object.keys(exp.cells).length, scored, staleOk, staleChecked: exp.staleCheck.length,
+    name, source: exp.source, cells: Object.keys(exp.cells).length, scored, contribOk, contribChecked, staleOk, staleChecked: exp.staleCheck.length,
     uncachedOk, uncachedChecked: exp.files.uncached ? Object.keys(exp.values).length : 0,
     ms: Math.round(elapsed), workerTrace: Math.round(timings.trace), stats: trace?.stats, problems,
   });

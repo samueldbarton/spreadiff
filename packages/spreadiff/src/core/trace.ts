@@ -25,7 +25,7 @@
  *    connects them. This over-approximates (both IF branches count) but
  *    doesn't miss a cause.
  */
-import { formulaRefs, type SheetRange } from './formula.js';
+import { formulaRefs, scopedNames, type SheetRange } from './formula.js';
 import { numericDelta } from './text.js';
 import { Engine, Unsupported, type Compiled, type Read } from './engine/evaluate.js';
 import { tableHost, sheetCellKey, type TableHost } from './engine/host.js';
@@ -319,13 +319,15 @@ function refReader(diff: WorkbookDiff, side: Side) {
   const names = side === 'old' ? diff.names?.old : diff.names?.new;
   const tableDefs = side === 'old' ? diff.tables?.old : diff.tables?.new;
   const sheetNames = tables.map((t) => t.name);
+  // Sheet-scoped names: each sheet's formulas see their own over the workbook's.
+  const scoped = tables.some((t) => t.names) ? tables.map((t) => scopedNames(names, tables, t.name)) : null;
   return {
     tables,
     read(s: number, r: number, c: number): { rects: Rect[]; dynamic: boolean; volatile: boolean } | null {
       const formula = tables[s]?.formulas?.[r]?.[c];
       if (!formula) return null;
       const origin = tables[s].origin ?? { row: 1, col: 0 };
-      const refs = formulaRefs(formula, names, { tables: tableDefs, row: r + origin.row, sheets: sheetNames });
+      const refs = formulaRefs(formula, scoped ? scoped[s] : names, { tables: tableDefs, row: r + origin.row, sheets: sheetNames });
       const rects: Rect[] = [];
       for (const rg of refs.ranges) {
         const rect = clip(rg, s, byName, tables);
@@ -942,6 +944,18 @@ function recalculate(diff: WorkbookDiff, maps: SheetMaps[], traces: Map<number, 
   const graph = new OverlayGraph(staticNew, reads);
   const valueOf = (id: number): Scalar => (stale.has(id) ? stale.get(id)! : cachedAt('new', id));
 
+  // Every sheet lines up cell for cell (no inserted/removed rows or columns, same origin).
+  let layoutSame: boolean | null = null;
+  const sameLayout = () =>
+    (layoutSame ??= diff.sheets.every(({ diff: d }) => {
+      const oo = originOf(d.oldTable);
+      const no = originOf(d.newTable);
+      if (oo.row !== no.row || oo.col !== no.col) return false;
+      if (d.columns.some((c) => c.oldIndex !== c.newIndex)) return false;
+      for (let r = 0; r < d.rowCount; r++) if (d.oldRows[r] !== d.newRows[r]) return false;
+      return true;
+    }));
+
   const butFor = (rootList: Root[]) => {
     const out = new Map<number, Map<number, ExactCauses>>();
     const record = (ref: CellRef) => {
@@ -959,7 +973,21 @@ function recalculate(diff: WorkbookDiff, maps: SheetMaps[], traces: Map<number, 
       // Added and removed rows are causes as a whole (found by references), not cell by cell.
       if (root.trace.kind !== 'input' && root.trace.kind !== 'formula') return;
       const oid = oldIdOf(root.ref);
-      const without: Scalar = oid !== null ? cachedAt('old', oid) : null;
+      let without: Scalar = oid !== null ? cachedAt('old', oid) : null;
+      // An edited formula's counterfactual is the old formula on today's inputs, not its
+      // old result (which also carries every other edit's effect). Its text is valid here
+      // when no sheet's rows or columns moved; otherwise fall back to the old result.
+      const oldFormula = oid !== null && root.trace.kind === 'formula' ? formulaAt('old', oid) : null;
+      if (oldFormula && sameLayout()) {
+        const s = idSheet(root.id);
+        const o = originOf(newTables[s]);
+        try {
+          if (++evaluations > evalBudget) throw new Unsupported('evaluation budget');
+          without = newEngine.evaluate(oldFormula, newHost.sheets[s], idRow(root.id) + o.row, idCol(root.id) + o.col, false).value;
+        } catch (e) {
+          if (!(e instanceof Unsupported)) throw e;
+        }
+      }
       const saved = new Map<number, Scalar | undefined>();
       const set = (k: number, v: Scalar) => {
         if (!saved.has(k)) saved.set(k, newHost.overrides.has(k) ? newHost.overrides.get(k) : undefined);

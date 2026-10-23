@@ -18,8 +18,10 @@ import { changeKind } from '../core/kind.js';
 import { diffText, formatCell, numericDelta } from '../core/text.js';
 import type { ChangeKind } from '../core/trace.js';
 import { ROW_STATUS, type CellValue, type TableDiff } from '../core/types.js';
+import { lightDarkFallback } from '../core/lightdark.js';
+import { rowLabelColumn } from '../core/label.js';
 
-export { diffTables, cellsEqual } from '../core/diff.js';
+export { diffTables, cellsEqual, hasChanges } from '../core/diff.js';
 export { parseCsv } from '../core/csv.js';
 export { formatCell, numericDelta, diffText } from '../core/text.js';
 export { changeKind } from '../core/kind.js';
@@ -41,7 +43,7 @@ export interface LiteOptions {
   display?: LiteDisplay;
   /** Unchanged rows shown around each change. Default 2. */
   context?: number;
-  /** Only show columns that changed (plus key columns). Default false. */
+  /** Only show columns that changed, plus key columns (or, when rows were matched by order, the first mostly-text column, which names the rows). Default false. */
   changedColumnsOnly?: boolean;
   /** Stop after this many rows of output (a note says how many were cut). Default 2000. */
   maxRows?: number;
@@ -61,7 +63,7 @@ function hunks(diff: TableDiff, context: number): Item[] {
   const n = diff.rowCount;
   const keep = new Uint8Array(n);
   for (let r = 0; r < n; r++) {
-    if (diff.status[r] === ROW_STATUS.equal) continue;
+    if (diff.status[r] === ROW_STATUS.equal && !diff.moved?.[r]) continue;
     for (let k = Math.max(0, r - context); k <= Math.min(n - 1, r + context); k++) keep[k] = 1;
   }
   const out: Item[] = [];
@@ -80,9 +82,10 @@ function hunks(diff: TableDiff, context: number): Item[] {
 
 function visibleColumns(diff: TableDiff, changedOnly: boolean): number[] {
   const keys = new Set(diff.keyColumns);
+  const label = changedOnly ? rowLabelColumn(diff) : -1; // without keys, keep what names the rows
   const cols: number[] = [];
   diff.columns.forEach((c, i) => {
-    if (!changedOnly || c.status !== 'equal' || c.changes > 0 || keys.has(c.name)) cols.push(i);
+    if (!changedOnly || c.status !== 'equal' || c.changes > 0 || keys.has(c.name) || i === label) cols.push(i);
   });
   return cols;
 }
@@ -126,6 +129,7 @@ export function renderHTML(diff: TableDiff, options: LiteOptions = {}): string {
   const offOld = options.rowNumberOffset ?? (diff.oldTable.origin?.row ?? 1) + 1;
   const offNew = options.rowNumberOffset ?? (diff.newTable.origin?.row ?? 1) + 1;
   const numeric = cols.map((ci) => isNumericColumn(diff, ci));
+  const moveMark = (r: number) => (diff.moved?.[r] ? `<span class="sdl-mv" title="Moved from row ${diff.oldRows[r] + offOld}">↕</span>` : '');
   const val = (r: number, ci: number, side: 'old' | 'new'): CellValue | undefined => {
     const c = diff.columns[ci];
     const ri = side === 'old' ? diff.oldRows[r] : diff.newRows[r];
@@ -199,7 +203,7 @@ export function renderHTML(diff: TableDiff, options: LiteOptions = {}): string {
   };
 
   if (layout === 'split') {
-    out += `<table class="sdl sdl-split"><thead><tr><th class="sdl-ln">old</th>${header('old')}<th class="sdl-mid"></th><th class="sdl-ln">new</th>${header('new')}</tr></thead><tbody>`;
+    out += `<table class="sdl sdl-split"><thead><tr><th class="sdl-ln">old</th>${header('old')}<td class="sdl-mid" aria-hidden="true"></td><th class="sdl-ln">new</th>${header('new')}</tr></thead><tbody>`;
     for (const it of items) {
       if (emitted >= maxRows) {
         if (it.type === 'row') truncated++;
@@ -215,11 +219,11 @@ export function renderHTML(diff: TableDiff, options: LiteOptions = {}): string {
       const oi = diff.oldRows[r];
       const ni = diff.newRows[r];
       const left = st === ROW_STATUS.added ? `<td class="sdl-ln"></td><td class="sdl-gap" colspan="${width}"></td>` : `<td class="sdl-ln">${oi + offOld}</td>${cells(r, 'old', 'old')}`;
-      const right = st === ROW_STATUS.removed ? `<td class="sdl-ln"></td><td class="sdl-gap" colspan="${width}"></td>` : `<td class="sdl-ln">${ni + offNew}</td>${cells(r, 'new', 'new')}`;
-      out += `<tr class="sdl-r sdl-${statusName(st)}"${kindSummary(r)}>${left}<td class="sdl-mid"></td>${right}</tr>`;
+      const right = st === ROW_STATUS.removed ? `<td class="sdl-ln"></td><td class="sdl-gap" colspan="${width}"></td>` : `<td class="sdl-ln">${moveMark(r)}${ni + offNew}</td>${cells(r, 'new', 'new')}`;
+      out += `<tr class="sdl-r sdl-${statusName(st)}${diff.moved?.[r] ? ' sdl-moved' : ''}"${kindSummary(r)}>${left}<td class="sdl-mid"></td>${right}</tr>`;
     }
   } else {
-    out += `<table class="sdl sdl-unified"><thead><tr><th class="sdl-ln">old</th><th class="sdl-ln">new</th><th class="sdl-sign"></th>${header('unified')}</tr></thead><tbody>`;
+    out += `<table class="sdl sdl-unified"><thead><tr><th class="sdl-ln">old</th><th class="sdl-ln">new</th><th class="sdl-sign"><span class="sdl-sr">change</span></th>${header('unified')}</tr></thead><tbody>`;
     for (const it of items) {
       if (emitted >= maxRows) {
         if (it.type === 'row') truncated++;
@@ -237,11 +241,11 @@ export function renderHTML(diff: TableDiff, options: LiteOptions = {}): string {
       if (st === ROW_STATUS.modified && display === 'stacked') {
         // Code-diff convention: the old line, then the new line.
         out += `<tr class="sdl-r sdl-modified sdl-minus"${kindSummary(r)}><td class="sdl-ln">${oi + offOld}</td><td class="sdl-ln"></td><td class="sdl-sign">−</td>${cells(r, 'unified', 'old')}</tr>`;
-        out += `<tr class="sdl-r sdl-modified sdl-plus"${kindSummary(r)}><td class="sdl-ln"></td><td class="sdl-ln">${ni + offNew}</td><td class="sdl-sign">+</td>${cells(r, 'unified', 'new')}</tr>`;
+        out += `<tr class="sdl-r sdl-modified sdl-plus${diff.moved?.[r] ? ' sdl-moved' : ''}"${kindSummary(r)}><td class="sdl-ln"></td><td class="sdl-ln">${moveMark(r)}${ni + offNew}</td><td class="sdl-sign">+</td>${cells(r, 'unified', 'new')}</tr>`;
         continue;
       }
-      const sign = st === ROW_STATUS.added ? '+' : st === ROW_STATUS.removed ? '−' : st === ROW_STATUS.modified ? '•' : '';
-      out += `<tr class="sdl-r sdl-${statusName(st)}"${kindSummary(r)}><td class="sdl-ln">${oi >= 0 ? oi + offOld : ''}</td><td class="sdl-ln">${ni >= 0 ? ni + offNew : ''}</td><td class="sdl-sign">${sign}</td>${cells(r, 'unified', st === ROW_STATUS.removed ? 'old' : 'merged')}</tr>`;
+      const sign = diff.moved?.[r] ? moveMark(r) : st === ROW_STATUS.added ? '+' : st === ROW_STATUS.removed ? '−' : st === ROW_STATUS.modified ? '•' : '';
+      out += `<tr class="sdl-r sdl-${statusName(st)}${diff.moved?.[r] ? ' sdl-moved' : ''}"${kindSummary(r)}><td class="sdl-ln">${oi >= 0 ? oi + offOld : ''}</td><td class="sdl-ln">${ni >= 0 ? ni + offNew : ''}</td><td class="sdl-sign">${sign}</td>${cells(r, 'unified', st === ROW_STATUS.removed ? 'old' : 'merged')}</tr>`;
     }
   }
   out += '</tbody></table>';
@@ -279,12 +283,17 @@ function isNumericColumn(diff: TableDiff, ci: number): boolean {
  *     ⋯ 3 unchanged rows
  *   -  P-1003  65.4    28
  *   +  P-1003  70.63   28
+ *
+ * A row that moved (rows matched by key) is marked `~`, with the row it
+ * moved from: `~  P-1007  12.5  3  (moved from row 2)`.
  */
 export function renderText(diff: TableDiff, options: Pick<LiteOptions, 'context' | 'changedColumnsOnly' | 'maxRows'> & { maxWidth?: number } = {}): string {
   const cols = visibleColumns(diff, options.changedColumnsOnly ?? false);
   const items = hunks(diff, options.context ?? 2);
   const maxW = options.maxWidth ?? 24;
-  const lines: { sign: string; cells: string[] }[] = [];
+  const lines: { sign: string; cells: string[]; note?: string }[] = [];
+  const offOld = (diff.oldTable.origin?.row ?? 1) + 1;
+  const movedNote = (r: number) => (diff.moved?.[r] ? `(moved from row ${diff.oldRows[r] + offOld})` : undefined);
   const value = (r: number, ci: number, side: 'old' | 'new') => {
     const c = diff.columns[ci];
     const ri = side === 'old' ? diff.oldRows[r] : diff.newRows[r];
@@ -296,7 +305,7 @@ export function renderText(diff: TableDiff, options: Pick<LiteOptions, 'context'
   for (const it of items) {
     if (emitted >= (options.maxRows ?? 2000)) break;
     if (it.type === 'gap') {
-      lines.push({ sign: '⋯', cells: [`${it.to - it.from} unchanged rows`] });
+      lines.push({ sign: '⋯', cells: [`${it.to - it.from} unchanged row${it.to - it.from === 1 ? '' : 's'}`] });
       continue;
     }
     emitted++;
@@ -304,10 +313,10 @@ export function renderText(diff: TableDiff, options: Pick<LiteOptions, 'context'
     const st = diff.status[r];
     if (st === ROW_STATUS.modified) {
       lines.push({ sign: '-', cells: cols.map((ci) => value(r, ci, 'old')) });
-      lines.push({ sign: '+', cells: cols.map((ci) => value(r, ci, 'new')) });
+      lines.push({ sign: '+', cells: cols.map((ci) => value(r, ci, 'new')), note: movedNote(r) });
     } else if (st === ROW_STATUS.added) lines.push({ sign: '+', cells: cols.map((ci) => value(r, ci, 'new')) });
     else if (st === ROW_STATUS.removed) lines.push({ sign: '-', cells: cols.map((ci) => value(r, ci, 'old')) });
-    else lines.push({ sign: ' ', cells: cols.map((ci) => value(r, ci, 'new')) });
+    else lines.push({ sign: diff.moved?.[r] ? '~' : ' ', cells: cols.map((ci) => value(r, ci, 'new')), note: movedNote(r) });
   }
   const head = cols.map((ci) => diff.columns[ci].name);
   const widths = head.map((h, k) =>
@@ -319,21 +328,23 @@ export function renderText(diff: TableDiff, options: Pick<LiteOptions, 'context'
   };
   const row = (sign: string, cells: string[]) => `${sign}  ${cells.map((c, k) => fit(c, widths[k])).join('  ')}`.trimEnd();
   const out = [row(' ', head)];
-  for (const l of lines) out.push(l.sign === '⋯' ? `⋯  ${l.cells[0]}` : row(l.sign, l.cells));
+  for (const l of lines) out.push(l.sign === '⋯' ? `⋯  ${l.cells[0]}` : row(l.sign, l.cells) + (l.note ? `  ${l.note}` : ''));
   return out.join('\n') + '\n';
 }
 
-/** Styles for `renderHTML`. Themed by the same `--sd-*` variables as the canvas grid. */
-export const LITE_CSS = /* css */ `
+const LITE_BASE = /* css */ `
 .sdl-wrap {
   --_bg: var(--sd-bg, light-dark(#fff, #0b0b0c));
   --_fg: var(--sd-fg, light-dark(#0b0b0c, #ededef));
-  --_muted: color-mix(in srgb, var(--_fg) 50%, var(--_bg));
+  --_muted: color-mix(in srgb, var(--_fg) 64%, var(--_bg)); /* AA on the background and the panel */
   --_line: color-mix(in srgb, var(--_fg) 9%, var(--_bg));
   --_panel: color-mix(in srgb, var(--_fg) 3%, var(--_bg));
   --_add: var(--sd-added, light-dark(#0dbe4e, #5ecc71));
   --_del: var(--sd-removed, light-dark(#ff2e3f, #ff6762));
+  --_add-fg: var(--sd-added-fg, light-dark(color-mix(in srgb, var(--_add) 62%, #000), color-mix(in srgb, var(--_add) 70%, var(--_fg))));
+  --_del-fg: var(--sd-removed-fg, light-dark(color-mix(in srgb, var(--_del) 62%, #000), color-mix(in srgb, var(--_del) 70%, var(--_fg))));
   --_mod: var(--sd-modified, light-dark(#009fff, #69b1ff));
+  --_mod-fg: var(--sd-modified-fg, light-dark(color-mix(in srgb, var(--_mod) 62%, #000), var(--_mod)));
   --_cmp: var(--sd-computed, light-dark(#e08a00, #f5b83d));
   --_fx: var(--sd-formula, light-dark(#7c3aed, #a78bfa));
   color-scheme: light dark;
@@ -356,10 +367,11 @@ export const LITE_CSS = /* css */ `
 .sdl .sdl-added td:not(.sdl-ln):not(.sdl-gap):not(.sdl-mid) { background: color-mix(in srgb, var(--_add) 9%, var(--_bg)); }
 .sdl-unified .sdl-removed td:not(.sdl-ln), .sdl-split .sdl-removed td:not(.sdl-ln):not(.sdl-gap):not(.sdl-mid) { background: color-mix(in srgb, var(--_del) 9%, var(--_bg)); }
 .sdl-unified .sdl-removed td:not(.sdl-ln):not(.sdl-sign) { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--_del) 60%, transparent); }
-.sdl .sdl-added .sdl-sign { color: var(--_add); }
-.sdl .sdl-removed .sdl-sign, .sdl .sdl-minus .sdl-sign { color: var(--_del); }
-.sdl .sdl-plus .sdl-sign { color: var(--_add); }
-.sdl .sdl-modified:not(.sdl-minus):not(.sdl-plus) .sdl-sign { color: var(--_mod); }
+.sdl .sdl-added .sdl-sign { color: var(--_add-fg); }
+.sdl .sdl-removed .sdl-sign, .sdl .sdl-minus .sdl-sign { color: var(--_del-fg); }
+.sdl .sdl-plus .sdl-sign { color: var(--_add-fg); }
+.sdl .sdl-modified:not(.sdl-minus):not(.sdl-plus) .sdl-sign { color: var(--_mod-fg); }
+.sdl .sdl-mv { color: var(--_mod-fg); font-weight: 600; margin-right: 3px; cursor: help; }
 .sdl .sdl-modified > td:first-child { box-shadow: inset 3px 0 var(--_mod); }
 .sdl .sdl-modified[data-computed-only] > td:first-child { box-shadow: inset 3px 0 var(--_cmp); }
 .sdl .sdl-c-old { background: color-mix(in srgb, var(--_del) 14%, var(--_bg)); }
@@ -374,11 +386,20 @@ export const LITE_CSS = /* css */ `
 .sdl s { color: var(--_muted); text-decoration-color: color-mix(in srgb, var(--_del) 70%, transparent); }
 .sdl .sdl-arrow { color: var(--_muted); margin: 0 6px; }
 .sdl small { display: block; font-size: 10px; line-height: 1.3; }
-.sdl .sdl-delta[data-up="true"] { color: var(--_add); }
-.sdl .sdl-delta[data-up="false"] { color: var(--_del); }
+.sdl .sdl-delta[data-up="true"] { color: var(--_add-fg); }
+.sdl .sdl-delta[data-up="false"] { color: var(--_del-fg); }
 .sdl .sdl-was { color: var(--_muted); }
-.sdl th.sdl-col-added { color: var(--_add); }
-.sdl th.sdl-col-removed { color: var(--_del); text-decoration: line-through; }
-.sdl th.sdl-col-renamed { color: var(--_mod); }
+.sdl th.sdl-col-added { color: var(--_add-fg); }
+.sdl th.sdl-col-removed { color: var(--_del-fg); text-decoration: line-through; }
+.sdl th.sdl-col-renamed { color: var(--_mod-fg); }
+.sdl .sdl-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .sdl-note { color: var(--_muted); font-family: var(--sd-font-family, ui-sans-serif, system-ui, sans-serif); padding: 8px 12px; margin: 0; }
 `;
+
+/** Styles for `renderHTML`. Themed by the same `--sd-*` variables as the canvas grid. Includes a fallback for browsers and mail clients without `light-dark()`. */
+export const LITE_CSS =
+  LITE_BASE +
+  lightDarkFallback(/\.sdl-wrap \{([\s\S]*?)\n\}/.exec(LITE_BASE)![1].replace(/\/\*[\s\S]*?\*\//g, ''), {
+    light: '.sdl-wrap',
+    darkWhenSystem: '.sdl-wrap',
+  });

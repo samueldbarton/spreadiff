@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { strToU8, zipSync } from 'fflate';
-import { diffTables, diffWorkbooks, parseCsv, parseXlsx, diffText, toUnifiedCsv, ROW_STATUS_NAMES } from '../src/core';
+import { diffTables, diffWorkbooks, parseCsv, parseXlsx, diffText, toUnifiedCsv, ROW_STATUS_NAMES, hasChanges } from '../src/core';
 import type { TableDiff } from '../src/core';
 
 const csv = (s: string) => parseCsv(s.trim() + '\n');
@@ -168,5 +168,31 @@ describe('pack/unpack', () => {
     expect(u.rows[2][1]).toBeNaN();
     expect(u.formulas).toEqual(t.formulas);
     expect(unpackTable(packTable({ ...t, origin: { row: 4, col: 2 } })).origin).toEqual({ row: 4, col: 2 });
+  });
+});
+
+describe('moved rows (keyed)', () => {
+  const t = (ids: number[], edit?: number) => ({ name: 't', columns: ['id', 'v'], rows: ids.map((i) => [i, i === edit ? 'changed' : `v${i}`]) });
+  const movedIds = (d: ReturnType<typeof diffTables>) => Array.from({ length: d.rowCount }, (_, r) => r).filter((r) => d.moved[r]).map((r) => d.newTable.rows[d.newRows[r]][0]);
+
+  it('flags the one row that moved, not everything between', () => {
+    const d = diffTables(t([1, 2, 3, 4, 5]), t([1, 4, 2, 3, 5]), { keys: ['id'] });
+    expect(movedIds(d)).toEqual([4]);
+    expect(d.stats).toMatchObject({ rowsMoved: 1, rowsEqual: 5, rowsModified: 0 });
+    expect(hasChanges(d)).toBe(true);
+  });
+
+  it('flags the fewest rows that explain a swap', () => {
+    const d = diffTables(t([1, 2, 3, 4, 5]), t([1, 4, 3, 2, 5]), { keys: ['id'] });
+    expect(d.stats.rowsMoved).toBe(2);
+  });
+
+  it('is independent of modification, and absent without keys', () => {
+    const d = diffTables(t([1, 2, 3]), t([3, 1, 2], 3), { keys: ['id'] });
+    expect(movedIds(d)).toEqual([3]);
+    expect(d.stats).toMatchObject({ rowsMoved: 1, rowsModified: 1 });
+    const seq = diffTables(t([1, 2, 3]), t([3, 1, 2]), { keys: 'none' });
+    expect(seq.stats.rowsMoved).toBe(0);
+    expect(diffTables(t([1, 2, 3]), t([1, 2, 3]), { keys: ['id'] }).stats.rowsMoved).toBe(0);
   });
 });

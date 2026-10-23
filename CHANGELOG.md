@@ -7,6 +7,44 @@ the repository.
 
 ### Added
 
+- **Moved rows.** With rows matched by key, rows whose position changed
+  are flagged: the fewest rows that explain the new order
+  (`TableDiff.moved`, `DiffStats.rowsMoved`, `CellInfo.moved`). They're
+  shown with `↕` in the grid and lite, `~` in text, and `:` in
+  `toUnifiedCsv`, and they count for `hasChanges` (now also exported from
+  `spreadiff/lite`).
+- **Accessibility.** The grid mirrors its visible cells as a hidden ARIA
+  grid:
+  - row and column headers;
+  - each change in words ("70.63, was 65.4, up 5.23 (8.0%), edited");
+  - the selection as `aria-activedescendant`;
+  - a summary as the accessible name.
+
+  New options `accessibility` and `ariaLabel`. Every text colour meets
+  WCAG AA in light and dark, and new `--sd-modified-fg` /
+  `--sd-computed-fg` tokens carry text in those hues. Checked by axe-core
+  on the grid, lite and the viewer, and by a canvas contrast test. See
+  `docs/accessibility.md`.
+- **Merged cells** are read into `Table.merges`. The grid draws an
+  unchanged horizontal merge as one cell.
+- **Sheet-scoped defined names** are read into `Table.names` and resolved
+  by formula references, the engine and tracing, including `Sheet!Name`
+  from other sheets (`scopedNames`).
+- **Annotation `id`.** Annotations are matched across updates by `id` or
+  by row and column, no longer by object identity. A fresh array of equal
+  annotations keeps its elements, and only changed `data` re-renders.
+- **The minimap shades by density**, so thousands of changes no longer
+  paint it solid.
+- **CSP and older browsers.**
+  - The grid's styles are an adopted stylesheet, so it runs under a strict
+    Content-Security-Policy (tested).
+  - The grid and `LITE_CSS` carry a fallback for browsers without CSS
+    `light-dark()` (Safari before 17.5, Chrome before 123), derived from
+    the same tokens and tested to give identical colours.
+- **Docs:**
+  - new guides: recipes, troubleshooting, accessibility and browser support;
+  - a rewritten README;
+  - a `LICENSE` file.
 - **Formula tracing.** `traceWorkbook` classifies every changed cell as an
   `input` edit, a `formula` edit or a `computed` change, and links each
   computed change to its root causes and each edit to its impacts.
@@ -59,6 +97,20 @@ the repository.
 
 ### Changed
 
+- **Undoing a formula edit** while tracing re-evaluates the old formula on
+  today's inputs, instead of restoring its old result. Contributions of
+  formula edits are now exact. Against LibreOffice, 3,400 of 3,400
+  contributions match, where the old way had 95 wrong. With rows or
+  columns inserted, it still restores the old result.
+- `hideUnchangedColumns` and `changedColumnsOnly` keep the row-label
+  column (the first mostly-text one) when rows were matched by order, so
+  every changed row still says which row it is.
+- Text colours are darker in light mode (secondary text, row numbers,
+  `+`/`−` signs, deltas) to meet WCAG AA.
+- `spreadiff` is 57.1 KB gzip, up from 53.1, for the accessibility mirror,
+  merges, moved rows and the colour fallback. `lite` is 13.1 KB.
+- The viewer has a page heading and landmarks, and doesn't inline assets
+  as `data:` URLs.
 - `parseFile`, the worker and the viewer default to `header: 'auto'`. The
   viewer passed `true`, which hid row-1 inputs in financial models even
   after the parser learned to detect them. The viewer's toggle is now a
@@ -69,8 +121,8 @@ the repository.
   Above 5,000 results it showed nothing.
 - The viewer serves its own fonts instead of loading Google Fonts.
 - `PackedTable.formulas` is packed rather than nested arrays.
-- `spreadiff/core` is 37.9 KB gzip, up from 16.1, almost all of it the
-  formula engine. `spreadiff/lite` is unchanged in scope (12.0 KB).
+- `spreadiff/core` is 38.9 KB gzip, up from 16.1, almost all of it the
+  formula engine. `spreadiff/lite` is unchanged in scope (13.1 KB).
 - `parseXlsx` defaults to `header: 'auto'`: a first row with numbers,
   dates or formulas, or one that formulas read, is data rather than
   column names. Years next to labels still count as names, and a row
@@ -106,6 +158,8 @@ the repository.
 
 ### Fixed
 
+- The text renderer wrote "1 unchanged rows".
+- The closed tooltip was exposed to assistive technology without a name.
 - Regressions found by comparing with 0.1.0, fixed before release:
   - diffs of formula-heavy XLSX sheets were 4–7× slower (row identity
     built and hashed each formula's relative text; now an
