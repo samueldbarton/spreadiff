@@ -11,11 +11,25 @@ import {
 import { createPortal } from 'react-dom';
 import { DiffGrid as DiffGridView, type CellAnnotation, type DiffGridOptions } from '../render/DiffGrid.js';
 import type { TableDiff } from '../core/types.js';
+import type { SheetView } from '../core/compare.js';
 
-/** Props of the React {@link DiffGrid}: every {@link DiffGridOptions} field, plus these. */
-export interface DiffGridProps<A = unknown> extends Omit<DiffGridOptions<A>, 'renderAnnotation'> {
-  /** The diff to show. Changing it resets scroll and selection. */
-  diff: TableDiff;
+/** Props of the React {@link DiffGrid}: every {@link DiffGridOptions} field, `diff` or `sheet`, plus these. */
+export type DiffGridProps<A = unknown> = DiffGridBaseProps<A> &
+  (
+    | {
+        /** The diff to show. Changing it resets scroll and selection. */
+        diff: TableDiff;
+        sheet?: undefined;
+      }
+    | {
+        /** A sheet from `diffFiles` / `compareWorkbooks`: its diff, with its trace attached. */
+        sheet: SheetView;
+        diff?: undefined;
+      }
+  );
+
+/** Props of the React {@link DiffGrid} other than what to show. */
+export interface DiffGridBaseProps<A = unknown> extends Omit<DiffGridOptions<A>, 'renderAnnotation'> {
   /** Keep this array referentially stable (useMemo); a new array re-renders every annotation. */
   annotations?: CellAnnotation<A>[];
   /** Class for the container element. */
@@ -57,7 +71,7 @@ export type DiffGridHandle = Pick<
  * ```
  */
 export const DiffGrid = forwardRef(function DiffGrid<A>(
-  { diff, className, style, renderAnnotation, ...options }: DiffGridProps<A>,
+  { diff: diffProp, sheet, className, style, renderAnnotation, ...props }: DiffGridProps<A>,
   ref: React.ForwardedRef<DiffGridHandle>,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -72,6 +86,9 @@ export const DiffGrid = forwardRef(function DiffGrid<A>(
     return k;
   };
 
+  const diff = sheet ? sheet.diff : diffProp!;
+  // A sheet brings its trace; an explicit `trace` prop wins.
+  const options = sheet && props.trace === undefined ? { ...props, trace: sheet.trace } : props;
   const vanillaRender = renderAnnotation
     ? (a: CellAnnotation<A>) => {
         const host = document.createElement('div');
@@ -93,14 +110,14 @@ export const DiffGrid = forwardRef(function DiffGrid<A>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    viewRef.current?.setDiff(diff);
-  }, [diff]);
-
   const { annotations, ...rest } = options;
+  // Options first: a new diff should meet its own trace, not the previous one.
   useEffect(() => {
     viewRef.current?.setOptions(rest);
   });
+  useEffect(() => {
+    viewRef.current?.setDiff(diff);
+  }, [diff]);
   useEffect(() => {
     if (annotations === undefined) return;
     setPortals((prev) => {

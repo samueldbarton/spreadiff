@@ -3,7 +3,9 @@ import { diffText, formatCell, numericDelta } from '../core/text.js';
 import { changeKind } from '../core/kind.js';
 import { rowLabelColumn } from '../core/label.js';
 import { sheetLabels, type RowLabel, type SheetLabels } from '../core/labels.js';
-import type { CellRef, CellTrace, ChangeKind, WorkbookTrace } from '../core/trace.js';
+import type { CellRef, CellTrace, ChangeKind, TraceContext, WorkbookTrace } from '../core/trace.js';
+export type { TraceContext } from '../core/trace.js';
+import type { SheetView } from '../core/compare.js';
 import {
   ROW_STATUS,
   ROW_STATUS_NAMES,
@@ -96,15 +98,6 @@ export interface CellInfo {
  */
 export type CellDisplay = 'stacked' | 'new' | 'delta' | 'inline';
 
-/** A workbook trace, plus which sheet of the workbook a grid shows. */
-export interface TraceContext {
-  /** From {@link traceWorkbook}. */
-  trace: WorkbookTrace;
-  /** The workbook diff the trace was made from. Used to label causes on other sheets. */
-  workbook: WorkbookDiff;
-  /** Index of the grid's sheet in `workbook.sheets`. */
-  sheet: number;
-}
 
 /** Options for {@link DiffGrid}. All are optional and can be changed later with `setOptions`. */
 export interface DiffGridOptions<A = unknown> {
@@ -209,12 +202,19 @@ export interface DiffGridOptions<A = unknown> {
 }
 
 /** Arguments to `DiffGrid.render`. */
-export interface DiffGridRenderProps {
-  /** The diff to show. */
-  diff: TableDiff;
-  /** Element to render into. The grid fills it, so give it a size (e.g. a height). */
-  container: HTMLElement;
-}
+export type DiffGridRenderProps =
+  | {
+      /** The diff to show. */
+      diff: TableDiff;
+      /** Element to render into. The grid fills it, so give it a size (e.g. a height). */
+      container: HTMLElement;
+    }
+  | {
+      /** A sheet from `compareWorkbooks` / `diffFiles`: shows its diff, with its trace attached. */
+      sheet: SheetView;
+      /** Element to render into. The grid fills it, so give it a size (e.g. a height). */
+      container: HTMLElement;
+    };
 
 const HEADER_HEIGHT = 36;
 const SEPARATOR_HEIGHT = 30;
@@ -328,6 +328,8 @@ export class DiffGrid<A = unknown> {
   private headerTop = { old: 0, new: 0 };
   private minimapCache: { key: string; colors: (string | null)[]; alphas: Float32Array } | null = null;
   private cleanups: (() => void)[] = [];
+  /** `options.trace` with its sheet resolved against the diff shown (see `resolveTrace`). */
+  private tc: (TraceContext & { sheet: number }) | null = null;
 
   constructor(options: DiffGridOptions<A> = {}) {
     this.options = options;
@@ -373,7 +375,16 @@ export class DiffGrid<A = unknown> {
   // ---- Public API ------------------------------------------------------
 
   /** Mount into `container` (first call, or a new container) and show `diff`. */
-  render({ diff, container }: DiffGridRenderProps): void {
+  render(props: DiffGridRenderProps): void {
+    const { container } = props;
+    let diff: TableDiff;
+    if ('sheet' in props && props.sheet) {
+      diff = props.sheet.diff;
+      if (props.sheet.trace !== this.options.trace) {
+        this.options = { ...this.options, trace: props.sheet.trace };
+        if (this.diff === diff) this.resolveTrace();
+      }
+    } else diff = (props as { diff: TableDiff }).diff;
     if (this.container !== container) {
       this.detach();
       this.container = container;
@@ -389,6 +400,7 @@ export class DiffGrid<A = unknown> {
   setDiff(diff: TableDiff): void {
     if (this.diff === diff) return;
     this.diff = diff;
+    this.resolveTrace();
     this.expanded.clear();
     this.selected = null;
     this.hover = null;
@@ -416,6 +428,7 @@ export class DiffGrid<A = unknown> {
     if (!changed.length) return;
     this.options = { ...prev, ...next };
     const has = (...keys: (keyof DiffGridOptions<A>)[]) => keys.some((k) => changed.includes(k));
+    if (has('trace')) this.resolveTrace();
     if (has('theme')) {
       this.applyThemeAttr();
       this.refreshTheme();
@@ -429,6 +442,28 @@ export class DiffGrid<A = unknown> {
     } else {
       this.schedule();
     }
+  }
+
+  /**
+   * Which sheet of `trace.workbook` this grid shows: the one whose `diff` it
+   * is. That beats `trace.sheet`, which can be stale or wrong (React applies
+   * a new diff before new options); the index is only used for a diff that
+   * isn't one of the workbook's sheets. With neither, nothing is traced.
+   */
+  private resolveTrace(): void {
+    const tc = this.options.trace;
+    if (!tc || !this.diff) {
+      this.tc = null;
+      return;
+    }
+    const found = tc.workbook.sheets.findIndex((s) => s.diff === this.diff);
+    const sheet = found >= 0 ? found : tc.sheet;
+    if (sheet === undefined) {
+      // Usually transient (a new diff set before its new trace); a real mismatch would show nothing traced.
+      this.tc = null;
+      return;
+    }
+    this.tc = { ...tc, sheet };
   }
 
   /** The current options. */
@@ -651,7 +686,7 @@ export class DiffGrid<A = unknown> {
   /** input / formula / computed for a changed cell. */
   private kindOf(r: number, ci: number): ChangeKind {
     const d = this.diff!;
-    const tc = this.options.trace;
+    const tc = this.tc;
     if (tc) {
       const k = tc.trace.get({ sheet: tc.sheet, row: r, col: ci })?.kind;
       if (k) return k;
@@ -1514,7 +1549,7 @@ export class DiffGrid<A = unknown> {
     const sel = this.selected;
     this.focusKey = sel ? `${sel.row}:${sel.col}` : '';
     this.focus = null;
-    const tc = this.options.trace;
+    const tc = this.tc;
     if (!sel || !tc || this.options.traceFocus === false) return;
     const ref = { sheet: tc.sheet, row: sel.row, col: sel.col };
     const t = tc.trace.get(ref);
@@ -1532,7 +1567,7 @@ export class DiffGrid<A = unknown> {
 
   /** `Sheet!B7 price` for a traced cell, with its change. */
   private describeRef(ref: CellRef): { label: string; delta: string; sign: '+' | '-' | '' } {
-    const tc = this.options.trace!;
+    const tc = this.tc!;
     const sheet = tc.workbook.sheets[ref.sheet];
     const d = sheet.diff;
     const c = d.columns[ref.col];
@@ -2384,7 +2419,7 @@ export class DiffGrid<A = unknown> {
       oldFormula: oi >= 0 && column.oldIndex >= 0 ? diff.oldTable.formulas?.[oi]?.[column.oldIndex] : undefined,
       newFormula: ni >= 0 && column.newIndex >= 0 ? diff.newTable.formulas?.[ni]?.[column.newIndex] : undefined,
       kind: diff.changedCells.get(row)?.[columnIndex] === 1 ? this.kindOf(row, columnIndex) : undefined,
-      trace: this.options.trace?.trace.get({ sheet: this.options.trace.sheet, row, col: columnIndex }),
+      trace: this.tc?.trace.get({ sheet: this.tc.sheet, row, col: columnIndex }),
     };
   }
 
@@ -2429,7 +2464,7 @@ export class DiffGrid<A = unknown> {
       const pct = delta.ratio === null ? '' : ` (${sign}${Math.abs(delta.ratio * 100).toFixed(Math.abs(delta.ratio) < 0.1 ? 2 : 1)}%)`;
       html += `<div class="sd-tt-delta">Δ <b data-sign="${sign}">${sign}${abs}${pct}</b></div>`;
     }
-    const tc = this.options.trace;
+    const tc = this.tc;
     const kind = info.kind;
     if (kind && this.options.highlightComputed !== false) {
       const kindLabel = kind === 'computed' ? 'downstream' : kind === 'formula' ? 'formula edit' : 'input edit';
