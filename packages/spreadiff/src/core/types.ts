@@ -1,3 +1,5 @@
+import type { ChartInfo, ObjectChange, PivotInfo } from './objects.js';
+
 /**
  * A single cell value. Parsers produce numbers only when the conversion is
  * lossless (`"007"` stays a string), and dates as ISO strings
@@ -91,6 +93,10 @@ export interface Workbook {
    * were computed, and how many couldn't be and are left empty.
    */
   computedValues?: { computed: number; failed: number };
+  /** Charts, from the XLSX reader. */
+  charts?: ChartInfo[];
+  /** Pivot tables, from the XLSX reader. */
+  pivots?: PivotInfo[];
 }
 
 /** An Excel table (a ListObject): what a structured reference like `Sales[Amount]` points at. */
@@ -292,4 +298,6 @@ export interface WorkbookDiff {
   date1904?: { old?: boolean; new?: boolean };
   /** `Workbook.computedValues` of each side: formula values computed because the file had none. */
   computedValues?: { old?: Workbook['computedValues']; new?: Workbook['computedValues'] };
+  /** Changes to defined names, charts and pivot tables (see `diffWorkbookObjects`). Absent when there are none. */
+  objects?: ObjectChange[];
 }

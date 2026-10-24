@@ -15,3 +15,6 @@ export { changeKind } from './kind.js';
 export { computeMissingValues, type MissingValues } from './recalc.js';
 export { compareWorkbooks, diffFiles, type Comparison, type CompareOptions, type DiffFilesOptions, type SheetView, type SpreadsheetInput } from './compare.js';
 export { reportOf, type ChangeReport, type CellChange, type Cause, type StructureChange } from './report.js';
+export { diffWorkbookObjects, type ChartInfo, type ObjectChange, type PivotInfo } from './objects.js';
+export { BUILTIN_FORMATS, formatNumberCode, formatTextCode, isDateFormat } from './numfmt.js';
+export { displayCell, displayMagnitude, displayValue, formatCodeAt } from './display.js';

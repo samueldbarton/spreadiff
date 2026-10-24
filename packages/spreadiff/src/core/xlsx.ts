@@ -11,6 +11,8 @@ import { columnLabel, uniqueNames } from './csv.js';
 import { formulaRefs, scopedNames } from './formula.js';
 import { computeMissingValues } from './recalc.js';
 import { BUILTIN_FORMATS } from './numfmt.js';
+import { attr, decode, decodeRef, eachElement, removeElements, resolvePath, textRuns } from './xml.js';
+import { parseObjects } from './objects.js';
 import type { CellValue, Table, TableDefinition, Workbook } from './types.js';
 
 /** Options for {@link parseXlsx}. */
@@ -60,9 +62,26 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
       f.name === 'xl/styles.xml' ||
       f.name === 'xl/_rels/workbook.xml.rels' ||
       f.name.startsWith('xl/worksheets/') ||
-      f.name.startsWith('xl/tables/'),
+      f.name.startsWith('xl/tables/') ||
+      // Charts and pivot tables (see parseObjects): their links and definitions, not their data.
+      f.name.startsWith('xl/chartsheets/') ||
+      f.name.startsWith('xl/drawings/_rels/') ||
+      /^xl\/charts\/chart\d+\.xml$/.test(f.name) ||
+      f.name.startsWith('xl/pivotTables/') ||
+      /^xl\/pivotCache\/pivotCacheDefinition\d+\.xml$/.test(f.name),
   });
-  const text = (path: string) => (files[path] ? stripPrefixes(strFromU8(files[path])) : '');
+  // Part names are case-insensitive (OPC): some writers name a sheet Sheet1.xml and its links sheet1.xml.rels.
+  let lower: Map<string, string> | null = null;
+  const part = (path: string): Uint8Array | undefined => {
+    if (files[path]) return files[path];
+    lower ??= new Map(Object.keys(files).map((k) => [k.toLowerCase(), k]));
+    const k = lower.get(path.toLowerCase());
+    return k ? files[k] : undefined;
+  };
+  const text = (path: string) => {
+    const f = part(path);
+    return f ? stripPrefixes(strFromU8(f)) : '';
+  };
 
   const workbookXml = text('xl/workbook.xml');
   if (!workbookXml) throw new Error('Not an XLSX file (missing xl/workbook.xml)');
@@ -84,6 +103,7 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
   const numberFormats = parseNumberFormats(stylesXml);
 
   const raws: RawSheet[] = [];
+  const sheetParts: { name: string; path: string }[] = [];
   const tables: TableDefinition[] = [];
   const allSheets: string[] = []; // every sheet in workbook order: localSheetId indexes this
   eachElement(workbookXml, 'sheet', (a) => {
@@ -93,8 +113,9 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
     // The relationships prefix is conventionally `r:` but may be anything.
     const rid = attr(a, 'r:id') ?? /\s[\w.-]+:id\s*=\s*["']([^"']*)/.exec(a)?.[1];
     const path = rid ? rels.get(rid) : undefined;
-    if (!path || !files[path]) return;
+    if (!path || !part(path)) return;
     raws.push(parseCells(name, text(path), strings, dateStyles, date1904, labelStyles, numberFormats));
+    sheetParts.push({ name, path });
     // Excel tables on this sheet, for structured references (Sales[Amount]).
     const relsPath = path.replace(/([^/]+)$/, '_rels/$1.rels');
     eachElement(text(relsPath), 'Relationship', (ra) => {
@@ -141,6 +162,9 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
     ...(Object.keys(names).length ? { names } : {}),
     ...(tables.length ? { tables } : {}),
   };
+  const { charts, pivots } = parseObjects(text, sheetParts);
+  if (charts.length) workbook.charts = charts;
+  if (pivots.length) workbook.pivots = pivots;
   if (options.computeMissing !== false) {
     const m = computeMissingValues(workbook);
     if (m.computed || m.failed) workbook.computedValues = m;
@@ -149,16 +173,6 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
 }
 
 /** `xl/worksheets/sheet1.xml` + `../tables/table1.xml` → `xl/tables/table1.xml`. */
-function resolvePath(from: string, target: string): string {
-  if (target.startsWith('/')) return target.slice(1);
-  const parts = from.split('/').slice(0, -1);
-  for (const seg of target.split('/')) {
-    if (seg === '..') parts.pop();
-    else if (seg !== '.') parts.push(seg);
-  }
-  return parts.join('/');
-}
-
 function parseTableDefinition(xml: string, sheet: string): TableDefinition | null {
   let def: TableDefinition | null = null;
   eachElement(xml, 'table', (a) => {
@@ -260,107 +274,6 @@ function stripPrefixes(xml: string): string {
   return xml.replace(/<(\/?)[A-Za-z_][\w.-]*:/g, '<$1');
 }
 
-/**
- * Call `fn(attrs, body)` for each `<tag …>body</tag>` or `<tag …/>` in
- * `xml`. Stops at the first unclosed element instead of rescanning.
- */
-function eachElement(xml: string, tag: string, fn: (attrs: string, body: string | null) => void): void {
-  const open = `<${tag}`;
-  const close = `</${tag}>`;
-  let i = xml.indexOf(open);
-  while (i >= 0) {
-    const next = xml.charCodeAt(i + open.length);
-    // Must be the whole tag name: followed by whitespace, '>' or '/'.
-    if (next !== 62 && next !== 47 && next !== 32 && next !== 9 && next !== 10 && next !== 13) {
-      i = xml.indexOf(open, i + 1);
-      continue;
-    }
-    const gt = xml.indexOf('>', i);
-    if (gt < 0) return;
-    if (xml.charCodeAt(gt - 1) === 47) {
-      fn(xml.slice(i + open.length, gt - 1), null);
-      i = xml.indexOf(open, gt + 1);
-      continue;
-    }
-    const end = xml.indexOf(close, gt + 1);
-    if (end < 0) return;
-    fn(xml.slice(i + open.length, gt), xml.slice(gt + 1, end));
-    i = xml.indexOf(open, end + close.length);
-  }
-}
-
-/** Concatenated text of every `<t>` in `body`, skipping phonetic `<rPh>` runs. */
-function textRuns(body: string): string {
-  let s = '';
-  const clean = body.indexOf('<rPh') < 0 ? body : removeElements(body, 'rPh');
-  eachElement(clean, 't', (_, b) => {
-    if (b) s += b;
-  });
-  return decode(s);
-}
-
-function removeElements(xml: string, tag: string): string {
-  let out = '';
-  let pos = 0;
-  const open = `<${tag}`;
-  const close = `</${tag}>`;
-  for (;;) {
-    const i = xml.indexOf(open, pos);
-    if (i < 0) break;
-    const end = xml.indexOf(close, i);
-    if (end < 0) break;
-    out += xml.slice(pos, i);
-    pos = end + close.length;
-  }
-  return out + xml.slice(pos);
-}
-
-/** Attribute value by name; accepts either quote style and any whitespace. */
-function attr(attrs: string, name: string): string | undefined {
-  let i = attrs.indexOf(name);
-  while (i >= 0) {
-    const before = attrs.charCodeAt(i - 1);
-    let j = i + name.length;
-    if (before === 32 || before === 9 || before === 10 || before === 13) {
-      while (attrs.charCodeAt(j) === 32) j++;
-      if (attrs.charCodeAt(j) === 61) {
-        j++;
-        while (attrs.charCodeAt(j) === 32) j++;
-        const q = attrs[j];
-        if (q === '"' || q === "'") {
-          const end = attrs.indexOf(q, j + 1);
-          if (end >= 0) return attrs.slice(j + 1, end);
-        }
-      }
-    }
-    i = attrs.indexOf(name, i + 1);
-  }
-  return undefined;
-}
-
-const ENTITY = /&(amp|lt|gt|quot|apos|#x[0-9a-fA-F]+|#\d+);/g;
-function decode(s: string): string {
-  // XML parsers must read a literal CR LF (or lone CR) as LF; an escaped
-  // &#13; survives. Excel writes CR LF, LibreOffice LF, for the same text.
-  if (s.indexOf('\r') >= 0) s = s.replace(/\r\n?/g, '\n');
-  // Excel escapes control characters in text as _xHHHH_ (OOXML ST_Xstring).
-  if (s.indexOf('_x') >= 0) s = s.replace(/_x([0-9A-Fa-f]{4})_/g, (_, h: string) => String.fromCharCode(parseInt(h, 16)));
-  if (s.indexOf('&') < 0) return s;
-  return s.replace(ENTITY, (all, e: string) => {
-    switch (e) {
-      case 'amp': return '&';
-      case 'lt': return '<';
-      case 'gt': return '>';
-      case 'quot': return '"';
-      case 'apos': return "'";
-      default: {
-        const cp = e[1] === 'x' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
-        return cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : all;
-      }
-    }
-  });
-}
-
 function parseSharedStrings(xml: string): string[] {
   const out: string[] = [];
   eachElement(xml, 'si', (_, body) => out.push(body ? textRuns(body) : ''));
@@ -447,17 +360,6 @@ function serialToIso(serial: number, date1904: boolean): string | null {
   const frac = iso.slice(19, 23) === '.000' ? '' : iso.slice(19, 23).replace(/0+$/, '');
   if (serial < 1) return iso.slice(11, 19) + frac;
   return `${iso.slice(0, 10)} ${iso.slice(11, 19)}${frac}`;
-}
-
-function decodeRef(ref: string): [row: number, col: number] {
-  let col = 0;
-  let i = 0;
-  for (; i < ref.length; i++) {
-    const c = ref.charCodeAt(i);
-    if (c < 65 || c > 90) break;
-    col = col * 26 + (c - 64);
-  }
-  return [Number(ref.slice(i)) - 1, col - 1];
 }
 
 /** Shift relative A1 references in a shared formula by a row/column offset. */

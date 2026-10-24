@@ -127,7 +127,7 @@ function main(argv: string[]) {
     fail((e as Error).message);
   }
   process.stdout.write(json ? JSON.stringify(report, null, 2) + '\n' : toMarkdown(report, md));
-  const changed = report.edits.length + report.downstream.length + report.structure.length > 0;
+  const changed = report.edits.length + report.downstream.length + report.structure.length + report.objects.length > 0;
   process.exitCode = changed ? 1 : 0;
 }
 

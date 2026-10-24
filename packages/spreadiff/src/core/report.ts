@@ -4,6 +4,7 @@ import { formatLabel, tableLabeler, type CellLabel } from './labels.js';
 import { ROW_STATUS, type CellValue, type TableDiff, type WorkbookDiff } from './types.js';
 import type { CellRef, CellTrace, WorkbookTrace } from './trace.js';
 import type { ExternalSource } from './external.js';
+import type { ObjectChange } from './objects.js';
 
 /** One changed cell in a {@link ChangeReport}. */
 export interface CellChange {
@@ -109,6 +110,8 @@ export interface ChangeReport {
   downstream: CellChange[];
   /** Added, removed and moved rows, columns and sheets. */
   structure: StructureChange[];
+  /** Changes to defined names, charts and pivot tables. */
+  objects: ObjectChange[];
   /** Caveats a reader should know about (stale files, unmodelled formulas, truncation). */
   notes: string[];
   /** The underlying diff, for callers that want more than the report. Not enumerable, so `JSON.stringify` leaves it out. */
@@ -303,6 +306,7 @@ export function reportOf(diff: WorkbookDiff, trace: WorkbookTrace, oldName = 'ol
     edits,
     downstream,
     structure,
+    objects: diff.objects ?? [],
     notes,
   } as ChangeReport;
   // Not enumerable: JSON.stringify(report) stays the report.

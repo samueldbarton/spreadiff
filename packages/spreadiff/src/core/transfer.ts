@@ -170,6 +170,8 @@ export interface PackedWorkbookDiff {
   date1904?: WorkbookDiff['date1904'];
   /** As in `WorkbookDiff.computedValues`. */
   computedValues?: WorkbookDiff['computedValues'];
+  /** As in `WorkbookDiff.objects`. */
+  objects?: WorkbookDiff['objects'];
 }
 
 /** Pack a workbook diff; returns the message and the buffers to transfer. */
@@ -191,6 +193,7 @@ export function packWorkbookDiff(d: WorkbookDiff): { packed: PackedWorkbookDiff;
     tables: d.tables,
     date1904: d.date1904,
     computedValues: d.computedValues,
+    objects: d.objects,
   };
   return { packed, transfer };
 }
@@ -207,6 +210,7 @@ export function unpackWorkbookDiff(p: PackedWorkbookDiff): WorkbookDiff {
     tables: p.tables,
     date1904: p.date1904,
     computedValues: p.computedValues,
+    objects: p.objects,
   };
 }
 

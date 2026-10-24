@@ -12,6 +12,7 @@ import {
   type Workbook,
   type WorkbookDiff,
 } from './types.js';
+import { diffWorkbookObjects } from './objects.js';
 
 const DEFAULTS: Required<DiffOptions> = {
   keys: 'auto',
@@ -401,12 +402,14 @@ export function diffWorkbooks(oldBook: Workbook, newBook: Workbook, options: Dif
     const d = compareAligned(aligned[i], formulaKeyer(aligned, i));
     return { name: p.name, status: p.status ?? (hasChanges(d) ? 'modified' : 'equal'), diff: d };
   });
+  const objects = diffWorkbookObjects(oldBook, newBook);
   return {
     sheets,
     names: oldBook.names || newBook.names ? { old: oldBook.names, new: newBook.names } : undefined,
     tables: oldBook.tables || newBook.tables ? { old: oldBook.tables, new: newBook.tables } : undefined,
     date1904: oldBook.date1904 || newBook.date1904 ? { old: oldBook.date1904, new: newBook.date1904 } : undefined,
     computedValues: oldBook.computedValues || newBook.computedValues ? { old: oldBook.computedValues, new: newBook.computedValues } : undefined,
+    objects: objects.length ? objects : undefined,
   };
 }
 
