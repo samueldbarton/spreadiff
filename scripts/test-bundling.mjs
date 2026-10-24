@@ -27,7 +27,7 @@ writeFileSync(
   join(APP, 'src/main.ts'),
   `import { createDiffWorker } from 'spreadiff/worker';
 import { diffTables, parseCsv } from 'spreadiff';
-import { renderText } from 'spreadiff/lite';
+import { renderText } from 'spreadiff/html';
 const enc = (s: string) => new TextEncoder().encode(s).buffer as ArrayBuffer;
 const run = (label: string, w: Worker) =>
   Promise.race([
@@ -36,11 +36,11 @@ const run = (label: string, w: Worker) =>
       .then((r) => \`\${label}: \${r.result.sheets[0].diff.stats.cellsChanged === 1 ? 'ok' : 'WRONG RESULT'}\`),
     new Promise<string>((r) => setTimeout(() => r(\`\${label}: no reply\`), 5000)),
   ]);
-const lite = renderText(diffTables(parseCsv('a\\n1'), parseCsv('a\\n2'))).includes('+  2') ? 'lite: ok' : 'lite: WRONG';
+const html = renderText(diffTables(parseCsv('a\\n1'), parseCsv('a\\n2'))).includes('+  2') ? 'html: ok' : 'html: WRONG';
 Promise.all([
   run('worker (package URL)', new Worker(new URL('spreadiff/worker/worker.js', import.meta.url), { type: 'module' })),
   run('worker (own file)', new Worker(new URL('./diff.worker.ts', import.meta.url), { type: 'module' })),
-]).then((lines) => { document.getElementById('out')!.textContent = [lite, ...lines].join('\\n'); });
+]).then((lines) => { document.getElementById('out')!.textContent = [html, ...lines].join('\\n'); });
 `,
 );
 sh('npx vite build', APP);
@@ -55,7 +55,7 @@ try {
   const out = await page.textContent('#out');
   await browser.close();
   console.log(out);
-  if (!/^(lite: ok\n)(worker \(package URL\): ok\n)(worker \(own file\): ok)$/.test(out)) {
+  if (!/^(html: ok\n)(worker \(package URL\): ok\n)(worker \(own file\): ok)$/.test(out)) {
     console.error(`✗ bundling test failed (assets: ${sizes.join(', ')})`);
     process.exitCode = 1;
   } else console.log('✓ bundling test passed');

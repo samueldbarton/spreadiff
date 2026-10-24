@@ -9,7 +9,9 @@ const pkg = JSON.parse(readFileSync(root + 'package.json', 'utf8'));
 const entries = Object.entries(pkg.exports)
   .map(([k, v]) => [k === '.' ? 'spreadiff' : `spreadiff/${k.slice(2)}`, root + v.import.replace('./dist/', 'src/').replace(/\.js$/, '.ts')])
   .map(([k, f]) => [k, f.endsWith('react/index.ts') ? f.replace(/\.ts$/, '.tsx') : f]);
-const program = ts.createProgram(entries.map(([, f]) => f), { allowJs: false, jsx: ts.JsxEmit.ReactJSX, moduleResolution: ts.ModuleResolutionKind.Bundler, module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, skipLibCheck: true });
+// spreadiff-lite is a package of its own; its API is documented in docs/api.md too.
+entries.push(['spreadiff-lite', fileURLToPath(new URL('../packages/spreadiff-lite/src/index.ts', import.meta.url))]);
+const program = ts.createProgram(entries.map(([, f]) => f), { paths: { 'spreadiff/core': [root + 'src/core/index.ts'] }, allowJs: false, jsx: ts.JsxEmit.ReactJSX, moduleResolution: ts.ModuleResolutionKind.Bundler, module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, skipLibCheck: true });
 const checker = program.getTypeChecker();
 export function listExports() {
   const out = [];

@@ -11,6 +11,8 @@ caused it, and says how much each edit contributed.
 
 ![A financial model: edited inputs in green and red, downstream results in amber](images/display-stacked.png)
 
+<!-- demo: trace -->
+
 ## Four kinds of change
 
 Every changed cell gets a [`ChangeKind`](api.md#changekind):
@@ -21,6 +23,16 @@ Every changed cell gets a [`ChangeKind`](api.md#changekind):
 | `formula` | A formula was edited (compared by meaning; see [Formulas](diffing.md#formulas)) | green / red, with `ƒ` |
 | `computed` | **Same formula, new result**: a downstream change | amber |
 | `added` / `removed` | A cell of an added or removed row/column that feeds a formula | row tint |
+
+An `input` can also hold a formula, when that formula reads **outside
+data**: Bloomberg's `BDP`, Capital IQ, FactSet, `RTD`, `WEBSERVICE`, a
+link to another workbook. Such a value can't be recalculated without the
+connection, and it can change when nothing in the file did. So the trace
+takes its saved value as given, and treats a change to it as an edit:
+`trace.get(ref).external` says where it came from (`{ provider:
+'Bloomberg', function: 'BDP' }`). The results it feeds are traced to it.
+[spreadiff-lite → Outside data](spreadiff-lite.md#outside-data) lists the
+functions recognised, and `TraceOptions.liveFunctions` adds your own.
 
 Telling `input` from `computed` needs only the two files, not a full
 trace. So the grid colours downstream changes amber by default
@@ -94,10 +106,18 @@ spreadiff does exactly that, with its own formula engine:
    read: the branch an `IF` took, the row a `VLOOKUP` returned. That's the
    dependency graph from here on, instead of every reference the formula
    mentions.
-4. **Undo each edit, one at a time.** Recalculate, in dependency order, only
-   the cells whose inputs moved. Every downstream cell that comes out
-   different has this edit as a cause; the difference is its
-   contribution.
+4. **Undo each edit, one at a time.** An edited value goes back to its old
+   value. An edited formula goes back to its old formula, evaluated on
+   today's inputs, so its contribution doesn't absorb what the other edits
+   did. (When rows or columns were inserted or deleted, the old formula's
+   references no longer line up, and it goes back to its old result
+   instead.) Then recalculate, in dependency order, only the cells whose
+   inputs moved. Every downstream cell that comes out different has this
+   edit as a cause; the difference is its contribution.
+
+The undone state is exactly what LibreOffice computes for the file with
+that one edit left out. Checked that way, all 3,400 contributions in the
+test corpus match LibreOffice's (see [How it was tested](#how-it-was-tested)).
 
 Contributions needn't add up to the total change. Edits interact: a rate
 times a balance, an `IF` that needs two inputs to cross a threshold. A
@@ -192,6 +212,7 @@ their own, the truth is the edits that move C when applied alone.
 | Stale file: downstream changes found (4 models) | 0 | **all** (63, 84, 1,441, 146) |
 | Missing values computed equal to LibreOffice's | — | **12,560 of 12,560** |
 | Every formula recalculated from its cached inputs reproduces its cached result | — | **99.6%** (46,082 of 46,249) |
+| Contributions equal to LibreOffice's (new value − value without that edit) | — | **3,400 of 3,400** (2,980 models, 420 real files) |
 
 The other 0.6% are 11 cells in the budget model whose causes include an
 inserted row. The oracle has no single edit to undo for an insert, so
@@ -231,6 +252,7 @@ and no `eval`. `npm run test:hosted` checks the hosted setup itself:
 | --- | --- |
 | Changed cells found, with the right kind | 2,016 of 2,016 |
 | Downstream cells with exactly LibreOffice's causes | **1,955 of 1,955** scored |
+| Contributions equal to LibreOffice's | **3,304 of 3,304** |
 | Stale files: values after recalculation equal LibreOffice's | 1,843 of 1,843 |
 | Files without values: computed values equal LibreOffice's | 12,665 of 12,665 |
 | Requests outside the page | 0 |
@@ -252,7 +274,7 @@ traces on the main thread.
 | Two edits that are each enough on their own | No single undo changes the result, so recalculation finds no cause | `method: 'references'` with both edits. In the 30,000-row grid, 1 of 3,632 cells: `=IF(F>$J$1,"high","low")` went low → high because both F rose and the threshold fell |
 | Circular references (iterative calculation) | Not evaluated | References for those cells |
 | Links to other workbooks | Not followed | `unexplained: 'dynamic'` |
-| Sheet-scoped names | Not resolved | References; `dynamic` |
+| Sheet-scoped names (`Rate` defined only on one sheet, `Inputs!Rate` from another) | Resolved: each formula sees its own sheet's names over the workbook's | Traced like any other reference |
 | Huge changes (> 300,000 formulas affected, or 2,000,000 evaluations) | Recalculation stops | `trace.truncated`; references for the rest |
 | First row holds inputs, not column names | Detected: a first row that formulas read, or that holds numbers other than year labels, is data (its labels still name the columns) | Edits to it are traced like any other cell |
 
@@ -322,10 +344,15 @@ falls back to references and sets `truncated`.
   its marginal effect with all the others in place. For interacting edits
   (rate × balance), the parts don't sum to the whole, and no split of an
   interaction term is unique.
-- **An edited formula's "undo" is its old result.** Undoing a formula edit
-  restores the cell's old value, not the old formula re-evaluated on new
-  inputs.
+- **An edited formula's undo needs the layout to line up.** It
+  re-evaluates the old formula on today's inputs, which is only valid when
+  no rows or columns were inserted or deleted (the old formula's
+  references would point elsewhere). Otherwise it restores the old
+  result, which also carries the effect of every other edit upstream of
+  that cell. Translating references through the alignment would close
+  this; it isn't done yet.
 - **One engine's opinion.** A recalculated value is what spreadiff's
   engine computes. It reproduces 99.6% of the formulas in the test corpus
-  exactly, and calibration rules out the rest, but it isn't Excel.
-- **One workbook.** References to other workbooks are flagged, not followed.
+  exactly, and calibration samples each formula shape, but it isn't Excel.
+- **One workbook.** References to other workbooks aren't followed: a cell
+  reading one is outside data, taken as saved (above).

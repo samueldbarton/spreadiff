@@ -39,6 +39,24 @@ export interface Table {
    * each shows its own element of the result.
    */
   arrays?: { r0: number; c0: number; r1: number; c1: number }[];
+  /**
+   * Merged ranges, in 0-based inclusive sheet coordinates. The value sits in
+   * the top-left cell; the rest are empty. `DiffGrid` draws a horizontal
+   * merge as one cell where nothing in it changed.
+   */
+  merges?: { r0: number; c0: number; r1: number; c1: number }[];
+  /**
+   * Defined names scoped to this sheet (`Rate` → `$B$2`). Formulas on this
+   * sheet see them over the workbook's `names`; other sheets reach them as
+   * `Sheet!Rate`.
+   */
+  names?: Record<string, string>;
+  /**
+   * Text cells that are indented or bold, in 0-based sheet coordinates.
+   * Row labels use them to tell a section heading ("India") from the items
+   * under it ("Revenue"). The XLSX reader fills this; it's optional.
+   */
+  labelStyles?: { r: number; c: number; indent?: number; bold?: boolean }[];
 }
 
 /** An ordered list of sheets. A CSV file is a one-sheet workbook. */
@@ -156,6 +174,8 @@ export interface DiffStats {
   rowsModified: number;
   /** Rows in both tables with no changed cells. */
   rowsEqual: number;
+  /** Rows matched by key whose position changed relative to the others (see `TableDiff.moved`). Counted in `rowsEqual` / `rowsModified` too. */
+  rowsMoved: number;
   /** Changed cells across all modified rows. Cells of added/removed rows and columns aren't counted. */
   cellsChanged: number;
   /** Columns only in the new table. */
@@ -197,6 +217,13 @@ export interface TableDiff {
   newRows: Int32Array;
   /** Status per aligned row, encoded as {@link ROW_STATUS} numbers. */
   status: Uint8Array;
+  /**
+   * Per aligned row, 1 where a row matched by key moved: the fewest rows
+   * whose moving explains the new order (the others keep their relative
+   * order). Independent of `status`: a moved row can also be modified.
+   * Always 0 when rows were matched by order, which can't reorder.
+   */
+  moved: Uint8Array;
   /**
    * Changed cells of modified rows: aligned row → mask with one entry per
    * aligned column, 1 where the cell changed. Rows without changes are absent.

@@ -19,9 +19,9 @@
       "types": "./dist/core/index.d.ts",
       "import": "./dist/core/index.js"
     },
-    "./lite": {
-      "types": "./dist/lite/index.d.ts",
-      "import": "./dist/lite/index.js"
+    "./html": {
+      "types": "./dist/html/index.d.ts",
+      "import": "./dist/html/index.js"
     },
     "./xlsx": {
       "types": "./dist/core/xlsx.d.ts",

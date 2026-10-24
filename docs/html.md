@@ -1,8 +1,8 @@
-# spreadiff/lite
+# spreadiff/html
 
-`spreadiff/lite` renders a diff as an **HTML string** or as **plain text**.
+`spreadiff/html` renders a diff as an **HTML string** or as **plain text**.
 It uses no canvas, no DOM APIs and no workers, so the same call works in a
-browser, a Node server, a CI job or a static-site build. At 12.0 KB
+browser, a Node server, a CI job or a static-site build. At 16.0 KB
 (min+gzip) for the diff engine, the CSV parser and both renderers, it's the
 lightest way to use spreadiff.
 
@@ -12,15 +12,17 @@ a large sheet, use the [DiffGrid](grid.md).
 
 | `layout: 'split'` | `layout: 'unified'` |
 | --- | --- |
-| ![Split: old and new side by side, one row per line](images/lite-split.png) | ![Unified: a − line and a + line per modified row](images/lite-unified.png) |
+| ![Split: old and new side by side, one row per line](images/html-split.png) | ![Unified: a − line and a + line per modified row](images/html-unified.png) |
+
+<!-- demo: html -->
 
 ## HTML
 
 ```ts
-import { diffTables, LITE_CSS, parseCsv, renderHTML } from 'spreadiff/lite';
+import { diffTables, HTML_CSS, parseCsv, renderHTML } from 'spreadiff/html';
 
 const html = renderHTML(diffTables(parseCsv(before), parseCsv(after)), { layout: 'split' });
-container.innerHTML = `<style>${LITE_CSS}</style>${html}`;
+container.innerHTML = `<style>${HTML_CSS}</style>${html}`;
 ```
 
 - **`split`** puts old and new side by side, one row per line, with line
@@ -40,17 +42,20 @@ Cell values are HTML-escaped: rendering an untrusted file is safe.
 | `layout` | `'split'` | `'split'` or `'unified'` |
 | `display` | `'stacked'` | `'stacked'`, `'new'`, `'delta'` or `'inline'`, as in the [grid](grid.md#displaying-a-change) |
 | `context` | `2` | Unchanged rows shown around each change |
-| `changedColumnsOnly` | `false` | Only columns with changes (plus key columns) |
+| `changedColumnsOnly` | `false` | Only columns with changes, plus key columns (or, when rows were matched by order, the first mostly-text column, which names the rows) |
 | `maxRows` | `2000` | Stop after this many rows; a note says how many more changed rows exist |
 | `kindOf` | local | `(row, col) => ChangeKind` override, e.g. from a [trace](tracing.md) |
 | `rowNumberOffset` | from `origin` | Row number of row index 0 |
+| `rowHeaders` | `'labels'` | What the row headers show: `'labels'` (inferred row labels, as in the [grid](grid.md#row-and-column-headers)), `'numbers'` or `'both'` |
+| `columnHeaders` | `'labels'` | `'labels'` (headings), `'letters'` or `'both'` |
+| `foldLabels` | `true` | With labels, leave out unchanged label columns and heading rows |
 
 Downstream (computed) changes are amber, formula edits get an `ƒ`, and
 deltas are green or red by direction, as in the grid.
 
 ### Styling
 
-`LITE_CSS` styles everything under `.sdl-wrap`. It reads the same `--sd-*`
+`HTML_CSS` styles everything under `.sdl-wrap`. It reads the same `--sd-*`
 variables as the grid (see [Theming](theming.md#tokens)): `--sd-bg`,
 `--sd-fg`, `--sd-added`, `--sd-removed`, `--sd-modified`, `--sd-computed`,
 `--sd-formula`, `--sd-font-family`, `--sd-mono-font-family`. Light and dark
@@ -64,7 +69,7 @@ Markdown code blocks:
 
 <!-- example: render-text -->
 ```ts
-import { diffTables, parseCsv, renderText } from 'spreadiff/lite';
+import { diffTables, parseCsv, renderText } from 'spreadiff/html';
 
 const before = parseCsv('id,name,price\n1,Lamp,10\n2,Chair,20\n3,Desk,30\n4,Mug,4\n5,Rug,50\n6,Vase,6\n7,Tray,7');
 const after = parseCsv('id,name,price\n1,Lamp,10\n2,Armchair,25\n3,Desk,30\n4,Mug,4\n5,Rug,50\n6,Vase,6\n8,Clock,12');
@@ -74,7 +79,7 @@ console.log(renderText(diffTables(before, after), { context: 0 }));
 <!-- output: render-text -->
 ```text
    id  name      price
-⋯  1 unchanged rows
+⋯  1 unchanged row
 -  2   Chair     20
 +  2   Armchair  25
 ⋯  4 unchanged rows
@@ -85,16 +90,21 @@ console.log(renderText(diffTables(before, after), { context: 0 }));
 Columns are padded to their widest value (capped by `maxWidth`, default 24
 characters) and line breaks inside cells become spaces.
 
+When rows are matched by key, a row that [moved](diffing.md#moved-rows) is
+marked: `~` and "(moved from row N)" in text, `↕` with the same title in
+HTML. A moved row that also changed shows its `-`/`+` pair, with the note
+on the `+` line.
+
 ## Recipes
 
 ### A pull-request comment from CI
 
 ```ts
 import { readFileSync } from 'node:fs';
-import { diffTables, parseCsv, renderText } from 'spreadiff/lite';
+import { diffTables, hasChanges, parseCsv, renderText } from 'spreadiff/html';
 
 const d = diffTables(parseCsv(readFileSync('prices.base.csv', 'utf8')), parseCsv(readFileSync('prices.csv', 'utf8')));
-const body = d.stats.rowsAdded + d.stats.rowsRemoved + d.stats.rowsModified === 0
+const body = !hasChanges(d)
   ? 'No changes to prices.csv'
   : `**prices.csv**: ${d.stats.rowsModified} edited, ${d.stats.rowsAdded} added, ${d.stats.rowsRemoved} removed\n\n` +
     '```diff\n' + renderText(d, { changedColumnsOnly: true }) + '```';
@@ -106,11 +116,11 @@ Lines start with ASCII `+` and `-`, so fencing the text as `diff` makes GitHub c
 ### Server-rendered HTML
 
 ```ts
-import { diffTables, LITE_CSS, parseCsv, renderHTML } from 'spreadiff/lite';
+import { diffTables, HTML_CSS, parseCsv, renderHTML } from 'spreadiff/html';
 
 export function diffPage(a: string, b: string): string {
   const html = renderHTML(diffTables(parseCsv(a), parseCsv(b)), { layout: 'split', display: 'delta' });
-  return `<!doctype html><meta charset="utf-8"><style>${LITE_CSS}</style>${html}`;
+  return `<!doctype html><meta charset="utf-8"><style>${HTML_CSS}</style>${html}`;
 }
 ```
 
@@ -122,7 +132,7 @@ color cells of added rows that feed totals:
 
 ```ts
 import { traceWorkbook } from 'spreadiff';
-import { renderHTML } from 'spreadiff/lite';
+import { renderHTML } from 'spreadiff/html';
 
 const trace = traceWorkbook(workbookDiff);
 const html = renderHTML(workbookDiff.sheets[0].diff, {
@@ -130,11 +140,11 @@ const html = renderHTML(workbookDiff.sheets[0].diff, {
 });
 ```
 
-(`traceWorkbook` is in `spreadiff/core`, not in `lite`.)
+(`traceWorkbook` is in `spreadiff/core`, not in `spreadiff/html`.)
 
 ## What's in the box
 
-`spreadiff/lite` exports `renderHTML`, `renderText`, `LITE_CSS`, and the
+`spreadiff/html` exports `renderHTML`, `renderText`, `HTML_CSS`, and the
 pieces needed to produce a diff: `diffTables`, `parseCsv`, `cellsEqual`,
 `changeKind`, `formatCell`, `numericDelta` and `diffText`. It doesn't
 include the XLSX parser (`spreadiff/xlsx`) or tracing (`spreadiff/core`):

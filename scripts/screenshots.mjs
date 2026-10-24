@@ -70,6 +70,10 @@ try {
   await page.mouse.move(5, 5);
   await scene(page, { sample: 'inventory', sheet: 'Inventory', layout: 'split', height: 460, width: 1560 });
   await shot(page, 'grid-split');
+  await scene(page, { sample: 'regions', layout: 'unified', display: 'delta', height: 430, width: 760 });
+  await shot(page, 'headers-labels');
+  await scene(page, { sample: 'regions', layout: 'unified', display: 'delta', headers: 'numbers', height: 490, width: 760 });
+  await shot(page, 'headers-numbers');
   await scene(page, { sample: 'cities', layout: 'split', annotations: true, height: 300 });
   await shot(page, 'grid-annotations');
   for (const display of ['stacked', 'new', 'delta', 'inline']) {
@@ -86,11 +90,11 @@ try {
   const emea = await cellPoint(page, 'EMEA', 'revenue');
   await page.evaluate(({ row, col }) => window.grid.select(row, col), emea);
   await shot(page, 'trace-focus');
-  // ---- Lite scenes
-  await scene(page, { sample: 'model', sheet: 'Revenue', renderer: 'lite', layout: 'split', trace: true });
-  await shot(page, 'lite-split');
-  await scene(page, { sample: 'model', sheet: 'Revenue', renderer: 'lite', layout: 'unified', trace: true });
-  await shot(page, 'lite-unified');
+  // ---- HTML renderer scenes
+  await scene(page, { sample: 'model', sheet: 'Revenue', renderer: 'html', layout: 'split', trace: true });
+  await shot(page, 'html-split');
+  await scene(page, { sample: 'model', sheet: 'Revenue', renderer: 'html', layout: 'unified', trace: true });
+  await shot(page, 'html-unified');
   await page.close();
   // ---- Dark
   page = await stagePage('dark');

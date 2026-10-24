@@ -1,5 +1,5 @@
 import { canonicalFormula } from './formula.js';
-import { alignSequences } from './sequence.js';
+import { alignSequences, longestIncreasing } from './sequence.js';
 import {
   ROW_STATUS,
   type AlignedColumn,
@@ -289,6 +289,7 @@ function compareAligned(a: Aligned, keyer: FormulaKeyer): TableDiff {
     rowsRemoved: 0,
     rowsModified: 0,
     rowsEqual: 0,
+    rowsMoved: 0,
     cellsChanged: 0,
     columnsAdded: 0,
     columnsRemoved: 0,
@@ -341,12 +342,32 @@ function compareAligned(a: Aligned, keyer: FormulaKeyer): TableDiff {
       stats.rowsEqual++;
     }
   }
+  // Moved rows: matched rows outside a longest run that keeps old order.
+  const moved = new Uint8Array(rowCount);
+  const matchedAt: number[] = [];
+  const oldOrder: number[] = [];
+  for (let r = 0; r < rowCount; r++) {
+    if (oldRows[r] >= 0 && newRows[r] >= 0) {
+      matchedAt.push(r);
+      oldOrder.push(oldRows[r]);
+    }
+  }
+  if (keyColumns.length && oldOrder.some((v, i) => i > 0 && v < oldOrder[i - 1])) {
+    const keep = new Uint8Array(oldOrder.length);
+    for (const i of longestIncreasing(oldOrder)) keep[i] = 1;
+    for (let i = 0; i < oldOrder.length; i++) {
+      if (!keep[i]) {
+        moved[matchedAt[i]] = 1;
+        stats.rowsMoved++;
+      }
+    }
+  }
   for (const c of columns) {
     if (c.status === 'added') stats.columnsAdded++;
     else if (c.status === 'removed') stats.columnsRemoved++;
     else if (c.status === 'renamed') stats.columnsRenamed++;
   }
-  return { oldTable, newTable, columns, rowCount, oldRows, newRows, status, changedCells, formulaChanged, keyColumns, stats, options: o };
+  return { oldTable, newTable, columns, rowCount, oldRows, newRows, status, moved, changedCells, formulaChanged, keyColumns, stats, options: o };
 }
 
 /** Diff every sheet of two workbooks, pairing sheets by name. */
@@ -384,13 +405,10 @@ export function diffWorkbooks(oldBook: Workbook, newBook: Workbook, options: Dif
   };
 }
 
-/** True if the diff has any added, removed or modified rows, or any column changes. */
+/** True if the diff has any added, removed, modified or moved rows, or any column changes. */
 export function hasChanges(d: TableDiff): boolean {
   const s = d.stats;
-  return (
-    s.rowsAdded + s.rowsRemoved + s.rowsModified + s.columnsAdded + s.columnsRemoved + s.columnsRenamed >
-    0
-  );
+  return s.rowsAdded + s.rowsRemoved + s.rowsModified + (s.rowsMoved ?? 0) + s.columnsAdded + s.columnsRemoved + s.columnsRenamed > 0;
 }
 
 // ---------------------------------------------------------------------------

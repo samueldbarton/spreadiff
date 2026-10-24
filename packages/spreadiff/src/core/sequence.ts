@@ -209,7 +209,7 @@ function diffGapNoPatience(
 }
 
 /** Indices (into `xs`) of a longest strictly increasing subsequence. */
-function longestIncreasing(xs: number[]): number[] {
+export function longestIncreasing(xs: number[]): number[] {
   const tails: number[] = [];
   const prev = new Int32Array(xs.length);
   for (let i = 0; i < xs.length; i++) {

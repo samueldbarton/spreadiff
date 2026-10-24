@@ -18,6 +18,7 @@
 import { execSync } from 'node:child_process';
 import { cpSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { createRequire } from 'node:module';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
@@ -35,7 +36,8 @@ sh('npm run build', join(ROOT, 'packages/spreadiff'));
 const tgz = sh(`npm pack --pack-destination ${APP}`, join(ROOT, 'packages/spreadiff')).trim().split('\n').pop();
 writeFileSync(join(APP, 'package.json'), JSON.stringify({ name: 'hosted-test', private: true, type: 'module' }));
 sh(`npm install --no-audit --no-fund ./${tgz} vite@8`, APP);
-writeFileSync(join(APP, 'index.html'), '<!doctype html><div id="grid" style="width:900px;height:500px"></div><script type="module" src="/src/main.ts"></script>');
+// No inline style attribute: the page is served with a strict CSP (main.ts sizes the grid through the CSSOM).
+writeFileSync(join(APP, 'index.html'), '<!doctype html><div id="grid"></div><script type="module" src="/src/main.ts"></script>');
 cpSync(join(ROOT, 'test/hosted/main.ts'), join(APP, 'src/main.ts'));
 cpSync(FIXTURES, join(APP, 'public/fixtures'), { recursive: true });
 writeFileSync(join(APP, 'public/fixtures/index.json'), JSON.stringify(cases));
@@ -50,7 +52,11 @@ function serve(dir) {
     let file = join(dir, path);
     if (!file.startsWith(dir) || !existsSync(file)) return res.writeHead(404).end();
     if (statSync(file).isDirectory()) file = join(file, 'index.html');
-    res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream' });
+    // A strict Content-Security-Policy: no inline styles or scripts, no eval, nothing from elsewhere.
+    res.writeHead(200, {
+      'content-type': TYPES[extname(file)] ?? 'application/octet-stream',
+      'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; worker-src 'self'; connect-src 'self'",
+    });
     createReadStream(file).pipe(res);
   });
   return new Promise((r) => server.listen(0, '127.0.0.1', () => r(server)));
@@ -69,6 +75,9 @@ async function newPage(origin) {
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
+  // CSP violations don't throw; collect them from the page.
+  await page.addInitScript(() => document.addEventListener('securitypolicyviolation', (e) => { (window.__csp ??= []).push(`${e.violatedDirective}: ${e.blockedURI || e.sample || 'inline'}`); }));
+  page.on('console', (m) => { if (/Content Security Policy|Refused to/.test(m.text())) errors.push(`console: ${m.text()}`); });
   return { page, blocked, errors };
 }
 
@@ -80,18 +89,20 @@ async function newPage(origin) {
   await page.goto(`${origin}/`);
   await page.waitForFunction(() => window.done, null, { timeout: 300_000 });
   const { report, longestGap, controlGap } = await page.evaluate(() => window.done);
+  const csp = await page.evaluate(() => window.__csp ?? []);
+  if (csp.length) { failed++; console.log('   ✗ CSP violations (library app):', csp.slice(0, 5)); }
   server.close();
   console.log('\n## Library in a fresh Vite app (worker, static hosting, no network)\n');
-  console.log('case | changed | causes right | stale values right | missing values right | ms');
-  let cells = 0, scored = 0, scoredWant = 0, stale = 0, staleWant = 0, unc = 0, uncWant = 0;
+  console.log('case | changed | causes right | contributions right | stale values right | missing values right | ms');
+  let cells = 0, scored = 0, scoredWant = 0, contrib = 0, contribWant = 0, stale = 0, staleWant = 0, unc = 0, uncWant = 0;
   for (const r of report) {
     const want = Object.values(JSON.parse(readFileSync(join(FIXTURES, r.name, 'expected.json'), 'utf8')).cells).filter((c) => c.kind === 'computed' && c.causes).length;
-    cells += r.cells; scored += r.scored; scoredWant += want; stale += r.staleOk; staleWant += r.staleChecked; unc += r.uncachedOk; uncWant += r.uncachedChecked;
-    console.log(`${r.name} | ${r.cells} | ${r.scored}/${want} | ${r.staleChecked ? `${r.staleOk}/${r.staleChecked}` : '—'} | ${r.uncachedChecked ? `${r.uncachedOk}/${r.uncachedChecked}` : '—'} | ${r.ms}`);
+    cells += r.cells; scored += r.scored; scoredWant += want; contrib += r.contribOk; contribWant += r.contribChecked; stale += r.staleOk; staleWant += r.staleChecked; unc += r.uncachedOk; uncWant += r.uncachedChecked;
+    console.log(`${r.name} | ${r.cells} | ${r.scored}/${want} | ${r.contribOk}/${r.contribChecked} | ${r.staleChecked ? `${r.staleOk}/${r.staleChecked}` : '—'} | ${r.uncachedChecked ? `${r.uncachedOk}/${r.uncachedChecked}` : '—'} | ${r.ms}`);
     for (const p of r.problems.slice(0, 10)) console.log(`   ✗ ${p}`);
     if (r.problems.length) failed++;
   }
-  console.log(`TOTAL ${report.length} cases · ${cells} changed cells · causes ${scored}/${scoredWant} · stale ${stale}/${staleWant} · missing ${unc}/${uncWant}`);
+  console.log(`TOTAL ${report.length} cases · ${cells} changed cells · causes ${scored}/${scoredWant} · contributions ${contrib}/${contribWant} · stale ${stale}/${staleWant} · missing ${unc}/${uncWant}`);
   console.log(`main thread: longest stall ${Math.round(longestGap)} ms (10 ms timer); control, inventory traced on the main thread instead: ${Math.round(controlGap)} ms · blocked requests ${blocked.length} · page errors ${errors.length}`);
   if (controlGap < 2 * longestGap) { failed++; console.log('   ✗ the control stall should dwarf the worker one: the stall measurement is not working'); }
   if (blocked.length || errors.length) { failed++; console.log(blocked, errors); }
@@ -131,6 +142,16 @@ async function newPage(origin) {
     check((await page.locator('.tshare').count()) > 0, `${name}: contributions shown`);
     check(longest < 250, `${name}: longest main-thread stall ${Math.round(longest)} ms`);
   }
+  // Accessibility of the whole viewer, with a model loaded (axe-core; serious and critical only).
+  await upload('three_statement', 'new.xlsx');
+  // Injected through the DevTools protocol: an inline <script> would (rightly) be refused by the page's CSP.
+  await page.evaluate(readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8'));
+  const violations = await page.evaluate(async () =>
+    (await window.axe.run(document, { resultTypes: ['violations'] })).violations
+      .filter((v) => v.impact === 'serious' || v.impact === 'critical')
+      .map((v) => `${v.impact} ${v.id}: ${v.help} — ${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(', ')}`),
+  );
+  check(!violations.length, `viewer: no serious accessibility violations${violations.length ? `\n      ${violations.join('\n      ')}` : ''}`);
   await upload('loan', 'stale.xlsx');
   const banner = await page.textContent('.banner:not(.info)').catch(() => null);
   check(/saved without recalculating/.test(banner ?? ''), `loan, stale file: banner "${banner?.trim().slice(0, 90)}…"`);
@@ -155,6 +176,8 @@ async function newPage(origin) {
     const gap = await page.evaluate(() => window.__gap);
     console.log(`  · ${name}: ${(total / 1000).toFixed(1)} s from upload to trace panel (±0.5 s polling), longest main-thread stall ${Math.round(gap)} ms · ${(await page.textContent('.tp-foot'))?.trim()}`);
   }
+  const csp = await page.evaluate(() => window.__csp ?? []);
+  check(!csp.length, `strict CSP: no violations ${csp.slice(0, 5).join(' · ')}`);
   check(!blocked.length && !errors.length, `no outside requests (${blocked.length}) and no page errors (${errors.length}) ${errors.join(' ')}`);
   server.close();
 }

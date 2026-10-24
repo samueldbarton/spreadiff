@@ -3,7 +3,7 @@
 // builds the XML the way that application writes it.
 import { zipSync, strToU8 } from 'fflate';
 import { describe, expect, it } from 'vitest';
-import { diffWorkbooks, formulaRefs, packWorkbookDiff, packWorkbookTrace, parseFile, parseXlsx, structuredRange, traceWorkbook, unpackWorkbookDiff, unpackWorkbookTrace, type TableDefinition } from '../src/core';
+import { computeMissingValues, diffWorkbooks, formulaRefs, packWorkbookDiff, scopedNames, packWorkbookTrace, parseFile, parseXlsx, structuredRange, traceWorkbook, unpackWorkbookDiff, unpackWorkbookTrace, type TableDefinition } from '../src/core';
 
 interface SheetSpec {
   name: string;
@@ -11,11 +11,19 @@ interface SheetSpec {
   data: string;
   /** Table part XML, if the sheet has an Excel table. */
   table?: string;
+  /** Merged ranges (`A1:C1`). */
+  merges?: string[];
 }
 
 function xlsx(sheets: SheetSpec[], names: Record<string, string> = {}): Uint8Array {
   const files: Record<string, Uint8Array> = {};
-  const defined = Object.entries(names).map(([k, v]) => `<definedName name="${k}">${v}</definedName>`).join('');
+  // "Rate@1" defines Rate scoped to sheet 1 (localSheetId).
+  const defined = Object.entries(names)
+    .map(([k, v]) => {
+      const m = /^(.+)@(\d+)$/.exec(k);
+      return m ? `<definedName name="${m[1]}" localSheetId="${m[2]}">${v}</definedName>` : `<definedName name="${k}">${v}</definedName>`;
+    })
+    .join('');
   files['xl/workbook.xml'] = strToU8(
     `<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheets
       .map((s, i) => `<sheet name="${s.name}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`)
@@ -27,7 +35,9 @@ function xlsx(sheets: SheetSpec[], names: Record<string, string> = {}): Uint8Arr
       .join('')}</Relationships>`,
   );
   sheets.forEach((s, i) => {
-    files[`xl/worksheets/sheet${i + 1}.xml`] = strToU8(`<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${s.data}</sheetData></worksheet>`);
+    files[`xl/worksheets/sheet${i + 1}.xml`] = strToU8(
+      `<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${s.data}</sheetData>${s.merges ? `<mergeCells count="${s.merges.length}">${s.merges.map((m) => `<mergeCell ref="${m}"/>`).join('')}</mergeCells>` : ''}</worksheet>`,
+    );
     if (s.table) {
       files[`xl/worksheets/_rels/sheet${i + 1}.xml.rels`] = strToU8(
         `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table${i + 1}.xml"/></Relationships>`,
@@ -288,5 +298,57 @@ describe("header: 'auto' on data sheets (no regression from header: true)", () =
     const d = diffWorkbooks(a, b).sheets[0].diff;
     expect(d.keyColumns).toEqual(['id']);
     expect(d.stats.cellsChanged).toBe(1); // the parameter edit is visible
+  });
+});
+
+describe('sheet-scoped defined names', () => {
+  // Rate is 0.1 workbook-wide, 0.2 on Inputs, 0.3 on Calc. Report has none of its own.
+  const book = (inputsRate: number) =>
+    xlsx(
+      [
+        { name: 'Inputs', data: row(1, num('A1', 100), num('B1', inputsRate)) + row(2, num('A2', 100 * inputsRate, 'A1*Rate')) },
+        { name: 'Calc', data: row(1, num('A1', 100), num('B1', 0.3)) + row(2, num('A2', 30, 'A1*Rate')) },
+        { name: 'Report', data: row(1, num('A1', 0.1), num('B1', 10, 'A1*100'), num('C1', 100 * inputsRate * 2, 'Inputs!Rate*1000'), num('D1', 0, 'Rate*100')) },
+      ],
+      { Rate: 'Report!$A$1', 'Rate@0': 'Inputs!$B$1', 'Rate@1': 'Calc!$B$1' },
+    );
+
+  it('reads them onto their sheets', () => {
+    const wb = parseXlsx(book(0.2), { header: false });
+    expect(wb.names).toEqual({ Rate: 'Report!$A$1' });
+    expect(wb.sheets[0].names).toEqual({ Rate: 'Inputs!$B$1' });
+    expect(wb.sheets[1].names).toEqual({ Rate: 'Calc!$B$1' });
+    expect(wb.sheets[2].names).toBeUndefined();
+  });
+
+  it('resolves each formula to its own sheet, the workbook, or Sheet!Name', () => {
+    const wb = parseXlsx(book(0.2), { header: false });
+    const at = (s: number) => scopedNames(wb.names, wb.sheets, wb.sheets[s].name);
+    const ref = (f: string, s: number) => formulaRefs(f, at(s)).ranges.map((r) => `${r.sheet}!${r.r0},${r.c0}`);
+    expect(ref('=A1*Rate', 0)).toEqual(['null!0,0', 'Inputs!0,1']);
+    expect(ref('=A1*Rate', 1)).toEqual(['null!0,0', 'Calc!0,1']);
+    expect(ref('=Rate*100', 2)).toEqual(['Report!0,0']);
+    expect(ref('=Inputs!Rate*1000', 2)).toEqual(['Inputs!0,1']);
+    expect(formulaRefs('=Inputs!Rate*1000', at(2)).dynamic).toBe(false);
+  });
+
+  it('computes and traces through them', () => {
+    const wb = parseXlsx(book(0.2), { header: false });
+    // D1 was saved as 0 (wrong): computing it needs the workbook-level Rate.
+    wb.sheets[2].rows[0][3] = null;
+    expect(computeMissingValues(wb)).toEqual({ computed: 1, failed: 0 });
+    expect(wb.sheets[2].rows[0][3]).toBeCloseTo(10);
+    const tr = traceWorkbook(diffWorkbooks(parseXlsx(book(0.2), { header: false }), parseXlsx(book(0.25), { header: false })));
+    // Editing Inputs!B1 moves Inputs!A2 (local Rate) and Report!C1 (Inputs!Rate), not Calc or Report!D1.
+    expect(tr.stats).toMatchObject({ inputs: 1, computed: 2, unexplained: 0 });
+  });
+});
+
+describe('merged cells', () => {
+  it('reads merged ranges in sheet coordinates, ignoring single cells', () => {
+    const wb = parseXlsx(xlsx([{ name: 'S', data: row(1, str('A1', 'Q1 report')) + row(2, str('A2', 'id'), str('B2', 'v'), str('C2', 'w')) + row(3, num('A3', 1), num('B3', 2), num('C3', 3)), merges: ['A1:C1', 'D5:D5', 'A3:A4'] }]), { header: false });
+    expect(wb.sheets[0].merges).toEqual([{ r0: 0, c0: 0, r1: 0, c1: 2 }, { r0: 2, c0: 0, r1: 3, c1: 0 }]);
+    // Values are unchanged: the merge's value is its top-left cell, the rest empty.
+    expect(wb.sheets[0].rows[0]).toEqual(['Q1 report', null, null]);
   });
 });

@@ -100,6 +100,8 @@ export function App() {
   const [layout, setLayout] = useState<DiffLayout>('unified');
   const [collapse, setCollapse] = useState(true);
   const [changedColsOnly, setChangedColsOnly] = useState(false);
+  const [rowHeaders, setRowHeaders] = useState<'labels' | 'numbers' | 'both'>('labels');
+  const [columnHeaders, setColumnHeaders] = useState<'labels' | 'letters' | 'both'>('labels');
   const [theme, setTheme] = useState<Theme>(readTheme);
   const [renderer, setRenderer] = useState<Renderer>('spreadiff');
   const [options, setOptions] = useState<DiffOptions>({ keys: 'auto', trimWhitespace: true, ignoreCase: false, numericTolerance: 0 });
@@ -262,7 +264,7 @@ export function App() {
       <header className="topbar">
         <div className="brand">
           <Logo />
-          <span>spreadiff</span>
+          <h1>spreadiff</h1>
         </div>
         {loaded && (
           <div className="files">
@@ -286,8 +288,8 @@ export function App() {
       </header>
 
       {loaded && diff ? (
-        <>
-          <div className="toolbar">
+        <main className="main">
+          <div className="toolbar" role="toolbar" aria-label="View">
             <Segmented
               value={layout}
               onChange={setLayout}
@@ -316,7 +318,7 @@ export function App() {
               <button className={`btn ${showOptions ? 'on' : ''}`} onClick={() => setShowOptions((v) => !v)} aria-expanded={showOptions}>
                 <Icon name="sliders" />
                 Options
-                {(changedColsOnly || options.ignoreCase || options.trimWhitespace === false || header !== 'auto' || options.numericTolerance || options.keys !== 'auto') && <span className="pip" title="Some options differ from the defaults" />}
+                {(changedColsOnly || rowHeaders !== 'labels' || columnHeaders !== 'labels' || options.ignoreCase || options.trimWhitespace === false || header !== 'auto' || options.numericTolerance || options.keys !== 'auto') && <span className="pip" title="Some options differ from the defaults" />}
               </button>
               {showOptions && (
                 <>
@@ -324,6 +326,22 @@ export function App() {
                   <div className="popover" role="dialog" aria-label="Options">
                     <span className="popover-title">View</span>
                     <Toggle checked={changedColsOnly} onChange={setChangedColsOnly} label="Changed columns only" />
+                    <label className="field">
+                      <span>Rows show</span>
+                      <select value={rowHeaders} title="Labels: what the sheet calls each row (India › Revenue), inferred from the layout" onChange={(e) => setRowHeaders(e.target.value as typeof rowHeaders)}>
+                        <option value="labels">Labels</option>
+                        <option value="numbers">Row numbers</option>
+                        <option value="both">Labels and numbers</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Columns show</span>
+                      <select value={columnHeaders} title="Labels: each column's heading (FY2025), inferred from the layout" onChange={(e) => setColumnHeaders(e.target.value as typeof columnHeaders)}>
+                        <option value="labels">Headings</option>
+                        <option value="letters">Letters</option>
+                        <option value="both">Letters and headings</option>
+                      </select>
+                    </label>
                     <hr />
                     <span className="popover-title">Matching</span>
                     <label className="field">
@@ -375,7 +393,7 @@ export function App() {
               value={renderer}
               onChange={setRenderer}
               label="Renderer"
-              options={[['spreadiff', 'Grid', 'Canvas grid'], ['code', 'Code', 'Code-review HTML (spreadiff/lite)'], ['glide', 'Glide', 'Glide Data Grid, for comparison']]}
+              options={[['spreadiff', 'Grid', 'Canvas grid'], ['code', 'Code', 'Code-review HTML (spreadiff/html)'], ['glide', 'Glide', 'Glide Data Grid, for comparison']]}
             />
             {trace && (
               <button className={`btn icon ${panel ? 'on' : ''}`} onClick={() => setPanel((v) => !v)} aria-pressed={panel} title={panel ? 'Hide trace panel' : 'Show trace panel'} aria-label="Trace panel">
@@ -419,7 +437,7 @@ export function App() {
           )}
           {missingNote(loaded.result) && <div className="banner info"><span>{missingNote(loaded.result)}</span></div>}
           <div className="work">
-            <main className="grid-wrap">
+            <section className="grid-wrap" aria-label="Diff">
               {renderer === 'spreadiff' ? (
                 <DiffGrid
                   key={`${loaded.names.join()}:${sheet}`}
@@ -428,6 +446,8 @@ export function App() {
                   layout={layout}
                   collapseUnchanged={collapse}
                   hideUnchangedColumns={changedColsOnly}
+                  rowHeaders={rowHeaders}
+                  columnHeaders={columnHeaders}
                   cellDisplay={display}
                   trace={traceCtx}
                   theme={theme}
@@ -440,7 +460,7 @@ export function App() {
                 <GlideDiff diff={diff} dark={dark} />
               )}
               {busy && <div className="busy"><span className="spinner" />{busy}…</div>}
-            </main>
+            </section>
             {trace && panel && (
               <TracePanel wb={shown!} trace={trace} sheet={sheet} selected={selectedRef} view={traceView} onView={setTraceView} onPick={pick} />
             )}
@@ -453,7 +473,7 @@ export function App() {
               {fmt(diff.oldTable.rows.length)} → {fmt(diff.newTable.rows.length)} rows · {diff.columns.length} cols · {source.current?.kind === 'synthetic' ? 'generate + parse' : 'parse'} {ms(loaded.timings.parse)} · diff {ms(loaded.timings.diff)}{loaded.trace ? ` · trace ${ms(loaded.timings.trace)}` : ''} · transfer {ms(loaded.timings.transfer)}
             </span>
           </footer>
-        </>
+        </main>
       ) : (
         <Landing busy={busy} error={error} files={files} setFile={setFile} loadSample={loadSample} loadModel={loadModel} loadSynthetic={loadSynthetic} />
       )}
@@ -485,7 +505,7 @@ function Landing(props: {
   loadSynthetic: (rows: number) => void;
 }) {
   return (
-    <div className="landing">
+    <main className="landing">
       <div className="hero">
         <h1>Diff spreadsheets, beautifully.</h1>
         <p className="lede">
@@ -522,7 +542,7 @@ function Landing(props: {
       {props.busy && <p className="busy-inline"><span className="spinner" />{props.busy}…</p>}
       {props.error && <p className="error">{props.error}</p>}
       <p className="privacy"><Icon name="lock" />Files never leave your browser. Parsing and diffing run in a Web Worker.</p>
-    </div>
+    </main>
   );
 }
 

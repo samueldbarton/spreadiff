@@ -1,7 +1,7 @@
 import ts from 'typescript';
 import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../packages/spreadiff/src/', import.meta.url));
-const files = ['index.ts', 'lite/index.ts', 'react/index.tsx', 'worker/index.ts'].map((f) => root + f);
+const files = ['index.ts', 'html/index.ts', 'react/index.tsx', 'worker/index.ts'].map((f) => root + f);
 const program = ts.createProgram(files, { jsx: ts.JsxEmit.ReactJSX, moduleResolution: ts.ModuleResolutionKind.Bundler, module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, skipLibCheck: true });
 const c = program.getTypeChecker();
 const seen = new Set();

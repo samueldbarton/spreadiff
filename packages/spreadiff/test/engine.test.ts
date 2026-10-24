@@ -165,6 +165,35 @@ describe('trace: recalculated causes', () => {
     expect(c.contributions).toEqual([36 - 30, 36 - 24]); // without the units edit 3*10=30; without the price edit 12*2=24
   });
 
+  it('treats a live-data formula as an input: a Bloomberg refresh is a root cause, never recalculated', () => {
+    // A1 = BDP price (refreshed 100 → 110), B1 = shares (10 → 12), C1 = market cap.
+    const book = (price: number, shares: number): Workbook => ({
+      name: 'w',
+      sheets: [sheet('S', [['=_xll.BDP("IBM US Equity","PX_LAST")', shares, '=A1*B1']], [[price, null, price * shares]])],
+    });
+    const d = diffWorkbooks(book(100, 10), book(110, 12), { keys: 'none' });
+    const t = traceWorkbook(d);
+    const price = t.get(at(0, 0))!;
+    expect(price.kind).toBe('input');
+    expect(price.external).toEqual({ provider: 'Bloomberg', function: 'BDP' });
+    const cap = t.get(at(0, 2))!;
+    expect(cap.method).toBe('recalculated');
+    expect(cap.causes).toEqual([at(0, 0), at(0, 1)]);
+    expect(cap.contributions).toEqual([1320 - 1200, 1320 - 1100]);
+    expect(t.stats).toMatchObject({ inputs: 2, external: 1, computed: 1, unmodelled: 0 });
+  });
+
+  it('an unchanged live-data cell is read as saved, and one fed by an edit is not guessed', () => {
+    // B1 = BDP(A1 & " Equity"): the ticker in A1 changed, so the price may have; the file says it did.
+    const book = (ticker: string, price: number): Workbook => ({
+      name: 'w',
+      sheets: [sheet('S', [[ticker, '=BDP(A1&" Equity","PX_LAST")', '=B1*2']], [[null, price, price * 2]])],
+    });
+    const t = traceWorkbook(diffWorkbooks(book('IBM US', 100), book('MSFT US', 400), { keys: 'none' }));
+    expect(t.get(at(0, 1))!.external?.provider).toBe('Bloomberg');
+    expect(t.get(at(0, 2))!.causes).toEqual([at(0, 1)]);
+  });
+
   it('finds a stale cached value: the input changed, the result was saved unrecalculated', () => {
     const { t } = model([[10, '=A1*2']], [[11, '=A1*2']], (w) => {
       w.sheets[0].rows[0][1] = 20; // still the old result: saved without recalculating
@@ -215,5 +244,26 @@ describe('numericDelta', () => {
     expect(numericDelta(3887856.67, 3878764.11)!.delta).toBe(-9092.56);
     expect(numericDelta(0.1, 0.3)!.delta).toBe(0.2);
     expect(numericDelta(1e-20, 2e-20)!.delta).toBe(1e-20);
+  });
+});
+
+describe('but-for of a formula edit', () => {
+  // Old: C1 = B1*B2 = 30, D1 = C1+1 = 31. New: price 10 → 12 and C1 rewritten to B1*B2*2.
+  const t = (price: number, f: string, c: number) => ({
+    name: 'S',
+    columns: ['A', 'B', 'C', 'D'],
+    rows: [['price', price, c, c + 1], ['qty', 3, null, null]],
+    formulas: [[null, null, f, '=C1+1'], []],
+    origin: { row: 0, col: 0 },
+  });
+  it('undoes the formula on today\'s inputs, not by restoring its old result', () => {
+    const d = diffWorkbooks({ name: 'a', sheets: [t(10, '=B1*B2', 30)] }, { name: 'b', sheets: [t(12, '=B1*B2*2', 72)] });
+    const tr = traceWorkbook(d);
+    const width = d.sheets[0].diff.columns.length;
+    const d1 = tr.get({ sheet: 0, row: 0, col: 3 })!;
+    expect(d1.method).toBe('recalculated');
+    const by = Object.fromEntries(d1.causes.map((c, i) => [c.row * width + c.col, d1.contributions![i]]));
+    expect(by[0 * width + 2]).toBe(36); // the formula edit: 73 − (12×3 + 1)
+    expect(by[0 * width + 1]).toBe(12); // the price: 73 − (10×3×2 + 1)
   });
 });

@@ -25,7 +25,8 @@
  *    connects them. This over-approximates (both IF branches count) but
  *    doesn't miss a cause.
  */
-import { formulaRefs, type SheetRange } from './formula.js';
+import { externalSource, type ExternalSource } from './external.js';
+import { formulaRefs, scopedNames, type SheetRange } from './formula.js';
 import { numericDelta } from './text.js';
 import { Engine, Unsupported, type Compiled, type Read } from './engine/evaluate.js';
 import { tableHost, sheetCellKey, type TableHost } from './engine/host.js';
@@ -101,6 +102,14 @@ export interface CellTrace {
    * changing to `recalculated`, even if its cached value didn't change.
    */
   stale?: { cached: CellValue; recalculated: CellValue };
+  /**
+   * Set on `input` cells that hold a formula reading data from outside the
+   * workbook (a Bloomberg `BDP`, `RTD`, a link to another file; see
+   * {@link externalSource}). Their value can't be recalculated here, so the
+   * file's saved value is taken as given: when it changed (the data
+   * refreshed), the cell is an input, and a root cause of what it feeds.
+   */
+  external?: ExternalSource;
 }
 
 /** Totals over a {@link WorkbookTrace}. */
@@ -119,6 +128,8 @@ export interface TraceStats {
   recalculated: number;
   /** Formulas near a change that couldn't be recalculated, so causes through them come from references. */
   unmodelled: number;
+  /** Inputs whose value came from outside the workbook (`CellTrace.external`); counted in `inputs` too. */
+  external: number;
 }
 
 /** The result of {@link traceWorkbook}. Lookups are O(1). */
@@ -155,6 +166,12 @@ export interface TraceOptions {
   recalculate?: boolean;
   /** Max formula evaluations for recalculation, across the trace. Default 2,000,000. */
   evaluationBudget?: number;
+  /**
+   * More live-data functions, by provider, on top of {@link LIVE_FUNCTIONS}
+   * (`{ 'In-house': ['PRICE_OF'] }`). A changed cell calling one is an
+   * external input rather than a recalculated result.
+   */
+  liveFunctions?: Readonly<Record<string, readonly string[]>>;
 }
 
 type Side = 'old' | 'new';
@@ -319,13 +336,15 @@ function refReader(diff: WorkbookDiff, side: Side) {
   const names = side === 'old' ? diff.names?.old : diff.names?.new;
   const tableDefs = side === 'old' ? diff.tables?.old : diff.tables?.new;
   const sheetNames = tables.map((t) => t.name);
+  // Sheet-scoped names: each sheet's formulas see their own over the workbook's.
+  const scoped = tables.some((t) => t.names) ? tables.map((t) => scopedNames(names, tables, t.name)) : null;
   return {
     tables,
     read(s: number, r: number, c: number): { rects: Rect[]; dynamic: boolean; volatile: boolean } | null {
       const formula = tables[s]?.formulas?.[r]?.[c];
       if (!formula) return null;
       const origin = tables[s].origin ?? { row: 1, col: 0 };
-      const refs = formulaRefs(formula, names, { tables: tableDefs, row: r + origin.row, sheets: sheetNames });
+      const refs = formulaRefs(formula, scoped ? scoped[s] : names, { tables: tableDefs, row: r + origin.row, sheets: sheetNames });
       const rects: Rect[] = [];
       for (const rg of refs.ranges) {
         const rect = clip(rg, s, byName, tables);
@@ -419,7 +438,10 @@ export function traceWorkbook(diff: WorkbookDiff, options: TraceOptions = {}): W
       for (let col = 0; col < mask.length; col++) {
         if (!mask[col]) continue;
         const nf = d.newTable.formulas?.[ni]?.[d.columns[col].newIndex] ?? null;
-        traces[si].set(key({ sheet: si, row, col }), blank(fm?.[col] ? 'formula' : nf ? 'computed' : 'input'));
+        const ext = nf && !fm?.[col] ? externalSource(nf, options.liveFunctions) : null;
+        const t = blank(fm?.[col] ? 'formula' : nf && !ext ? 'computed' : 'input');
+        if (ext) t.external = ext;
+        traces[si].set(key({ sheet: si, row, col }), t);
       }
     }
   });
@@ -547,10 +569,11 @@ export function traceWorkbook(diff: WorkbookDiff, options: TraceOptions = {}): W
   const exact = analysis?.butFor(roots) ?? null;
 
   // ---- Assemble -------------------------------------------------------------
-  const stats: TraceStats = { inputs: 0, formulas: 0, computed: 0, unexplained: 0, stale: 0, recalculated: 0, unmodelled: analysis?.unmodelled ?? 0 };
+  const stats: TraceStats = { inputs: 0, formulas: 0, computed: 0, unexplained: 0, stale: 0, recalculated: 0, unmodelled: analysis?.unmodelled ?? 0, external: 0 };
   diff.sheets.forEach((_, si) => {
     for (const [k, t] of traces[si]) {
       if (t.kind === 'input') stats.inputs++;
+      if (t.external) stats.external++;
       else if (t.kind === 'formula') stats.formulas++;
       if (t.kind !== 'computed') continue;
       stats.computed++;
@@ -789,7 +812,7 @@ function recalculate(diff: WorkbookDiff, maps: SheetMaps[], traces: Map<number, 
     if (r.side !== 'new' || queued.has(r.id)) continue;
     queued.add(r.id);
     queue.push(r.id);
-    if (formulaAt('new', r.id)) cone.add(r.id);
+    if (formulaAt('new', r.id) && !r.trace.external) cone.add(r.id);
   }
   const deps: number[] = [];
   for (let qi = 0; qi < queue.length && !truncated; qi++) {
@@ -942,6 +965,18 @@ function recalculate(diff: WorkbookDiff, maps: SheetMaps[], traces: Map<number, 
   const graph = new OverlayGraph(staticNew, reads);
   const valueOf = (id: number): Scalar => (stale.has(id) ? stale.get(id)! : cachedAt('new', id));
 
+  // Every sheet lines up cell for cell (no inserted/removed rows or columns, same origin).
+  let layoutSame: boolean | null = null;
+  const sameLayout = () =>
+    (layoutSame ??= diff.sheets.every(({ diff: d }) => {
+      const oo = originOf(d.oldTable);
+      const no = originOf(d.newTable);
+      if (oo.row !== no.row || oo.col !== no.col) return false;
+      if (d.columns.some((c) => c.oldIndex !== c.newIndex)) return false;
+      for (let r = 0; r < d.rowCount; r++) if (d.oldRows[r] !== d.newRows[r]) return false;
+      return true;
+    }));
+
   const butFor = (rootList: Root[]) => {
     const out = new Map<number, Map<number, ExactCauses>>();
     const record = (ref: CellRef) => {
@@ -959,7 +994,21 @@ function recalculate(diff: WorkbookDiff, maps: SheetMaps[], traces: Map<number, 
       // Added and removed rows are causes as a whole (found by references), not cell by cell.
       if (root.trace.kind !== 'input' && root.trace.kind !== 'formula') return;
       const oid = oldIdOf(root.ref);
-      const without: Scalar = oid !== null ? cachedAt('old', oid) : null;
+      let without: Scalar = oid !== null ? cachedAt('old', oid) : null;
+      // An edited formula's counterfactual is the old formula on today's inputs, not its
+      // old result (which also carries every other edit's effect). Its text is valid here
+      // when no sheet's rows or columns moved; otherwise fall back to the old result.
+      const oldFormula = oid !== null && root.trace.kind === 'formula' ? formulaAt('old', oid) : null;
+      if (oldFormula && sameLayout()) {
+        const s = idSheet(root.id);
+        const o = originOf(newTables[s]);
+        try {
+          if (++evaluations > evalBudget) throw new Unsupported('evaluation budget');
+          without = newEngine.evaluate(oldFormula, newHost.sheets[s], idRow(root.id) + o.row, idCol(root.id) + o.col, false).value;
+        } catch (e) {
+          if (!(e instanceof Unsupported)) throw e;
+        }
+      }
       const saved = new Map<number, Scalar | undefined>();
       const set = (k: number, v: Scalar) => {
         if (!saved.has(k)) saved.set(k, newHost.overrides.has(k) ? newHost.overrides.get(k) : undefined);

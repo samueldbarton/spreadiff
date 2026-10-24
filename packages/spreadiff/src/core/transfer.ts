@@ -36,6 +36,12 @@ export interface PackedTable {
   header?: Table['header'];
   /** `Table.arrays`, unchanged. */
   arrays?: Table['arrays'];
+  /** `Table.names`, unchanged. */
+  names?: Table['names'];
+  /** `Table.merges`, unchanged. */
+  merges?: Table['merges'];
+  /** `Table.labelStyles`, unchanged. */
+  labelStyles?: Table['labelStyles'];
 }
 
 const SEP = '\u0000';
@@ -65,7 +71,7 @@ export function packTable(t: Table): PackedTable {
       } else types[i] = v ? 3 : 4;
     }
   }
-  return { name: t.name, columns: t.columns, width, height, types, numbers, strings: parts.join(SEP), formulas: t.formulas && packFormulas(t.formulas), origin: t.origin, header: t.header, arrays: t.arrays };
+  return { name: t.name, columns: t.columns, width, height, types, numbers, strings: parts.join(SEP), formulas: t.formulas && packFormulas(t.formulas), origin: t.origin, header: t.header, arrays: t.arrays, names: t.names, merges: t.merges, labelStyles: t.labelStyles };
 }
 
 function packFormulas(f: (string | null)[][]): NonNullable<PackedTable['formulas']> {
@@ -124,6 +130,9 @@ export function unpackTable(p: PackedTable): Table {
   if (p.origin) t.origin = p.origin;
   if (p.header) t.header = p.header;
   if (p.arrays) t.arrays = p.arrays;
+  if (p.names) t.names = p.names;
+  if (p.merges) t.merges = p.merges;
+  if (p.labelStyles) t.labelStyles = p.labelStyles;
   return t;
 }
 
@@ -154,7 +163,7 @@ export function packWorkbookDiff(d: WorkbookDiff): { packed: PackedWorkbookDiff;
         transfer.push(p.types.buffer as ArrayBuffer, p.numbers.buffer as ArrayBuffer);
         if (p.formulas) transfer.push(p.formulas.cells.buffer as ArrayBuffer, p.formulas.lengths.buffer as ArrayBuffer);
       }
-      transfer.push(s.diff.oldRows.buffer as ArrayBuffer, s.diff.newRows.buffer as ArrayBuffer, s.diff.status.buffer as ArrayBuffer);
+      transfer.push(s.diff.oldRows.buffer as ArrayBuffer, s.diff.newRows.buffer as ArrayBuffer, s.diff.status.buffer as ArrayBuffer, s.diff.moved.buffer as ArrayBuffer);
       return { name: s.name, status: s.status, diff: { ...s.diff, oldTable, newTable } };
     }),
     names: d.names,
@@ -200,6 +209,8 @@ export interface PackedSheetTrace {
   contributions: Float64Array;
   /** Stale values, by trace index. */
   stale: [number, NonNullable<CellTrace['stale']>][];
+  /** `[index, external]` for cells with `CellTrace.external`. */
+  external: [number, NonNullable<CellTrace['external']>][];
 }
 
 /**
@@ -234,6 +245,7 @@ function packSheetTrace(traces: ReadonlyMap<number, CellTrace>): PackedSheetTrac
   const refs: number[] = [];
   const contributions: number[] = [];
   const stale: PackedSheetTrace['stale'] = [];
+  const external: PackedSheetTrace['external'] = [];
   let i = 0;
   let nRefs = 0;
   for (const [k, t] of traces) {
@@ -251,11 +263,12 @@ function packSheetTrace(traces: ReadonlyMap<number, CellTrace>): PackedSheetTrac
     contribAt[i] = contributions.length;
     if (t.contributions) for (const x of t.contributions) contributions.push(x ?? NaN);
     if (t.stale) stale.push([i, t.stale]);
+    if (t.external) external.push([i, t.external]);
     i++;
   }
   causeAt[n] = impactAt[n] = nRefs;
   contribAt[n] = contributions.length;
-  return { keys, codes, counts, causeAt, impactAt, contribAt, refs: Int32Array.from(refs), contributions: Float64Array.from(contributions), stale };
+  return { keys, codes, counts, causeAt, impactAt, contribAt, refs: Int32Array.from(refs), contributions: Float64Array.from(contributions), stale, external };
 }
 
 function unpackSheetTrace(p: PackedSheetTrace): Map<number, CellTrace> {
@@ -267,6 +280,7 @@ function unpackSheetTrace(p: PackedSheetTrace): Map<number, CellTrace> {
     return list;
   };
   const stale = new Map(p.stale);
+  const external = new Map(p.external);
   for (let i = 0; i < p.keys.length; i++) {
     const t: CellTrace = {
       kind: KINDS[p.codes[i * 4]],
@@ -286,6 +300,8 @@ function unpackSheetTrace(p: PackedSheetTrace): Map<number, CellTrace> {
     if (unexplained) t.unexplained = unexplained;
     const st = stale.get(i);
     if (st) t.stale = st;
+    const ext = external.get(i);
+    if (ext) t.external = ext;
     out.set(p.keys[i], t);
   }
   return out;

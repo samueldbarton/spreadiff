@@ -13,13 +13,34 @@ Surveyed in 2026, before writing any code:
 | [Glide Data Grid](https://github.com/glideapps/glide-data-grid) | Canvas grid that scales to millions of rows | A general-purpose grid: React-only, with peer dependencies pinned to React ≤ 18, and no diff semantics |
 | RevoGrid, AG Grid, Handsontable | Virtualized DOM grids | DOM cells cost more per frame, and diff features would be bolted on |
 | Univer, Fortune Sheet | Full canvas spreadsheet editors | A large editor surface for what is a read-only view |
-| [`@pierre/diffs`](https://diffs.com) | The model for the API and the look: Shadow DOM, `light-dark()` and `color-mix()` tokens, split and stacked layouts, annotations, workers | Built for lines of text, not a 2-D grid |
 | SheetJS | Reads nearly every spreadsheet format | About 900 KB. The npm release (0.18.5) is old and has published CVEs; newer builds ship only from the vendor's CDN |
 
 Nothing combined a table-aware diff with a renderer that stays smooth at a
 million rows, so spreadiff does both. daff's ideas (match columns, then
 rows, then pair leftovers by similarity) shaped the engine; the code is
 new.
+
+### Downstream impact (surveyed October 2026)
+
+Before building [spreadiff-lite](spreadiff-lite.md), the question was
+whether anything already reports what an edit *moved downstream*. Several
+tools get part of the way:
+
+| Tool | Downstream | Recalculates | Per-output causes and contributions | Labels |
+| --- | --- | --- | --- | --- |
+| [ExcelCompare](https://github.com/na-ka-na/ExcelCompare), [xlsxDiff](https://github.com/rafal-dot/xlsxDiff), [sheets-diff](https://github.com/forskscope/sheets-diff-rs), [git-xl](https://github.com/xltrail/git-xl) | No: cell-by-cell differences | No | No | No |
+| Microsoft Spreadsheet Compare | Colours "calculated values" apart from "entered values" | Uses saved values | No | No |
+| [sheetdelta](https://github.com/sqmyou/sheetdelta) | Lists the addresses a change reaches ("affects 3 cells downstream") | No ("it does not evaluate formulas") | No | No |
+| [xlsx-review](https://github.com/Keremozdemirra/xlsx-review) | `explain_cell` lists a cell's dependents | No ("never calculates anything") | No | No |
+| [agent-spreadsheet](https://github.com/PSU3D0/agent-spreadsheet) (`asp`) | `verify diff` separates "direct edits vs recalculation fallout" | Yes, a separate step (Formualizer) | Not documented | Not documented |
+| spreadiff / spreadiff-lite | Every downstream result | Yes, checked against LibreOffice | Yes: each edit undone in turn | Section, row and column headings |
+
+*How this could be wrong:* the survey covered public repositories and
+vendor pages. Commercial add-ins (PerfectXL, Operis OAK, Arixcel) didn't
+document their compare features well enough to judge, and
+agent-spreadsheet's diff output isn't documented in detail. The claim is
+narrow: the combination of recalculated per-output attribution and
+label-aware Markdown wasn't found, not that no tool traces dependents.
 
 ## The engine
 
@@ -31,7 +52,7 @@ per row, so ~9 MB for a million rows on top of the tables. Modified rows
 also get a byte per column marking which cells changed.
 
 Every view reads the same structure: the unified and split grid layouts,
-the lite HTML renderer, the text renderer and the CSV export. A view never
+the HTML renderer, the text renderer and the CSV export. A view never
 re-diffs.
 
 *Cost:* the model can't express a row that moved. A reordered keyed row is
@@ -106,7 +127,7 @@ falls back to static references for that part of the model.
 units"), stale values flagged rather than shown as if current, and files
 without cached values still diffable.
 
-*Cost:* `core` grew from 16 to 36 KB gzip; `lite` doesn't include the
+*Cost:* `core` grew from 16 to 36 KB gzip; `spreadiff/html` doesn't include the
 engine. Recalculating takes 3–5× as long as static tracing
 ([Tracing → Cost](tracing.md#cost)). The engine is one spreadsheet's
 opinion: where it disagrees with Excel (hidden rows in `SUBTOTAL`,
@@ -125,7 +146,7 @@ calling `String(Number(x))` per field.
 
 The reader handles values, shared strings, dates, booleans and shared
 formulas, on top of [fflate](https://github.com/101arrowz/fflate). The
-whole `core` entry, tracing included, is 37.9 KB gzip.
+whole `core` entry, tracing included, is 42.1 KB gzip.
 
 *Cost:* no styles, merged cells, comments or legacy `.xls`. A file that
 needs those needs another parser; any parser that produces a `Table` works.
@@ -171,22 +192,38 @@ look like fifty edits. Amber separates "someone typed this" from "this
 moved because of something else". The colour choice hasn't been tested
 with users.
 
-## The lite renderer
+## The HTML renderer
 
-`spreadiff/lite` renders to an HTML string with no DOM APIs, so it runs on
+`spreadiff/html` renders to an HTML string with no DOM APIs, so it runs on
 a server, in CI or in an email. It shows changes plus context, like a code
 review, and caps the output with `maxRows`.
 
 *Why a separate entry and not a mode of `DiffGrid`?* Different jobs. A
-pull-request comment needs ten rows of static HTML at 12.0 KB; a reviewer
+pull-request comment needs ten rows of static HTML at 16.0 KB; a reviewer
 scrolling a million rows needs the canvas. Sharing the diff model keeps
 them consistent.
 
 ## Known gaps
 
-- **Accessibility.** Canvas cells aren't in the accessibility tree. The grid has `role="grid"`, keyboard navigation and DOM popovers, but no per-cell ARIA. A hidden DOM mirror of the visible window would fix it.
-- **Main-thread memory.** Tables are copied to the main thread, so memory is O(cells) there. Keeping them in the worker and fetching visible cells on demand would remove the transfer cost and roughly halve peak memory. It may also remove the occasional long frame at 1M rows ([Performance](performance.md#the-1m-row-outlier)).
-- **Moved rows** aren't flagged in keyed mode.
-- **Annotation identity.** Annotations are tracked by object identity. Pass a stable (memoized) array; a new array on every render re-creates every annotation element.
-- **Dense minimap.** With thousands of changes in a long sheet, every minimap pixel holds a change and the strip turns solid. Density shading would read better.
-- **Sheet-scoped names and structured references** (`Table1[Col]`) aren't resolved by tracing; they're marked dynamic.
+Still open, roughly by how much they'd matter:
+
+- **Main-thread memory.** Tables are copied to the main thread, so memory there is O(cells). Keeping them in the worker and fetching visible cells on demand would:
+  - remove the transfer cost;
+  - roughly halve peak memory;
+  - possibly remove the occasional long frame at 1M rows ([Performance](performance.md#the-1m-row-outlier)).
+
+  It changes how every renderer gets its data, so it needs its own measurement work.
+- **Legacy `.xls`.** The binary BIFF format needs a separate reader. `parseFile` rejects it with a clear message.
+- **Styles and number formats.** Dates are read from the number format, but other formatting isn't. Currencies, percentages and colours show as the raw number or text. A change of format alone isn't detected.
+- **Vertical merges** are drawn cell by cell, since an inserted row can split them. Horizontal merges are drawn as one cell.
+- **Formula-edit undo across inserted rows.** Tracing undoes an edited formula by re-evaluating its old text. When rows or columns were inserted or deleted, that text points elsewhere, so it restores the old result instead ([Tracing → Limits](tracing.md#limits)).
+- **Screen readers, manually.** The grid's ARIA mirror passes automated checks but hasn't been tried with NVDA, JAWS or VoiceOver ([Accessibility](accessibility.md#not-covered-yet)).
+- **Downstream changes by hue alone.** Visually, an edited input and a downstream result differ by colour (blue against amber), with the kind named in the popover and to screen readers. A pattern would serve people who can't tell those hues apart.
+
+Closed since the first release:
+- moved rows are flagged in keyed mode;
+- annotations are matched by `id` or position, not object identity;
+- the minimap shades by density;
+- sheet-scoped names and structured references are resolved;
+- merged cells are read;
+- canvas cells are mirrored for screen readers, and every text colour meets WCAG AA.

@@ -2,8 +2,9 @@
   color-scheme: light dark;
   --bg: light-dark(#ffffff, #0b0b0c);
   --fg: light-dark(#0b0b0c, #ededef);
-  --muted: color-mix(in srgb, var(--fg) 55%, var(--bg));
-  --faint: color-mix(in srgb, var(--fg) 35%, var(--bg));
+  /* Text tiers, both WCAG AA (4.5:1) on --bg and --panel in light and dark. */
+  --muted: color-mix(in srgb, var(--fg) 66%, var(--bg));
+  --faint: color-mix(in srgb, var(--fg) 60%, var(--bg));
   --line: color-mix(in srgb, var(--fg) 10%, var(--bg));
   --line-strong: color-mix(in srgb, var(--fg) 18%, var(--bg));
   --panel: color-mix(in srgb, var(--fg) 2.5%, var(--bg));
@@ -11,6 +12,10 @@
   --added: light-dark(#0dbe4e, #5ecc71);
   --removed: light-dark(#ff2e3f, #ff6762);
   --modified: light-dark(#009fff, #69b1ff);
+  /* The same hues as text: WCAG AA on the background and on their tints. */
+  --added-fg: light-dark(color-mix(in srgb, var(--added) 62%, #000), color-mix(in srgb, var(--added) 70%, var(--fg)));
+  --removed-fg: light-dark(color-mix(in srgb, var(--removed) 62%, #000), color-mix(in srgb, var(--removed) 70%, var(--fg)));
+  --modified-fg: light-dark(color-mix(in srgb, var(--modified) 62%, #000), var(--modified));
   --radius: 8px;
   font-family: 'Inter Variable', Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   font-size: 13px;
@@ -85,6 +90,8 @@ kbd {
   height: 52px; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line); flex: none;
 }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 650; letter-spacing: -0.015em; font-size: 14.5px; }
+.brand h1 { font: inherit; letter-spacing: inherit; margin: 0; }
+.main { display: contents; }
 .files { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .files .arrow { color: var(--faint); }
 .file-chip {
@@ -141,8 +148,8 @@ button.file-chip:hover { border-color: var(--line-strong); background: var(--pan
 .tab.equal .dot { background: var(--line-strong); }
 .summary { display: flex; align-items: center; gap: 14px; margin-left: auto; white-space: nowrap; font-size: 12px; color: var(--muted); overflow: hidden; }
 .sum b { font-family: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace; font-weight: 600; font-size: 11.5px; }
-.sum.added b { color: var(--added); }
-.sum.removed b { color: var(--removed); }
+.sum.added b { color: var(--added-fg); }
+.sum.removed b { color: var(--removed-fg); }
 .sum.modified b { color: var(--modified); }
 .sum.faint { color: var(--faint); }
 
@@ -184,15 +191,15 @@ button.file-chip:hover { border-color: var(--line-strong); background: var(--pan
 .inspector del { text-decoration: none; background: color-mix(in srgb, var(--removed) 25%, transparent); border-radius: 3px; }
 .inspector ins { text-decoration: none; background: color-mix(in srgb, var(--added) 25%, transparent); border-radius: 3px; }
 .inspector .delta { font-weight: 600; }
-.inspector .delta.up { color: var(--added); }
-.inspector .delta.down { color: var(--removed); }
+.inspector .delta.up { color: var(--added-fg); }
+.inspector .delta.down { color: var(--removed-fg); }
 .inspector code { color: var(--muted); font-size: 11px; }
 .badge {
   text-transform: uppercase; font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
   padding: 2px 6px; border-radius: 4px; background: var(--panel); color: var(--muted);
 }
-.badge.added { color: var(--added); background: color-mix(in srgb, var(--added) 12%, transparent); }
-.badge.removed { color: var(--removed); background: color-mix(in srgb, var(--removed) 12%, transparent); }
+.badge.added { color: var(--added-fg); background: color-mix(in srgb, var(--added) 12%, transparent); }
+.badge.removed { color: var(--removed-fg); background: color-mix(in srgb, var(--removed) 12%, transparent); }
 .badge.modified { color: var(--modified); background: color-mix(in srgb, var(--modified) 12%, transparent); }
 
 /* ---- Landing */
@@ -238,7 +245,7 @@ button.file-chip:hover { border-color: var(--line-strong); background: var(--pan
 .sample:hover { border-color: var(--line-strong); box-shadow: 0 6px 16px -10px rgb(0 0 0 / 0.3); transform: translateY(-1px); }
 .sample.primary { border-color: color-mix(in srgb, var(--computed) 45%, var(--line)); background: color-mix(in srgb, var(--computed) 6%, var(--bg)); }
 .privacy { display: inline-flex; align-items: center; gap: 6px; color: var(--faint); font-size: 12px; margin: 0; }
-.error { color: var(--removed); margin: 0; }
+.error { color: var(--removed-fg); margin: 0; }
 .busy-inline { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); margin: 0; }
 .toast {
   position: fixed; bottom: 52px; left: 50%; transform: translateX(-50%);
@@ -273,8 +280,8 @@ button.file-chip:hover { border-color: var(--line-strong); background: var(--pan
 .k-input { color: var(--modified); background: color-mix(in srgb, var(--modified) 12%, transparent); }
 .k-formula { color: var(--formula); background: color-mix(in srgb, var(--formula) 12%, transparent); }
 .k-computed { color: var(--computed); background: color-mix(in srgb, var(--computed) 14%, transparent); }
-.k-added { color: var(--added); background: color-mix(in srgb, var(--added) 12%, transparent); }
-.k-removed { color: var(--removed); background: color-mix(in srgb, var(--removed) 12%, transparent); }
+.k-added { color: var(--added-fg); background: color-mix(in srgb, var(--added) 12%, transparent); }
+.k-removed { color: var(--removed-fg); background: color-mix(in srgb, var(--removed) 12%, transparent); }
 
 .trace-panel {
   width: 360px; flex: none; display: flex; flex-direction: column; min-height: 0;
@@ -300,8 +307,8 @@ button.file-chip:hover { border-color: var(--line-strong); background: var(--pan
 .tval b { font-weight: 600; }
 .tarrow { color: var(--faint); font-size: 0.86em; }
 .tdelta { font-size: 11px; font-weight: 600; font-family: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace; color: var(--muted); }
-.tdelta.up { color: var(--added); }
-.tdelta.down { color: var(--removed); }
+.tdelta.up { color: var(--added-fg); }
+.tdelta.down { color: var(--removed-fg); }
 .taddr {
   border: 0; background: none; padding: 0; cursor: pointer; color: var(--fg); font: inherit;
   display: inline-flex; gap: 6px; align-items: baseline; min-width: 0; text-align: left;

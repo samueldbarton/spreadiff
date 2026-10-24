@@ -8,6 +8,8 @@ Shadow DOM.
 
 ![Unified layout with a hover popover](images/grid-unified.png)
 
+<!-- demo: grid -->
+
 ## Mounting
 
 ```ts
@@ -53,11 +55,54 @@ Props are the [options](#options) plus `diff`, `className` and `style`. The
 
 | `layout: 'unified'` | `layout: 'split'` |
 | --- | --- |
-| One grid. A changed cell shows old and new together. Two row-number gutters (old, new) and a `+`, `−` or dot marker per row | Old on the left, new on the right, rows aligned and scrolled together. Rows and columns that exist on one side only are hatched on the other |
+| One grid. A changed cell shows old and new together. Row headers (labels, or old and new numbers) and a marker per row: `+` added, `−` removed, a dot for modified, `↕` for moved | Old on the left, new on the right, rows aligned and scrolled together. Rows and columns that exist on one side only are hatched on the other |
 | ![](images/grid-unified.png) | ![](images/grid-split.png) |
 
 For a code-review-style split view rendered as HTML instead of canvas, see
-[spreadiff/lite](lite.md).
+[spreadiff/html](html.md).
+
+## Row and column headers
+
+A spreadsheet's rows and columns have names: "India › Revenue", "FY2025".
+By default the headers show those names instead of row numbers and column
+letters. The grid infers them from the sheet's layout, the same way
+[spreadiff-lite names cells](spreadiff-lite.md#how-cells-are-named):
+
+| `rowHeaders: 'labels'` (default) | `rowHeaders: 'numbers'`, `columnHeaders: 'letters'` |
+| --- | --- |
+| ![Row headers read India › Revenue, China › Costs; column headers read FY2024 and FY2025](images/headers-labels.png) | ![The same diff with row numbers 1–10 and column letters A–C, the label column and the year row shown as cells](images/headers-numbers.png) |
+
+- **Row headers** show each row's label, under the section headings above
+  it:
+  - section headings are bold, and outer sections are muted;
+  - added and removed rows take their colour;
+  - a label too long for the header drops its outer sections first
+    (`… › Revenue`); hovering shows all of it;
+  - a row with no label shows its number.
+- **Column headers** show each column's heading: the header-row name, or
+  the heading rows above the data (`Forecast › Q2`, `2025`). In a model
+  that repeats its year row per section, the header follows the section in
+  view. A column with no heading shows its letter.
+- **Folding.** Whatever the headers now show is folded away, unless it
+  changed:
+  - the label column (a model's column A, a records table's id and name);
+  - a row of years under the header.
+
+  A changed label still shows as a cell. `foldLabels: false` keeps
+  everything in place.
+
+| Option | Values | |
+| --- | --- | --- |
+| `rowHeaders` | `'labels'` (default), `'numbers'`, `'both'`, `'none'` | Labels; spreadsheet row numbers (old and new in `unified`); the label then the number; or only the change bar and sign |
+| `columnHeaders` | `'labels'` (default), `'letters'`, `'both'` | Headings; spreadsheet letters; the letter then the heading |
+| `rowHeaderWidth` | px | Fixed width for labelled row headers. Default: fits the labels, 96–260 px |
+| `foldLabels` | `true` | Fold away the columns and rows the headers show |
+
+Labels are inferred, so they can be wrong. A guess is only a guess: the
+tooltip, the [accessibility mirror](#accessibility) and `CellInfo` still
+give each cell's address. Inference is one pass over the table, about
+50 ms per 100,000 rows. Tables over about 100,000 rows get it after the
+first frame, and show numbers until then.
 
 ## Displaying a change
 
@@ -77,7 +122,13 @@ In every display:
 - downstream (computed) changes are **amber**, and formula edits carry an
   `ƒ` in the corner ([Tracing](tracing.md));
 - the hover popover always shows the full old → new, a character-level
-  diff for text, and the Δ for numbers.
+  diff for text, and the Δ for numbers;
+- a row that moved (rows matched by key) shows `↕` in the gutter, and its
+  popover says which row it moved from ([Moved rows](diffing.md#moved-rows));
+- an XLSX merge across columns (a title over a block, say) draws as one
+  cell where nothing in it changed. A changed cell inside a merge keeps its
+  own box, so both values stay visible. Merges down rows are drawn cell by
+  cell: an inserted row can split them.
 
 ## Options
 
@@ -87,9 +138,13 @@ In every display:
 | `cellDisplay` | `'stacked'` | `'stacked'`, `'new'`, `'delta'` or `'inline'` |
 | `collapseUnchanged` | `true` | Fold runs of unchanged rows into separators. Click one to expand it |
 | `context` | `2` | Unchanged rows kept around each change when folding |
-| `hideUnchangedColumns` | `false` | Hide columns with no changed cells (key, added, removed, renamed columns stay) |
+| `hideUnchangedColumns` | `false` | Hide columns with no changed cells. Key, added, removed and renamed columns stay; without keys, so does the first mostly-text column, which names the rows |
 | `frozenColumns` | `'keys'` | Pin columns while scrolling sideways: `'keys'` moves the key columns to the front and pins them; a number pins that many leading columns |
 | `columnWidths` | — | Fixed widths in px, by column name. Others size to their content (also resizable by dragging a header edge) |
+| `rowHeaders` | `'labels'` | `'labels'`, `'numbers'`, `'both'` or `'none'`; see [Row and column headers](#row-and-column-headers) |
+| `columnHeaders` | `'labels'` | `'labels'`, `'letters'` or `'both'` |
+| `rowHeaderWidth` | fits | Width of labelled row headers, in px |
+| `foldLabels` | `true` | Fold away the label columns and heading rows the headers show, unless they changed |
 | `rowNumberOffset` | from `origin` | Added to row indexes for display. By default numbers match the sheet |
 | `theme` | `'system'` | `'system'` follows the page; `'light'` / `'dark'` force one |
 | `minimap` | `true` | Change overview on the right edge. Click to jump |
@@ -102,10 +157,12 @@ In every display:
 | `onCellClick` | — | `(cell, event)`, on pointer down on a cell |
 | `onCellHover` | — | `(cell \| null)`, when the pointer enters a cell or leaves the cells |
 | `onSelectionChange` | — | `(cell \| null)`, whenever the selection changes, by any means |
+| `accessibility` | `true` | Mirror the visible cells as hidden ARIA rows and cells for screen readers; see [Accessibility](#accessibility) |
+| `ariaLabel` | a change summary | The grid's accessible name, e.g. "Spreadsheet diff: 3 rows modified, 1 row added, 7 cells changed" |
 
 Callbacks receive a [`CellInfo`](api.md#cellinfo): the aligned row and
 column, row status, old and new values and formulas, whether the cell
-changed, its change kind, and its trace.
+changed or its row moved, its change kind, and its trace.
 
 ## Methods
 
@@ -133,7 +190,7 @@ changed, its change kind, and its trace.
 | Esc | Clear the selection |
 | Tab | Leave the grid (never trapped) |
 | Click a cell | Select it |
-| Hover a changed cell | Popover after a short delay |
+| Hover a changed cell, or a cell of a moved row | Popover after a short delay |
 | Click a "N unchanged rows" separator | Expand it |
 | Click the minimap | Jump there |
 | Drag a header's right edge | Resize the column |
@@ -180,16 +237,29 @@ export function Annotated() {
 }
 ```
 
-Keep the `annotations` array referentially stable (`useMemo`): a new array
-re-creates every annotation element.
+**Identity.** Across updates, annotations are matched by `id` when you
+give one, and otherwise by row and column. A fresh array of equal
+annotations keeps its elements, and an annotation is re-rendered only when
+its `data` changes (by `===`). So you don't have to memoize the array.
+Give an `id` when an annotation can move to another row and should keep
+its element (and any state in it, such as a half-typed reply).
 
 ## Accessibility
 
-The grid has `role="grid"` and full keyboard navigation, and its popovers
-are real DOM. Cell contents are painted on a canvas, though, so **screen
-readers can't read them**. If assistive technology matters for your page,
-render with [`spreadiff/lite`](lite.md), which outputs a semantic HTML
-`<table>`, or offer it as an alternative view.
+Cells are painted on a canvas, which screen readers can't see, so the grid
+keeps a visually hidden copy of the visible window as an ARIA grid:
+column headers, a row header per row ("Row 12, modified, moved from row
+4"), and a cell per visible column that reads the change in words
+("70.63, was 65.4, up 5.23 (8.0%), edited"). The selected cell is the
+grid's `aria-activedescendant`, so moving with the arrow keys announces
+each cell. The grid's accessible name summarises the diff, and the hover
+popover is attached with `aria-describedby` while it's open.
+
+Text and status colours meet WCAG AA contrast in light and dark. The
+tests check the canvas colours themselves, and run axe-core over the
+grid, `spreadiff/html` and the viewer. [Accessibility](accessibility.md)
+has what's covered, how it's tested, and what isn't (no manual
+screen-reader testing yet).
 
 ## Performance notes
 
@@ -197,6 +267,10 @@ render with [`spreadiff/lite`](lite.md), which outputs a semantic HTML
   and 1M rows; see [Performance](performance.md) for measurements.
 - Layout work (folding regions, row heights) is linear in the number of
   aligned rows and runs only when the diff or a layout option changes.
-- Memory is dominated by the two tables themselves. The diff adds 9 bytes
-  per aligned row (two `Int32Array`s and a `Uint8Array`) plus a mask per
-  modified row; the grid's layout adds about 17 bytes per displayed row.
+- Memory is dominated by the two tables themselves. The diff adds 10 bytes
+  per aligned row (two `Int32Array`s and two `Uint8Array`s) plus a mask
+  per modified row; the grid's layout adds about 17 bytes per displayed row.
+- The accessibility mirror holds DOM for the visible window only (tens of
+  rows), rebuilt when scrolling settles rather than every frame. Scrolling
+  benchmarks with it on and off didn't differ (p95 21.5–23.4 ms vs.
+  22.3–23.5 ms at 100k rows). `accessibility: false` skips it.

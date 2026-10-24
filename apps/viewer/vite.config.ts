@@ -12,12 +12,14 @@ export default defineConfig({
       { find: /^spreadiff$/, replacement: lib('index.ts') },
       { find: /^spreadiff\/react$/, replacement: lib('react/index.tsx') },
       { find: /^spreadiff\/core$/, replacement: lib('core/index.ts') },
-      { find: /^spreadiff\/lite$/, replacement: lib('lite/index.ts') },
+      { find: /^spreadiff\/html$/, replacement: lib('html/index.ts') },
       { find: /^spreadiff\/worker$/, replacement: lib('worker/index.ts') },
     ],
   },
   worker: { format: 'es' },
   build: {
+    // Never inline assets as data: URLs, so the build runs under a CSP of font-src/img-src 'self'.
+    assetsInlineLimit: 0,
     rollupOptions: { input: { main: fileURLToPath(new URL('index.html', import.meta.url)), vanilla: fileURLToPath(new URL('vanilla.html', import.meta.url)) } },
   },
   base: './',

@@ -8,7 +8,7 @@
  */
 import { unzipSync, strFromU8 } from 'fflate';
 import { columnLabel, uniqueNames } from './csv.js';
-import { formulaRefs } from './formula.js';
+import { formulaRefs, scopedNames } from './formula.js';
 import { computeMissingValues } from './recalc.js';
 import type { CellValue, Table, TableDefinition, Workbook } from './types.js';
 
@@ -43,8 +43,10 @@ export interface ParseXlsxOptions {
  * `computeMissing`), formula text (shared
  * formulas are expanded per cell), dates (from the cell's number format),
  * booleans, errors (as `#DIV/0!` strings), rich text and workbook-scoped
- * defined names. Each sheet is trimmed to its used range; `origin` records
- * where it starts. Styles, merged cells and charts are ignored.
+ * defined names (workbook- and sheet-scoped), merged ranges, and the indent
+ * and bold of text cells. Each sheet is trimmed to its used range; `origin`
+ * records where it starts. Other styles, number formats and charts are
+ * ignored.
  *
  * Throws if the data isn't a zip with `xl/workbook.xml`.
  */
@@ -75,18 +77,22 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
     if (id && target) rels.set(id, target.startsWith('/') ? target.slice(1) : `xl/${target}`);
   });
   const strings = parseSharedStrings(text('xl/sharedStrings.xml'));
-  const dateStyles = parseDateStyles(text('xl/styles.xml'));
+  const stylesXml = text('xl/styles.xml');
+  const dateStyles = parseDateStyles(stylesXml);
+  const labelStyles = parseLabelStyles(stylesXml);
 
   const raws: RawSheet[] = [];
   const tables: TableDefinition[] = [];
+  const allSheets: string[] = []; // every sheet in workbook order: localSheetId indexes this
   eachElement(workbookXml, 'sheet', (a) => {
     const name = decode(attr(a, 'name') ?? `Sheet${raws.length + 1}`);
+    allSheets.push(name);
     if (options.sheets && !options.sheets.includes(name)) return;
     // The relationships prefix is conventionally `r:` but may be anything.
     const rid = attr(a, 'r:id') ?? /\s[\w.-]+:id\s*=\s*["']([^"']*)/.exec(a)?.[1];
     const path = rid ? rels.get(rid) : undefined;
     if (!path || !files[path]) return;
-    raws.push(parseCells(name, text(path), strings, dateStyles, date1904));
+    raws.push(parseCells(name, text(path), strings, dateStyles, date1904, labelStyles));
     // Excel tables on this sheet, for structured references (Sales[Amount]).
     const relsPath = path.replace(/([^/]+)$/, '_rels/$1.rels');
     eachElement(text(relsPath), 'Relationship', (ra) => {
@@ -99,16 +105,30 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
   });
   // Defined names (TaxRate → Inputs!$B$2) let formula tracing see through them.
   const names: Record<string, string> = {};
+  const localNames = new Map<string, Record<string, string>>(); // sheet → its own names
   eachElement(workbookXml, 'definedName', (a, body) => {
     const name = attr(a, 'name');
-    // Workbook-scoped only; skip built-ins like _xlnm.Print_Area.
-    if (!name || !body || name.startsWith('_xlnm.') || attr(a, 'localSheetId') !== undefined) return;
-    names[decode(name)] = decode(body);
+    // Skip built-ins like _xlnm.Print_Area.
+    if (!name || !body || name.startsWith('_xlnm.')) return;
+    const local = attr(a, 'localSheetId');
+    if (local === undefined) names[decode(name)] = decode(body);
+    else {
+      const sheet = allSheets[Number(local)];
+      if (sheet === undefined) return;
+      let m = localNames.get(sheet);
+      if (!m) localNames.set(sheet, (m = {}));
+      m[decode(name)] = decode(body);
+    }
   });
 
   const header = options.header ?? 'auto';
-  const headers = header === 'auto' ? detectHeaders(raws, names, tables) : raws.map(() => header);
-  const sheets = raws.map((r, i) => buildTable(r, headers[i], header === 'auto'));
+  const headers = header === 'auto' ? detectHeaders(raws, names, tables, localNames) : raws.map(() => header);
+  const sheets = raws.map((r, i) => {
+    const t = buildTable(r, headers[i], header === 'auto');
+    const own = localNames.get(r.name);
+    if (own) t.names = own;
+    return t;
+  });
   const workbook: Workbook = {
     name: options.name ?? 'workbook.xlsx',
     sheets,
@@ -161,7 +181,7 @@ function parseTableDefinition(xml: string, sheet: string): TableDefinition | nul
  * row often holds inputs; treating them as column names would hide edits
  * to them and every change they cause.
  */
-function detectHeaders(raws: RawSheet[], names: Record<string, string>, tables: TableDefinition[]): boolean[] {
+function detectHeaders(raws: RawSheet[], names: Record<string, string>, tables: TableDefinition[], localNames: Map<string, Record<string, string>>): boolean[] {
   const candidate = new Map<string, number>(); // sheet name (upper) → index
   const result = raws.map((r, i) => {
     const ok = headerLike(r);
@@ -180,16 +200,17 @@ function detectHeaders(raws: RawSheet[], names: Record<string, string>, tables: 
   const top = Math.max(...[...candidate.values()].map((i) => raws[i].first + 1));
   const rowNumbers = Array.from({ length: top }, (_, i) => i + 1).join('|');
   const spells = top <= 64 ? new RegExp(`(?:[A-Za-z$](?:${rowNumbers})(?!\\d))|(?:(?:^|[^\\w.$])\\$?(?:${rowNumbers}):)`) : /./;
-  const nameList = Object.keys(names).map((n) => n.toUpperCase());
+  const nameList = [...Object.keys(names), ...[...localNames.values()].flatMap((m) => Object.keys(m))].map((n) => n.toUpperCase());
+  const scoped = raws.map((r) => (localNames.size ? scopedNames(names, raws.map((x) => ({ name: x.name, names: localNames.get(x.name) })), r.name) : names));
   const mayHide = (f: string) => f.includes('[') || (nameList.length > 0 && (nameList.length > 64 || nameList.some((n) => f.toUpperCase().includes(n))));
-  for (const r of raws) {
+  raws.forEach((r, ri) => {
     for (let row = 0; row < r.formulaGrid.length && candidate.size; row++) {
       const fr = r.formulaGrid[row];
       if (!fr) continue;
       for (const f of fr) {
         if (!f) continue;
         if (!spells.test(f) && !mayHide(f)) continue;
-        for (const rg of formulaRefs(f, names, { tables, row, sheets }).ranges) {
+        for (const rg of formulaRefs(f, scoped[ri], { tables, row, sheets }).ranges) {
           const key = (rg.sheet ?? r.name).toUpperCase();
           const i = candidate.get(key);
           if (i === undefined || rg.r0 < 0) continue; // whole columns (A:A) don't single out the header
@@ -202,7 +223,7 @@ function detectHeaders(raws: RawSheet[], names: Record<string, string>, tables: 
         if (!candidate.size) break;
       }
     }
-  }
+  });
   return result;
 }
 
@@ -367,6 +388,28 @@ function parseDateStyles(xml: string): Set<number> {
   return out;
 }
 
+/** cellXfs index → indent and bold, for the styles that have either. */
+function parseLabelStyles(xml: string): Map<number, { indent?: number; bold?: boolean }> {
+  const bold: boolean[] = [];
+  eachElement(xml, 'fonts', (_, body) => {
+    eachElement(body ?? '', 'font', (_a, fb) => {
+      const b = /<b(?:\s+val\s*=\s*["']([^"']*)["'])?\s*\/?>/.exec(fb ?? '');
+      bold.push(!!b && b[1] !== '0' && b[1] !== 'false');
+    });
+  });
+  const out = new Map<number, { indent?: number; bold?: boolean }>();
+  eachElement(xml, 'cellXfs', (_, body) => {
+    let i = 0;
+    eachElement(body ?? '', 'xf', (a, xb) => {
+      const indent = Number(/<alignment\b[^>]*\sindent\s*=\s*["'](\d+)["']/.exec(xb ?? '')?.[1] ?? 0);
+      const b = bold[Number(attr(a, 'fontId') ?? 0)] ?? false;
+      if (indent > 0 || b) out.set(i, { ...(indent > 0 ? { indent } : {}), ...(b ? { bold: true } : {}) });
+      i++;
+    });
+  });
+  return out;
+}
+
 /** Excel serial → ISO date/time, or null when it isn't a representable date. */
 function serialToIso(serial: number, date1904: boolean): string | null {
   if (!Number.isFinite(serial) || serial < 0 || serial > 2958465) return null; // > 9999-12-31
@@ -440,9 +483,14 @@ interface RawSheet {
   first: number;
   /** Array-formula blocks (sheet coordinates). */
   arrays: { r0: number; c0: number; r1: number; c1: number }[];
+  /** Merged ranges (sheet coordinates). */
+  merges: { r0: number; c0: number; r1: number; c1: number }[];
+  /** Indented or bold text cells (sheet coordinates). */
+  labelStyles: NonNullable<Table['labelStyles']>;
 }
 
-function parseCells(name: string, xml: string, strings: string[], dateStyles: Set<number>, date1904: boolean): RawSheet {
+function parseCells(name: string, xml: string, strings: string[], dateStyles: Set<number>, date1904: boolean, labelStyles: Map<number, { indent?: number; bold?: boolean }>): RawSheet {
+  const styled: NonNullable<Table['labelStyles']> = [];
   const grid: CellValue[][] = [];
   const formulaGrid: (string | null)[][] = [];
   const shared = new Map<string, { formula: string; row: number; col: number }>();
@@ -522,6 +570,10 @@ function parseCells(name: string, xml: string, strings: string[], dateStyles: Se
       // LibreOffice writes a typed error constant as the formula `=#VALUE!`.
       if (formula !== null && /^#(?:VALUE!|N\/A|REF!|DIV\/0!|NUM!|NAME\?|NULL!)$/.test(formula) && value === formula) formula = null;
       if (value === null && formula === null) return;
+      if (typeof value === 'string' && labelStyles.size) {
+        const ls = labelStyles.get(Number(attr(attrs, 's') ?? 0));
+        if (ls) styled.push({ r, c, ...ls });
+      }
       (grid[r] ??= [])[c] = value;
       if (formula !== null) (formulaGrid[r] ??= [])[c] = '=' + formula;
       if (c < minCol) minCol = c;
@@ -546,9 +598,18 @@ function parseCells(name: string, xml: string, strings: string[], dateStyles: Se
       }
     }
   }
+  const merges: RawSheet['merges'] = [];
+  eachElement(xml, 'mergeCell', (a) => {
+    const ref = attr(a, 'ref');
+    if (!ref || !ref.includes(':')) return;
+    const [from, to] = ref.split(':');
+    const [r0, c0] = decodeRef(from);
+    const [r1, c1] = decodeRef(to);
+    if (r1 > r0 || c1 > c0) merges.push({ r0: Math.min(r0, r1), c0: Math.min(c0, c1), r1: Math.max(r0, r1), c1: Math.max(c0, c1) });
+  });
   let first = 0;
   while (first < grid.length && !grid[first]) first++;
-  return { name, grid, formulaGrid, minCol, maxCol, first, arrays };
+  return { name, grid, formulaGrid, minCol, maxCol, first, arrays, merges, labelStyles: styled };
 }
 
 /**
@@ -569,8 +630,8 @@ function labelRow(r: RawSheet): boolean {
 }
 
 function buildTable(raw: RawSheet, header: boolean, auto = false): Table {
-  const { name, grid, formulaGrid, minCol, maxCol, first, arrays } = raw;
-  if (maxCol < 0) return { name, columns: [], rows: [], formulas: [], origin: { row: 0, col: 0 } };
+  const { name, grid, formulaGrid, minCol, maxCol, first, arrays, merges, labelStyles } = raw;
+  if (maxCol < 0) return { name, columns: [], rows: [], formulas: [], origin: { row: 0, col: 0 }, ...(merges.length ? { merges } : {}) };
   const width = maxCol - minCol + 1;
   const dense = <T,>(src: (T | null)[] | undefined): (T | null)[] => {
     const out = new Array<T | null>(width);
@@ -604,5 +665,7 @@ function buildTable(raw: RawSheet, header: boolean, auto = false): Table {
     origin: { row: start, col: minCol },
     ...(header ? { header: dense(grid[first]) } : {}),
     ...(arrays.length ? { arrays } : {}),
+    ...(merges.length ? { merges } : {}),
+    ...(labelStyles.length ? { labelStyles } : {}),
   };
 }
