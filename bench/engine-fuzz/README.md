@@ -29,6 +29,10 @@ right in these:
 | `FIND("","abc")` is `#VALUE!`; `CODE("")` is 0 | 1; `#VALUE!` |
 | `XLOOKUP` is unknown before LibreOffice 24.8 | Supported |
 | `SUM(A1:A3*B1:B3)` without array entry is `#VALUE!` | Dynamic arrays: evaluated element-wise |
+| `TEXT(-0.004,"0.00")` is `0.00` | `-0.00`: a negative rounded to zero keeps its sign |
+| `TEXT(5,"#.##")` is `5` | `5.`: the point stays |
+| Dates count from 1899-12-30, so `TEXT(0.5,"d-mmm-yy")` is `30-Dec-99` | `0-Jan-00`: serial 0 is 1900-01-00 |
+| A date past 9999-12-31 shows as `#FMT` | Excel shows `#####`; the engine leaves it unsupported |
 
 Also expected: `MATCH(x, ascending, -1)`. Its input breaks the function's
 contract (`-1` needs descending data), and the result isn't defined.
@@ -62,3 +66,14 @@ Then, checked against Excel's saved results in the real-workbook corpus
 - Excel's general number format for very small numbers (`0.0000001&""`)
   isn't verified: LibreOffice and the engine differ, and Excel wasn't
   available to settle it.
+- Nor is rounding of fractional seconds: `TEXT(0.0789,"mm:ss.0")` is
+  `53:37.0` in the engine (it rounds 36.96 s) and `53:36.9` in LibreOffice
+  (it truncates).
+
+The probes include `TEXT` over 35 format codes × 10 values (finance and
+accounting codes, scaling commas, conditions, fractions, scientific,
+dates). The grid displays cells through the same formatter. For how cells
+display in real files, `bench/trace-eval/format-check.ts` compares every
+formatted cell of the corpus with LibreOffice's "as shown" CSV export:
+7,590 of 7,603 cells in 32 formats match, and the 13 others are the
+serial-0 and `-0` rows above.

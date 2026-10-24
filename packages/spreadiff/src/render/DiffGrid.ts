@@ -1,5 +1,6 @@
 import { columnLabel } from '../core/csv.js';
 import { diffText, formatCell, numericDelta } from '../core/text.js';
+import { displayCell, displayMagnitude, formatCodeAt } from '../core/display.js';
 import { changeKind } from '../core/kind.js';
 import { rowLabelColumn } from '../core/label.js';
 import { sheetLabels, type RowLabel, type SheetLabels } from '../core/labels.js';
@@ -213,6 +214,13 @@ export interface DiffGridOptions<A = unknown> {
   onRangeChange?: (range: GridRange | null) => void;
   /** How changed cells show old vs. new. Default `stacked`. */
   cellDisplay?: CellDisplay;
+  /**
+   * Show values as the sheet formats them (`12.3%`, `$1,234`, `1-Jan-24`),
+   * from the file's number formats. Default true; false shows the stored
+   * values. Changes follow the cell's format too (`+1.2 pp` for a
+   * percentage). Copying a cell always copies the exact value.
+   */
+  numberFormats?: boolean;
   /**
    * Color downstream changes (formula results that changed because
    * something upstream did) amber, and mark formula edits with `ƒ`. Works
@@ -467,14 +475,33 @@ export class DiffGrid<A = unknown> {
       this.refreshTheme();
     }
     if (!this.diff) return;
-    if (has('columnWidths', 'cellDisplay')) this.measureColumns();
+    if (has('numberFormats')) this.textCache.clear();
+    if (has('columnWidths', 'cellDisplay', 'numberFormats')) this.measureColumns();
     if (has('annotations', 'renderAnnotation')) this.syncAnnotations();
     if (has('trace', 'traceFocus')) this.updateFocus();
-    if (has('layout', 'collapseUnchanged', 'context', 'hideUnchangedColumns', 'frozenColumns', 'columnWidths', 'annotations', 'renderAnnotation', 'rowNumberOffset', 'minimap', 'cellDisplay', 'rowHeaders', 'columnHeaders', 'rowHeaderWidth', 'foldLabels')) {
+    if (has('layout', 'collapseUnchanged', 'context', 'hideUnchangedColumns', 'frozenColumns', 'columnWidths', 'annotations', 'renderAnnotation', 'rowNumberOffset', 'minimap', 'cellDisplay', 'rowHeaders', 'columnHeaders', 'rowHeaderWidth', 'foldLabels', 'numberFormats')) {
       this.relayout();
     } else {
       this.schedule();
     }
+  }
+
+  /** A table cell's text as its sheet shows it, or plain with `numberFormats: false`. */
+  private shown(table: Table, row: number, col: number): string {
+    if (row < 0 || col < 0) return '';
+    if (this.options.numberFormats === false || !table.numberFormats) return formatCell(table.rows[row]?.[col] ?? null);
+    return displayCell(table, row, col);
+  }
+
+  /** The number format code of an aligned cell (its new side, else old), for formatting its change. */
+  private codeOf(r: number, ci: number): string | undefined {
+    const d = this.diff!;
+    if (this.options.numberFormats === false) return undefined;
+    const c = d.columns[ci];
+    const ni = d.newRows[r];
+    if (ni >= 0 && c.newIndex >= 0) return formatCodeAt(d.newTable, ni, c.newIndex);
+    const oi = d.oldRows[r];
+    return oi >= 0 && c.oldIndex >= 0 ? formatCodeAt(d.oldTable, oi, c.oldIndex) : undefined;
   }
 
   /**
@@ -1064,15 +1091,15 @@ export class DiffGrid<A = unknown> {
           if (v === null || v === '') continue;
           nonEmpty++;
           if (typeof v === 'number' || (typeof v === 'string' && NUMERIC.test(v))) numeric++;
-          const s = formatCell(v);
+          const s = this.shown(table, ri, idx);
           ws.push(s.length > 80 ? 80 * 7 : ctx.measureText(s).width);
         }
         // Changed cells in inline / delta displays need room for more than the value.
         if (diff.changedCells.get(r)?.[i] && c.oldIndex >= 0 && c.newIndex >= 0 && (this.display === 'inline' || this.display === 'delta')) {
           const ov = diff.oldTable.rows[diff.oldRows[r]][c.oldIndex] ?? null;
           const nv = diff.newTable.rows[diff.newRows[r]][c.newIndex] ?? null;
-          const ot = formatCell(ov);
-          const nt = formatCell(nv);
+          const ot = this.shown(diff.oldTable, diff.oldRows[r], c.oldIndex);
+          const nt = this.shown(diff.newTable, diff.newRows[r], c.newIndex);
           if (ot.length + nt.length < 80) {
             if (this.display === 'inline') {
               ctx.font = `${t.fontSize - 1}px ${t.fontFamily}`;
@@ -1083,7 +1110,7 @@ export class DiffGrid<A = unknown> {
               const dl = numericDelta(ov, nv);
               if (dl && dl.delta) {
                 ctx.font = `500 ${t.fontSize - 2}px ${t.monoFontFamily}`;
-                ws.push(ctx.measureText(formatDelta(dl).label).width);
+                ws.push(ctx.measureText(formatDelta(dl, this.codeOf(r, i)).label).width);
                 ctx.font = `${t.fontSize}px ${t.fontFamily}`;
               }
             }
@@ -1363,17 +1390,20 @@ export class DiffGrid<A = unknown> {
   /** A cell as words: its value, and for a change the old value, the delta and why it changed. */
   private describeCell(r: number, ci: number): string {
     const info = this.cellInfo(r, ci);
-    const v = (x: CellValue | undefined) => (x === undefined || x === null || x === '' ? 'empty' : formatCell(x));
-    if (info.status === 'added') return info.newValue === undefined ? 'not in the new table' : v(info.newValue);
-    if (info.status === 'removed') return v(info.oldValue);
-    if (info.column.status === 'added') return v(info.newValue);
-    if (info.column.status === 'removed') return `${v(info.oldValue)}, column removed`;
-    if (!info.changed) return v(info.newValue);
+    const dd = this.diff!;
+    const ov = this.shown(dd.oldTable, info.oldRow, info.column.oldIndex);
+    const nv = this.shown(dd.newTable, info.newRow, info.column.newIndex);
+    const v = (x: string) => x || 'empty';
+    if (info.status === 'added') return info.newValue === undefined ? 'not in the new table' : v(nv);
+    if (info.status === 'removed') return v(ov);
+    if (info.column.status === 'added') return v(nv);
+    if (info.column.status === 'removed') return `${v(ov)}, column removed`;
+    if (!info.changed) return v(nv);
     const d = numericDelta(info.oldValue ?? null, info.newValue ?? null);
-    const delta = d && d.delta !== 0 ? `, ${d.delta > 0 ? 'up' : 'down'} ${formatCell(Math.abs(d.delta))}${d.ratio === null ? '' : ` (${Math.abs(d.ratio * 100).toFixed(1)}%)`}` : '';
+    const delta = d && d.delta !== 0 ? `, ${d.delta > 0 ? 'up' : 'down'} ${displayMagnitude(Math.abs(d.delta), this.codeOf(r, ci))}${d.ratio === null ? '' : ` (${Math.abs(d.ratio * 100).toFixed(1)}%)`}` : '';
     const why = info.kind === 'computed' ? ', recalculated result' : info.kind === 'formula' ? ', formula edited' : ', edited';
     const formula = info.oldFormula !== info.newFormula && info.newFormula ? `, formula ${info.newFormula}` : '';
-    return `${v(info.newValue)}, was ${v(info.oldValue)}${delta}${why}${formula}`;
+    return `${v(nv)}, was ${v(ov)}${delta}${why}${formula}`;
   }
 
   private drawPane(p: PaneGeometry): void {
@@ -1628,8 +1658,8 @@ export class DiffGrid<A = unknown> {
       }
     }
 
-    let oldText = formatCell(oldV ?? null);
-    let newText = formatCell(newV ?? null);
+    let oldText = this.shown(diff.oldTable, oi, col.oldIndex);
+    let newText = this.shown(diff.newTable, ni, col.newIndex);
     if (changed && oldText === newText) {
       // Same display text, different cell: a formula-only change, or digits
       // beyond display precision. Show what actually differs.
@@ -1652,7 +1682,8 @@ export class DiffGrid<A = unknown> {
       // A merge's text spans its visible columns.
       let span = w;
       for (let k = vi + 1; merge && k < this.cols.cols.length && this.mergeAt(side, r, this.cols.cols[k]) === merge; k++) span += this.cols.widths[k];
-      this.text(formatCell(v ?? null), x, y + h / 2 + 0.5, span, span > w ? 'left' : align, font, color, p.side === 'unified' && status === ROW_STATUS.removed);
+      const shown = v === undefined ? '' : p.side === 'old' || (p.side === 'unified' && newV === undefined) ? oldText : newText;
+      this.text(shown, x, y + h / 2 + 0.5, span, span > w ? 'left' : align, font, color, p.side === 'unified' && status === ROW_STATUS.removed);
     }
     if (this.focus && !(this.selected?.row === r && this.selected.col === ci) && !this.focus.has(`${r}:${ci}`)) {
       ctx.fillStyle = t.dim;
@@ -1715,10 +1746,11 @@ export class DiffGrid<A = unknown> {
     if (oi < 0) return { label, delta: 'row added', sign: '+' };
     const dl = numericDelta(ov, nv);
     if (dl && dl.delta !== 0) {
-      const f = formatDelta(dl);
+      const code = this.options.numberFormats === false ? undefined : formatCodeAt(d.newTable, ni, c.newIndex);
+      const f = formatDelta(dl, code);
       return { label, delta: f.label, sign: f.up ? '+' : '-' };
     }
-    return { label, delta: `${formatCell(ov) || '∅'} → ${formatCell(nv) || '∅'}`, sign: '' };
+    return { label, delta: `${this.shown(d.oldTable, oi, c.oldIndex) || '∅'} → ${this.shown(d.newTable, ni, c.newIndex) || '∅'}`, sign: '' };
   }
 
   /** The delta label, or a shorter form (% only, then absolute only) that fits. */
@@ -1757,7 +1789,7 @@ export class DiffGrid<A = unknown> {
     const oldFg = computed ? t.fgMuted : t.removedFg;
     const mode = this.display;
     const delta = numericDelta(oldV ?? null, newV ?? null);
-    const deltaText = delta && delta.delta !== 0 ? formatDelta(delta) : null;
+    const deltaText = delta && delta.delta !== 0 ? formatDelta(delta, this.codeOf(r, ci)) : null;
 
     if (p.side === 'old') {
       ctx.fillStyle = oldBg;
@@ -2589,8 +2621,9 @@ export class DiffGrid<A = unknown> {
   }
 
   private showTooltip(info: CellInfo, hit: Hit): void {
-    const before = formatCell(info.oldValue ?? null);
-    const after = formatCell(info.newValue ?? null);
+    const d = this.diff!;
+    const before = this.shown(d.oldTable, info.oldRow, info.column.oldIndex);
+    const after = this.shown(d.newTable, info.newRow, info.column.newIndex);
     // Character highlights help in text; inside numbers they're noise.
     const numeric = typeof info.oldValue === 'number' && typeof info.newValue === 'number';
     const spans = !numeric && before.length + after.length < 2000 ? diffText(before, after) : null;
@@ -2625,7 +2658,7 @@ export class DiffGrid<A = unknown> {
     const delta = numericDelta(info.oldValue ?? null, info.newValue ?? null);
     if (delta && delta.delta !== 0) {
       const sign = delta.delta > 0 ? '+' : '-';
-      const abs = formatCell(Math.abs(delta.delta));
+      const abs = displayMagnitude(Math.abs(delta.delta), this.codeOf(info.row, info.columnIndex));
       const pct = delta.ratio === null ? '' : ` (${sign}${Math.abs(delta.ratio * 100).toFixed(Math.abs(delta.ratio) < 0.1 ? 2 : 1)}%)`;
       html += `<div class="sd-tt-delta">Δ <b data-sign="${sign}">${sign}${abs}${pct}</b></div>`;
     }
@@ -2728,11 +2761,15 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string): HTMLEle
   return e;
 }
 
-/** `+5.23 · +8.0%` (or `+5.23` when the old value was 0). */
-function formatDelta(d: { delta: number; ratio: number | null }): { label: string; up: boolean; abs: string; pct?: string } {
+/**
+ * `+5.23 · +8.0%` (or `+5.23` when the old value was 0). With the cell's
+ * number format, the absolute part is in it (`+$1,200`), and a percentage
+ * cell's change is in points (`+1.2 pp`), so it isn't read as the ratio.
+ */
+function formatDelta(d: { delta: number; ratio: number | null }, code?: string): { label: string; up: boolean; abs: string; pct?: string } {
   const up = d.delta > 0;
   const sign = up ? '+' : '−';
-  const abs = `${sign}${formatCell(Math.abs(d.delta))}`;
+  const abs = `${sign}${displayMagnitude(Math.abs(d.delta), code)}`;
   if (d.ratio === null) return { label: abs, up, abs };
   const pct = Math.abs(d.ratio * 100);
   const p = `${sign}${pct >= 100 ? pct.toFixed(0) : pct >= 10 ? pct.toFixed(1) : pct.toFixed(2)}%`;

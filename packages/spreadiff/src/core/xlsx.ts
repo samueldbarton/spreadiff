@@ -10,6 +10,7 @@ import { unzipSync, strFromU8 } from 'fflate';
 import { columnLabel, uniqueNames } from './csv.js';
 import { formulaRefs, scopedNames } from './formula.js';
 import { computeMissingValues } from './recalc.js';
+import { BUILTIN_FORMATS } from './numfmt.js';
 import type { CellValue, Table, TableDefinition, Workbook } from './types.js';
 
 /** Options for {@link parseXlsx}. */
@@ -80,6 +81,7 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
   const stylesXml = text('xl/styles.xml');
   const dateStyles = parseDateStyles(stylesXml);
   const labelStyles = parseLabelStyles(stylesXml);
+  const numberFormats = parseNumberFormats(stylesXml);
 
   const raws: RawSheet[] = [];
   const tables: TableDefinition[] = [];
@@ -92,7 +94,7 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
     const rid = attr(a, 'r:id') ?? /\s[\w.-]+:id\s*=\s*["']([^"']*)/.exec(a)?.[1];
     const path = rid ? rels.get(rid) : undefined;
     if (!path || !files[path]) return;
-    raws.push(parseCells(name, text(path), strings, dateStyles, date1904, labelStyles));
+    raws.push(parseCells(name, text(path), strings, dateStyles, date1904, labelStyles, numberFormats));
     // Excel tables on this sheet, for structured references (Sales[Amount]).
     const relsPath = path.replace(/([^/]+)$/, '_rels/$1.rels');
     eachElement(text(relsPath), 'Relationship', (ra) => {
@@ -388,6 +390,25 @@ function parseDateStyles(xml: string): Set<number> {
   return out;
 }
 
+/** cellXfs index → number format code, for styles with a format other than General. */
+function parseNumberFormats(xml: string): Map<number, string> {
+  const custom = new Map<number, string>();
+  eachElement(xml, 'numFmt', (a) => {
+    custom.set(Number(attr(a, 'numFmtId')), decode(attr(a, 'formatCode') ?? ''));
+  });
+  const out = new Map<number, string>();
+  eachElement(xml, 'cellXfs', (_, body) => {
+    let i = 0;
+    eachElement(body ?? '', 'xf', (a) => {
+      const id = Number(attr(a, 'numFmtId') ?? 0);
+      const code = custom.get(id) ?? BUILTIN_FORMATS[id];
+      if (code && !/^general$/i.test(code)) out.set(i, code);
+      i++;
+    });
+  });
+  return out;
+}
+
 /** cellXfs index → indent and bold, for the styles that have either. */
 function parseLabelStyles(xml: string): Map<number, { indent?: number; bold?: boolean }> {
   const bold: boolean[] = [];
@@ -489,10 +510,24 @@ interface RawSheet {
   merges: { r0: number; c0: number; r1: number; c1: number }[];
   /** Indented or bold text cells (sheet coordinates). */
   labelStyles: NonNullable<Table['labelStyles']>;
+  /** Number formats: codes (1-based) and each cell's code number (sheet coordinates). */
+  formats?: { codes: string[]; grid: number[][]; date1904: boolean };
 }
 
-function parseCells(name: string, xml: string, strings: string[], dateStyles: Set<number>, date1904: boolean, labelStyles: Map<number, { indent?: number; bold?: boolean }>): RawSheet {
+function parseCells(
+  name: string,
+  xml: string,
+  strings: string[],
+  dateStyles: Set<number>,
+  date1904: boolean,
+  labelStyles: Map<number, { indent?: number; bold?: boolean }>,
+  numberFormats: Map<number, string>,
+): RawSheet {
   const styled: NonNullable<Table['labelStyles']> = [];
+  // Format codes, numbered from 1 in order of first use; per cell, the code's number.
+  const codes: string[] = [''];
+  const codeIds = new Map<string, number>();
+  const fmtGrid: number[][] = [];
   const grid: CellValue[][] = [];
   const formulaGrid: (string | null)[][] = [];
   const shared = new Map<string, { formula: string; row: number; col: number }>();
@@ -578,6 +613,22 @@ function parseCells(name: string, xml: string, strings: string[], dateStyles: Se
       }
       (grid[r] ??= [])[c] = value;
       if (formula !== null) (formulaGrid[r] ??= [])[c] = '=' + formula;
+      if (numberFormats.size && value !== null && typeof value !== 'boolean') {
+        const code = numberFormats.get(Number(attr(attrs, 's') ?? 0));
+        // Text cells only matter with a text section (`;;;@` or `"Re: "@`).
+        if (code && (typeof value !== 'string' || dateStyles.has(Number(attr(attrs, 's'))) || code.includes('@'))) {
+          let id = codeIds.get(code);
+          if (id === undefined) {
+            id = codes.length;
+            if (id > 0xffff) id = 0; // more distinct codes than a Uint16 holds: the rest show as General
+            else {
+              codes.push(code);
+              codeIds.set(code, id);
+            }
+          }
+          if (id) (fmtGrid[r] ??= [])[c] = id;
+        }
+      }
       if (c < minCol) minCol = c;
       if (c > maxCol) maxCol = c;
     });
@@ -611,7 +662,7 @@ function parseCells(name: string, xml: string, strings: string[], dateStyles: Se
   });
   let first = 0;
   while (first < grid.length && !grid[first]) first++;
-  return { name, grid, formulaGrid, minCol, maxCol, first, arrays, merges, labelStyles: styled };
+  return { name, grid, formulaGrid, minCol, maxCol, first, arrays, merges, labelStyles: styled, formats: codes.length > 1 ? { codes, grid: fmtGrid, date1904 } : undefined };
 }
 
 /**
@@ -632,7 +683,7 @@ function labelRow(r: RawSheet): boolean {
 }
 
 function buildTable(raw: RawSheet, header: boolean, auto = false): Table {
-  const { name, grid, formulaGrid, minCol, maxCol, first, arrays, merges, labelStyles } = raw;
+  const { name, grid, formulaGrid, minCol, maxCol, first, arrays, merges, labelStyles, formats } = raw;
   if (maxCol < 0) return { name, columns: [], rows: [], formulas: [], origin: { row: 0, col: 0 }, ...(merges.length ? { merges } : {}) };
   const width = maxCol - minCol + 1;
   const dense = <T,>(src: (T | null)[] | undefined): (T | null)[] => {
@@ -659,6 +710,18 @@ function buildTable(raw: RawSheet, header: boolean, auto = false): Table {
   // Trim trailing empty rows (rows holding only a formula are not empty).
   while (rows.length && !formulas[rows.length - 1] && rows[rows.length - 1].every((v) => v === null)) rows.pop();
   formulas.length = Math.min(formulas.length, rows.length);
+  let numberFormats: Table['numberFormats'];
+  if (formats) {
+    const fr: (Uint16Array | undefined)[] = [];
+    for (let r = start; r < start + rows.length; r++) {
+      const src = formats.grid[r];
+      if (!src) continue;
+      const out = new Uint16Array(width);
+      for (let c = 0; c < width; c++) out[c] = src[minCol + c] ?? 0;
+      fr[r - start] = out;
+    }
+    if (fr.length) numberFormats = { codes: formats.codes, rows: fr, ...(formats.date1904 ? { date1904: true } : {}) };
+  }
   return {
     name,
     columns,
@@ -669,5 +732,6 @@ function buildTable(raw: RawSheet, header: boolean, auto = false): Table {
     ...(arrays.length ? { arrays } : {}),
     ...(merges.length ? { merges } : {}),
     ...(labelStyles.length ? { labelStyles } : {}),
+    ...(numberFormats ? { numberFormats } : {}),
   };
 }

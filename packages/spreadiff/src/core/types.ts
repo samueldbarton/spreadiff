@@ -58,6 +58,13 @@ export interface Table {
    * under it ("Revenue"). The XLSX reader fills this; it's optional.
    */
   labelStyles?: { r: number; c: number; indent?: number; bold?: boolean }[];
+  /**
+   * Excel number formats of the cells, so they can be shown as the sheet
+   * shows them (`12.3%`, `$1,234`, `1-Jan-24`). `rows[r][c]` indexes
+   * `codes`, parallel to `rows`; 0 means General. Rows without a format may
+   * be missing. The XLSX reader fills this; see `displayValue`.
+   */
+  numberFormats?: { codes: string[]; rows: (Uint16Array | undefined)[]; date1904?: boolean };
 }
 
 /** An ordered list of sheets. A CSV file is a one-sheet workbook. */

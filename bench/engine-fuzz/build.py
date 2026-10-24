@@ -26,6 +26,21 @@ SORTED = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 NAMES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j']
 UNSORTED = [50, 10, 90, 30, 70, 20, 100, 40, 80, 60]
 
+# Number formats: TEXT(value, code) for common and finance codes (the grid shows cells through the same formatter).
+FORMAT_VALUES = [0, 1234.5678, -1234.5678, 0.0789, 12345678, 0.5, 45292.75, -0.004, 1.5, 999.995]
+FORMAT_CODES = [
+    'General', '0', '0.00', '#,##0', '#,##0.00', '0%', '0.0%', '0.00E+00', '##0.0E+0', '# ?/?', '# ??/??', '?/8',
+    '$#,##0_);($#,##0)', '$#,##0.00_);[Red]($#,##0.00)', '#,##0_);(#,##0)', '#,##0.0,,"m"', '#,##0,"k"', '0.0"x"',
+    '_(* #,##0_);_(* (#,##0);_(* "-"_);_(@_)', '_($* #,##0.00_);_($* (#,##0.00);_($* "-"??_);_(@_)',
+    '[$€-407] #,##0.00', '[>=1000]#,##0,"k";0', '0;-0;"zero"', '#,##0.00;(#,##0.00);"-"', '000-0000', '#.##', '0.0#',
+    'd-mmm-yy', 'mmmm d, yyyy', 'dddd', 'h:mm AM/PM', '[h]:mm:ss', 'mm:ss.0', 'yyyy-mm-dd hh:mm', '[$-409]mmm-yy',
+]
+
+
+def text_probe(v, code):
+    return '=TEXT(%r,"%s")' % (v, code.replace('"', '""'))
+
+
 CURATED = [
     # Operators: precedence, unary minus, percent, concatenation, comparison across types
     '=-2^2', '=2^-1', '=-(2^2)', '=2^3^2', '=10%', '=5%%', '=1+2*3-4/5', '=(1+2)*3', '=2*-3',
@@ -211,6 +226,9 @@ MODERN = ['XLOOKUP', 'IFS', 'SWITCH', 'XOR', 'IFNA', 'CONCAT', 'TEXTJOIN', 'DAYS
 def xlfn(f):
     import re
     return re.sub(r'(?<![A-Za-z0-9_.])(' + '|'.join(re.escape(m) for m in MODERN) + r')\(', lambda m: f'_xlfn.{m.group(1)}(', f)
+
+
+CURATED += [text_probe(v, c) for c in FORMAT_CODES for v in FORMAT_VALUES]
 
 
 def main():

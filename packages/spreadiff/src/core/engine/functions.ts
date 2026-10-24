@@ -7,6 +7,7 @@
  * RAND, CELL, INFO), whose cached values can't be checked. A missing
  * function throws Unsupported and the cell falls back to static analysis.
  */
+import { formatNumberCode, formatTextCode } from '../numfmt.js';
 import type { Ctx } from './evaluate.js';
 import { lookupName } from '../formula.js';
 import { parseFormula, Unsupported, type Node } from './parse.js';
@@ -514,113 +515,15 @@ function edate(endOfMonth: boolean): Fn {
 
 // ---- TEXT -----------------------------------------------------------------------
 
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-
-/** A subset of Excel number formats: 0 # , . % literals, and y m d h s for dates. */
+/** A number through an Excel format code (see `core/numfmt`); unsupported codes throw `Unsupported`. */
 export function formatValue(v: number, format: string, d1904 = false): string {
-  const sections = splitSections(format);
-  let fmt = sections[0];
-  let value = v;
-  if (v < 0 && sections.length > 1) {
-    fmt = sections[1];
-    value = -v;
-  } else if (v === 0 && sections.length > 2) fmt = sections[2];
-  if (fmt === '') return ''; // an empty section hides the value
-  const isDate = /[yd]|h|s|(?<![#0.,])m/i.test(fmt.replace(/"[^"]*"|\\./g, ''));
-  if (isDate) return formatDate(value, fmt, d1904);
-  return formatNumber(value, fmt, v < 0 && sections.length === 1);
+  const s = formatNumberCode(v, format, d1904);
+  if (s === null) throw new Unsupported('number format');
+  return s;
 }
 
-/** Text through a format's text section: the fourth, or a lone section with @; otherwise unchanged. */
-function formatText(v: string, format: string): string {
-  const sections = splitSections(format);
-  const fmt = sections.length > 3 ? sections[3] : sections.length === 1 && /@/.test(format.replace(/"[^"]*"/g, '')) ? sections[0] : null;
-  if (fmt === null) return v;
-  return fmt.replace(/"([^"]*)"|\\(.)|_.|\*.|@/g, (t, q, e) => (q !== undefined ? q : e !== undefined ? e : t[0] === '_' ? ' ' : t[0] === '*' ? '' : v));
-}
-
-function splitSections(f: string): string[] {
-  const out: string[] = [];
-  let cur = '';
-  let q = false;
-  for (const ch of f) {
-    if (ch === '"') q = !q;
-    if (ch === ';' && !q) {
-      out.push(cur);
-      cur = '';
-    } else cur += ch;
-  }
-  out.push(cur);
-  return out;
-}
-
-function formatNumber(v: number, fmt: string, negative: boolean): string {
-  if (/[?/E]|\[/.test(fmt.replace(/"[^"]*"/g, ''))) throw new Unsupported('number format');
-  const literal = (s: string) => s.replace(/"([^"]*)"/g, '$1').replace(/\\(.)/g, '$1');
-  const m = /^([^0#,.%]*)([0#,]*)(?:\.([0#]*))?([^0#]*)$/.exec(fmt);
-  if (!m) throw new Unsupported('number format');
-  const [, pre, intPart, decPart = '', post] = m;
-  let x = Math.abs(v);
-  if (fmt.includes('%')) x *= 100;
-  // Trailing commas scale by thousands.
-  const scale = /,+$/.exec(intPart)?.[0].length ?? 0;
-  x /= 1000 ** scale;
-  const decimals = decPart.length;
-  const required = decPart.replace(/#/g, '').length;
-  let s = roundHalfAway(x, decimals).toFixed(decimals);
-  if (decimals > required) s = s.replace(new RegExp(`0{1,${decimals - required}}$`), '').replace(/\.$/, '');
-  let [i, d] = s.split('.');
-  const minInt = intPart.replace(/[#,]/g, '').length;
-  if (i === '0' && minInt === 0) i = '';
-  i = i.padStart(minInt, '0');
-  if (intPart.replace(/,+$/, '').includes(',')) i = i.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  return (negative ? '-' : '') + literal(pre) + i + (d ? `.${d}` : '') + literal(post);
-}
-
-function formatDate(v: number, fmt: string, d1904: boolean): string {
-  const p = partsFromSerial(v, d1904);
-  // "ss.000" shows fractions of a second: round to that many decimals instead of whole seconds.
-  const fd = Math.min(3, Math.max(0, ...[...fmt.matchAll(/s+\.(0+)/gi)].map((m) => m[1].length)));
-  const scale = 10 ** fd;
-  let units = Math.round((v - Math.floor(v)) * 86400 * scale);
-  if (units >= 86400 * scale) units = 86400 * scale - 1;
-  const secs = Math.floor(units / scale);
-  const frac = fd ? String(units % scale).padStart(fd, '0') : '';
-  const hh = Math.floor(secs / 3600);
-  const mm = Math.floor((secs % 3600) / 60);
-  const ss = secs % 60;
-  const ampm = /AM\/PM|A\/P/i.test(fmt);
-  // AM/PM and A/P before the literal-run rule, which mustn't swallow them ("ss AM/PM"): "a" is its own literal.
-  const tokens = fmt.match(/"[^"]*"|\\.|AM\/PM|A\/P|y+|m+|d+|h+|s+|[aA]|[^ymdhsaA"\\]+/gi) ?? [];
-  let out = '';
-  for (let k = 0; k < tokens.length; k++) {
-    const t = tokens[k];
-    const l = t.toLowerCase();
-    const prev = tokens.slice(0, k).reverse().find((x) => /^[ymdhs]/i.test(x))?.toLowerCase() ?? '';
-    const nextTok = tokens.slice(k + 1).find((x) => /^[ymdhs]/i.test(x))?.toLowerCase() ?? '';
-    if (t.startsWith('"')) out += t.slice(1, -1);
-    else if (t.startsWith('\\')) out += t.slice(1);
-    else if (/^am\/pm$/i.test(t)) out += hh < 12 ? 'AM' : 'PM'; // always upper case, as Excel writes it
-    else if (/^a\/p$/i.test(t)) out += hh < 12 ? t[0] : t[2]; // the format's own case: a/p → "p", A/P → "P"
-    else if (l[0] === 'y') out += l.length <= 2 ? String(p.y % 100).padStart(2, '0') : String(p.y);
-    else if (l[0] === 'd') out += l.length === 1 ? p.d : l.length === 2 ? String(p.d).padStart(2, '0') : l.length === 3 ? DAYS[p.dow].slice(0, 3) : DAYS[p.dow];
-    else if (l[0] === 'h') {
-      const h = ampm ? hh % 12 || 12 : hh;
-      out += l.length === 1 ? h : String(h).padStart(2, '0');
-    } else if (l[0] === 's') out += l.length === 1 ? ss : String(ss).padStart(2, '0');
-    else if (fd && /^\.0+/.test(t) && tokens[k - 1]?.toLowerCase().startsWith('s')) {
-      const zeros = /^\.(0+)/.exec(t)![1].length;
-      out += '.' + frac.slice(0, zeros).padEnd(zeros, '0') + t.slice(1 + zeros);
-    }
-    else if (l[0] === 'm') {
-      // m after h or before s is minutes.
-      if (prev.startsWith('h') || nextTok.startsWith('s')) out += l.length === 1 ? mm : String(mm).padStart(2, '0');
-      else out += l.length === 1 ? p.m : l.length === 2 ? String(p.m).padStart(2, '0') : l.length === 3 ? MONTHS[p.m - 1].slice(0, 3) : l.length === 5 ? MONTHS[p.m - 1][0] : MONTHS[p.m - 1];
-    } else out += t;
-  }
-  return out;
-}
+/** Text through a format's text section; unchanged when it has none. */
+const formatText = (v: string, format: string): string => formatTextCode(v, format) ?? v;
 
 // ---- Financial ------------------------------------------------------------------
 
