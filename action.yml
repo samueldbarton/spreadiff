@@ -1,0 +1,35 @@
+name: spreadiff
+description: Comment on pull requests with what changed in spreadsheets, and what it moved downstream.
+branding:
+  icon: grid
+  color: blue
+inputs:
+  github-token:
+    description: Token to post the comment with.
+    default: ${{ github.token }}
+  paths:
+    description: Which files to compare (globs, comma- or newline-separated).
+    default: '**/*.{xlsx,xlsm,csv,tsv}'
+  min-change:
+    description: Ignore moves smaller than this share of the number (0.1% or 0.001).
+    default: ''
+  max-rows:
+    description: Rows per table in the report.
+    default: '25'
+  comment:
+    description: Post (and keep updating) a comment on the pull request. 'false' writes only the job summary.
+    default: 'true'
+  base:
+    description: Base commit. Default the pull request's base.
+    default: ''
+  head:
+    description: Head commit. Default the pull request's head.
+    default: ''
+outputs:
+  files:
+    description: How many matching files changed.
+  changed:
+    description: How many of them differ in content.
+runs:
+  using: node20
+  main: action/dist/index.mjs
