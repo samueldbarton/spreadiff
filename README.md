@@ -155,7 +155,7 @@ contribution.
 | Changed cells classified correctly (input, formula edit, downstream) | 100% of 2,172 |
 | Causes of downstream changes: precision / recall | 100% / 100% |
 | Contributions equal to LibreOffice's | 3,400 of 3,400 |
-| Formulas whose recalculated value matches the saved one | 99.6% of 46,249 |
+| Formulas whose recalculated value matches the saved one | 99.8% of 46,249 |
 | Values computed for files saved without them | 12,560 of 12,560 |
 | The same checks, in Chromium, hosted, network blocked | 1,955 / 1,955 causes · 3,304 / 3,304 contributions |
 
@@ -170,8 +170,8 @@ and `npm run test:hosted` reproduce them.
 | Import | Contents | min + gzip |
 | --- | --- | --- |
 | `spreadiff/html` | Diff engine, CSV parser, HTML and text renderers. No DOM | 16.0 KB |
-| `spreadiff/core` | + XLSX reader, formula engine and tracing | 42.1 KB |
-| `spreadiff` | + canvas `DiffGrid` | 62.6 KB |
+| `spreadiff/core` | + XLSX reader, formula engine and tracing | 43.4 KB |
+| `spreadiff` | + canvas `DiffGrid` | 63.9 KB |
 | `spreadiff/react` | React component for `DiffGrid` | + React |
 | `spreadiff/worker` | Parse, diff and trace in a Web Worker | |
 

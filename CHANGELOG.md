@@ -204,6 +204,27 @@ the repository.
 
 ### Fixed
 
+- **Formula engine**, found by a new differential test against LibreOffice
+  (`npm run bench:engine`) and checked against Excel's saved results in
+  the real-workbook corpus, where matches went from 46,082 to 46,157 of
+  46,249 formulas. Of the 42 mismatches left, 37 are LibreOffice's own
+  re-saves and 5 are `SUBTOTAL` over filtered rows.
+  - `CEILING` / `FLOOR` with a negative number and significance rounded
+    the wrong way; `.MATH` ignored `mode`.
+  - Text such as `"1,234"`, `"$1,234"`, `"(5)"` and date or time text
+    (`"2024-03-01"`, `"15-Jan-2024"`, `"2:30 PM"`) now reads as a number,
+    as in Excel. Slash dates depend on locale, so they are unsupported, not
+    guessed.
+  - Numbers of 1E+15 and above turn into text as `1E+15`, not in full.
+  - Text compares in Excel's order: punctuation, then digits, then letters,
+    with accents beside their letter. It used to compare by code point.
+  - `TEXT`: the fourth format section formats text and logicals
+    (`TEXT(TRUE, ";;;@!")`), and an empty section hides the value.
+    Fractional seconds (`ss.000`) now print, and `AM/PM` in the format
+    `hh:mm:ss AM/PM` printed as `A1/P1`.
+  - Serial 0 is Excel's `1900-01-00`: `YEAR(0)` is 1900 and `DAY(0)` is 0.
+  - The XLSX reader kept dates only to the second; milliseconds are now
+    kept (`04:05:06.009`).
 - Unified row numbers of two digits or more could be cut off: the number
   gutter didn't allow for the text padding.
 - Labels: a row less indented than an open section now ends it, and a
