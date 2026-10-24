@@ -32,6 +32,10 @@ export interface EngineHost {
   date1904?: boolean;
   /** Array-formula blocks covering a cell, so each cell takes its element of the result. */
   arrayBlock?(sheet: string, row: number, col: number): { r0: number; c0: number } | null;
+  /** Whether a sheet row is hidden: 0 no, 1 by hand, 2 by a filter. For `SUBTOTAL`. */
+  rowHidden?(sheet: string, row: number): 0 | 1 | 2;
+  /** A cell's formula, or null. `SUBTOTAL` skips cells that are subtotals themselves. */
+  formulaAt?(sheet: string, row: number, col: number): string | null;
   /** All values of a rectangle, row-major (faster than `get` per cell). */
   getRange?(sheet: string, r0: number, c0: number, r1: number, c1: number): Scalar[];
   /**

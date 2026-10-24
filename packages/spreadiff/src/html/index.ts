@@ -17,6 +17,7 @@ import { columnLabel } from '../core/csv.js';
 import { sheetLabels, type RowLabel, type SheetLabels } from '../core/labels.js';
 import { changeKind } from '../core/kind.js';
 import { diffText, formatCell, numericDelta } from '../core/text.js';
+import { displayCell, displayMagnitude, formatCodeAt } from '../core/display.js';
 import type { ChangeKind } from '../core/trace.js';
 import { ROW_STATUS, type CellValue, type TableDiff } from '../core/types.js';
 import { lightDarkFallback } from '../core/lightdark.js';
@@ -63,6 +64,8 @@ export interface HtmlOptions {
   columnHeaders?: 'labels' | 'letters' | 'both';
   /** With labels, leave out unchanged columns that only hold row labels, and unchanged rows that only hold column headings. Default true. */
   foldLabels?: boolean;
+  /** Show values as the sheet formats them (`12.3%`, `$1,234`), and changes in the same format. Default true. */
+  numberFormats?: boolean;
 }
 
 const esc = (s: string) =>
@@ -102,12 +105,12 @@ function visibleColumns(diff: TableDiff, changedOnly: boolean): number[] {
   return cols;
 }
 
-function deltaLabel(a: CellValue | undefined, b: CellValue | undefined): { text: string; up: boolean } | null {
+function deltaLabel(a: CellValue | undefined, b: CellValue | undefined, code?: string): { text: string; up: boolean } | null {
   const d = numericDelta(a ?? null, b ?? null);
   if (!d || d.delta === 0) return null;
   const up = d.delta > 0;
   const s = up ? '+' : '−';
-  const abs = formatCell(Math.abs(d.delta));
+  const abs = displayMagnitude(Math.abs(d.delta), code);
   if (d.ratio === null) return { text: `${s}${abs}`, up };
   const pct = Math.abs(d.ratio * 100);
   return { text: `${s}${abs} · ${s}${pct >= 100 ? pct.toFixed(0) : pct >= 10 ? pct.toFixed(1) : pct.toFixed(2)}%`, up };
@@ -168,6 +171,22 @@ export function renderHTML(diff: TableDiff, options: HtmlOptions = {}): string {
     if (ri < 0 || idx < 0) return undefined;
     return (side === 'new' ? diff.newTable : diff.oldTable).rows[ri][idx] ?? null;
   };
+  const formats = options.numberFormats !== false;
+  /** A cell as the sheet shows it. */
+  const shown = (r: number, ci: number, side: 'old' | 'new'): string => {
+    const c = diff.columns[ci];
+    const ri = side === 'old' ? diff.oldRows[r] : diff.newRows[r];
+    const idx = side === 'old' ? c.oldIndex : c.newIndex;
+    if (ri < 0 || idx < 0) return '';
+    const t = side === 'new' ? diff.newTable : diff.oldTable;
+    return formats ? displayCell(t, ri, idx) : formatCell(t.rows[ri][idx] ?? null);
+  };
+  const codeOf = (r: number, ci: number): string | undefined => {
+    if (!formats) return undefined;
+    const c = diff.columns[ci];
+    const ri = diff.newRows[r];
+    return ri >= 0 && c.newIndex >= 0 ? formatCodeAt(diff.newTable, ri, c.newIndex) : undefined;
+  };
 
   // Column headings as they stand at the first row shown.
   const firstRow = items.find((it) => it.type === 'row');
@@ -227,15 +246,15 @@ export function renderHTML(diff: TableDiff, options: HtmlOptions = {}): string {
         const nv = val(r, ci, 'new');
         const changed = st === ROW_STATUS.modified && mask?.[ci] === 1;
         if (!changed) {
-          const v = mode === 'old' ? ov : mode === 'new' ? nv : nv !== undefined ? nv : ov;
-          return `<td${num}>${esc(formatCell(v ?? null))}</td>`;
+          const text = mode === 'old' || (mode === 'merged' && nv === undefined) ? shown(r, ci, 'old') : shown(r, ci, 'new');
+          return `<td${num}>${esc(text)}</td>`;
         }
         const kind = kindOf(r, ci);
-        const ot = formatCell(ov ?? null);
-        const nt = formatCell(nv ?? null);
+        const ot = shown(r, ci, 'old');
+        const nt = shown(r, ci, 'new');
         const k2 = ` data-kind="${kind}"`;
         if (mode === 'old') return `<td class="sdl-c-old"${k2}${num}>${intra(ot, nt, 'old')}</td>`;
-        const d = deltaLabel(ov, nv);
+        const d = deltaLabel(ov, nv, codeOf(r, ci));
         const deltaHtml = d ? `<small class="sdl-delta" data-up="${d.up}">${d.text}</small>` : '';
         if (mode === 'new' && side !== 'unified') {
           return `<td class="sdl-c-new"${k2}${num}>${intra(ot, nt, 'new')}${display === 'delta' ? deltaHtml : ''}</td>`;
@@ -359,7 +378,7 @@ function isNumericColumn(diff: TableDiff, ci: number): boolean {
  * A row that moved (rows matched by key) is marked `~`, with the row it
  * moved from: `~  P-1007  12.5  3  (moved from row 2)`.
  */
-export function renderText(diff: TableDiff, options: Pick<HtmlOptions, 'context' | 'changedColumnsOnly' | 'maxRows'> & { maxWidth?: number } = {}): string {
+export function renderText(diff: TableDiff, options: Pick<HtmlOptions, 'context' | 'changedColumnsOnly' | 'maxRows' | 'numberFormats'> & { maxWidth?: number } = {}): string {
   const cols = visibleColumns(diff, options.changedColumnsOnly ?? false);
   const items = hunks(diff, options.context ?? 2);
   const maxW = options.maxWidth ?? 24;
@@ -371,7 +390,9 @@ export function renderText(diff: TableDiff, options: Pick<HtmlOptions, 'context'
     const ri = side === 'old' ? diff.oldRows[r] : diff.newRows[r];
     const idx = side === 'old' ? c.oldIndex : c.newIndex;
     const t = side === 'old' ? diff.oldTable : diff.newTable;
-    return ri >= 0 && idx >= 0 ? formatCell(t.rows[ri][idx] ?? null).replace(/\s+/g, ' ') : '';
+    if (ri < 0 || idx < 0) return '';
+    // Formats pad with spaces (`_)` in accounting codes); a text column has no room for them.
+    return (options.numberFormats === false || !t.numberFormats ? formatCell(t.rows[ri][idx] ?? null) : displayCell(t, ri, idx).trim()).replace(/\s+/g, ' ');
   };
   let emitted = 0;
   for (const it of items) {

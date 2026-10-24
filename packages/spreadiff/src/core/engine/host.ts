@@ -51,6 +51,7 @@ export function tableHost(
   });
   const date1904 = extra.date1904 ?? false;
   const overrides = new Map<number, Scalar>();
+  const hiddenSets: (Map<number, 1 | 2> | null | undefined)[] = [];
   const scoped = new Map<string, Record<string, string>>();
   // Formula references usually spell the sheet exactly as named: try that first.
   const index = (name: string) => byName.get(name) ?? byName.get(name.toUpperCase()) ?? -1;
@@ -99,6 +100,22 @@ export function tableHost(
       return log.slice(version - logStart);
     },
     sheetIndex: index,
+    rowHidden: tables.some((t) => t.hiddenRows)
+      ? (sheet, row) => {
+          const s = index(sheet);
+          if (s < 0) return 0;
+          let h = hiddenSets[s];
+          if (h === undefined) {
+            const hr = tables[s].hiddenRows;
+            h = hiddenSets[s] = hr ? new Map([...hr.rows.map((r) => [r, 1] as const), ...hr.filtered.map((r) => [r, 2] as const)]) : null;
+          }
+          return h?.get(row) ?? 0;
+        }
+      : undefined,
+    formulaAt(sheet, r, c) {
+      const s = index(sheet);
+      return s < 0 ? null : host.formula(s, r, c);
+    },
     cached: (s, r, c) => cachedIn(tables[s], r, c),
     formula(s, r, c) {
       const t = tables[s];

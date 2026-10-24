@@ -12,10 +12,12 @@ import {
   type Workbook,
   type WorkbookDiff,
 } from './types.js';
+import { diffWorkbookObjects } from './objects.js';
 
 const DEFAULTS: Required<DiffOptions> = {
   keys: 'auto',
   numericTolerance: 0,
+  relativeTolerance: 0,
   precision: 15,
   trimWhitespace: true,
   ignoreCase: false,
@@ -56,14 +58,18 @@ export function cellsEqual(a: CellValue, b: CellValue, options: DiffOptions = {}
 function makeComparer(o: Required<DiffOptions>): (a: CellValue, b: CellValue) => boolean {
   const norm = makeNormalizer(o);
   const tol = o.numericTolerance;
+  const rel = o.relativeTolerance;
   const digits = o.precision;
   return (a, b) => {
     if (a === b) return true;
     if (digits < 17 && typeof a === 'number' && typeof b === 'number' && sameDigits(a, b, digits)) return true;
-    if (tol > 0) {
+    if (tol > 0 || rel > 0) {
       const x = toNumber(a);
       const y = toNumber(b);
-      if (!Number.isNaN(x) && !Number.isNaN(y)) return Math.abs(x - y) <= tol;
+      if (!Number.isNaN(x) && !Number.isNaN(y)) {
+        const d = Math.abs(x - y);
+        return d <= tol || d <= rel * Math.max(Math.abs(x), Math.abs(y));
+      }
     }
     return norm(a) === norm(b);
   };
@@ -396,12 +402,14 @@ export function diffWorkbooks(oldBook: Workbook, newBook: Workbook, options: Dif
     const d = compareAligned(aligned[i], formulaKeyer(aligned, i));
     return { name: p.name, status: p.status ?? (hasChanges(d) ? 'modified' : 'equal'), diff: d };
   });
+  const objects = diffWorkbookObjects(oldBook, newBook);
   return {
     sheets,
     names: oldBook.names || newBook.names ? { old: oldBook.names, new: newBook.names } : undefined,
     tables: oldBook.tables || newBook.tables ? { old: oldBook.tables, new: newBook.tables } : undefined,
     date1904: oldBook.date1904 || newBook.date1904 ? { old: oldBook.date1904, new: newBook.date1904 } : undefined,
     computedValues: oldBook.computedValues || newBook.computedValues ? { old: oldBook.computedValues, new: newBook.computedValues } : undefined,
+    objects: objects.length ? objects : undefined,
   };
 }
 

@@ -211,7 +211,7 @@ their own, the truth is the edits that move C when applied alone.
 | Same three, real Excel files (322 downstream cells) | 99.8% / 80.1% / 84.3% | **100% / 100% / 100%** |
 | Stale file: downstream changes found (4 models) | 0 | **all** (63, 84, 1,441, 146) |
 | Missing values computed equal to LibreOffice's | — | **12,560 of 12,560** |
-| Every formula recalculated from its cached inputs reproduces its cached result | — | **99.6%** (46,082 of 46,249) |
+| Every formula recalculated from its cached inputs reproduces its cached result | — | **99.8%** (46,162 of 46,249) |
 | Contributions equal to LibreOffice's (new value − value without that edit) | — | **3,400 of 3,400** (2,980 models, 420 real files) |
 
 The other 0.6% are 11 cells in the budget model whose causes include an
@@ -219,11 +219,14 @@ inserted row. The oracle has no single edit to undo for an insert, so
 they aren't scored, and they count as misses. None of the scored cells
 had a wrong or a missing cause.
 
-The engine check's misses were all expected:
-- `SUBTOTAL` over filtered rows (row visibility isn't read);
-- `TEXT` with sub-second time formats (the parser rounds times to the second);
-- floating-point noise in trigonometry;
-- one locale-specific file whose formulas Excel only reads in Polish.
+The engine check's 87 misses:
+- 50 formulas the engine doesn't handle: `CELL("width", …)` (18), and 32
+  written with a decimal comma (`=L6-(-4,3)`), which only a European
+  locale reads;
+- 37 in files LibreOffice re-saved, where the cached result is
+  LibreOffice's and differs from Excel's (it reads `TRUE` as 1 in `TEXT`,
+  and treats some date codes differently); the same formulas match in
+  Excel's own copies.
 
 In these files all of them failed calibration and fell back to
 references. That is not a guarantee: calibration checks a sample of each
@@ -352,7 +355,7 @@ falls back to references and sets `truncated`.
   that cell. Translating references through the alignment would close
   this; it isn't done yet.
 - **One engine's opinion.** A recalculated value is what spreadiff's
-  engine computes. It reproduces 99.6% of the formulas in the test corpus
+  engine computes. It reproduces 99.8% of the formulas in the test corpus
   exactly, and calibration samples each formula shape, but it isn't Excel.
 - **One workbook.** References to other workbooks aren't followed: a cell
   reading one is outside data, taken as saved (above).

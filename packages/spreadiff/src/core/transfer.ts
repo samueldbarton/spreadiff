@@ -42,6 +42,10 @@ export interface PackedTable {
   merges?: Table['merges'];
   /** `Table.labelStyles`, unchanged. */
   labelStyles?: Table['labelStyles'];
+  /** `Table.hiddenRows`, unchanged. */
+  hiddenRows?: Table['hiddenRows'];
+  /** `Table.numberFormats`, its rows as one `width * height` array. */
+  numberFormats?: { codes: string[]; cells: Uint16Array; date1904?: boolean };
 }
 
 const SEP = '\u0000';
@@ -71,7 +75,13 @@ export function packTable(t: Table): PackedTable {
       } else types[i] = v ? 3 : 4;
     }
   }
-  return { name: t.name, columns: t.columns, width, height, types, numbers, strings: parts.join(SEP), formulas: t.formulas && packFormulas(t.formulas), origin: t.origin, header: t.header, arrays: t.arrays, names: t.names, merges: t.merges, labelStyles: t.labelStyles };
+  let numberFormats: PackedTable['numberFormats'];
+  if (t.numberFormats) {
+    const cells = new Uint16Array(width * height);
+    t.numberFormats.rows.forEach((row, r) => row && r < height && cells.set(row.subarray(0, width), r * width));
+    numberFormats = { codes: t.numberFormats.codes, cells, ...(t.numberFormats.date1904 ? { date1904: true } : {}) };
+  }
+  return { name: t.name, columns: t.columns, width, height, types, numbers, strings: parts.join(SEP), formulas: t.formulas && packFormulas(t.formulas), origin: t.origin, header: t.header, arrays: t.arrays, names: t.names, merges: t.merges, labelStyles: t.labelStyles, hiddenRows: t.hiddenRows, numberFormats };
 }
 
 function packFormulas(f: (string | null)[][]): NonNullable<PackedTable['formulas']> {
@@ -133,6 +143,16 @@ export function unpackTable(p: PackedTable): Table {
   if (p.names) t.names = p.names;
   if (p.merges) t.merges = p.merges;
   if (p.labelStyles) t.labelStyles = p.labelStyles;
+  if (p.hiddenRows) t.hiddenRows = p.hiddenRows;
+  if (p.numberFormats) {
+    const { codes, cells, date1904 } = p.numberFormats;
+    const rows: (Uint16Array | undefined)[] = [];
+    for (let r = 0; r < p.height; r++) {
+      const row = cells.subarray(r * p.width, (r + 1) * p.width);
+      if (row.some((x) => x)) rows[r] = row;
+    }
+    t.numberFormats = { codes, rows, ...(date1904 ? { date1904: true } : {}) };
+  }
   return t;
 }
 
@@ -150,6 +170,8 @@ export interface PackedWorkbookDiff {
   date1904?: WorkbookDiff['date1904'];
   /** As in `WorkbookDiff.computedValues`. */
   computedValues?: WorkbookDiff['computedValues'];
+  /** As in `WorkbookDiff.objects`. */
+  objects?: WorkbookDiff['objects'];
 }
 
 /** Pack a workbook diff; returns the message and the buffers to transfer. */
@@ -162,6 +184,7 @@ export function packWorkbookDiff(d: WorkbookDiff): { packed: PackedWorkbookDiff;
       for (const p of [oldTable, newTable]) {
         transfer.push(p.types.buffer as ArrayBuffer, p.numbers.buffer as ArrayBuffer);
         if (p.formulas) transfer.push(p.formulas.cells.buffer as ArrayBuffer, p.formulas.lengths.buffer as ArrayBuffer);
+        if (p.numberFormats) transfer.push(p.numberFormats.cells.buffer as ArrayBuffer);
       }
       transfer.push(s.diff.oldRows.buffer as ArrayBuffer, s.diff.newRows.buffer as ArrayBuffer, s.diff.status.buffer as ArrayBuffer, s.diff.moved.buffer as ArrayBuffer);
       return { name: s.name, status: s.status, diff: { ...s.diff, oldTable, newTable } };
@@ -170,6 +193,7 @@ export function packWorkbookDiff(d: WorkbookDiff): { packed: PackedWorkbookDiff;
     tables: d.tables,
     date1904: d.date1904,
     computedValues: d.computedValues,
+    objects: d.objects,
   };
   return { packed, transfer };
 }
@@ -186,6 +210,7 @@ export function unpackWorkbookDiff(p: PackedWorkbookDiff): WorkbookDiff {
     tables: p.tables,
     date1904: p.date1904,
     computedValues: p.computedValues,
+    objects: p.objects,
   };
 }
 

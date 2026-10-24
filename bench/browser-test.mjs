@@ -563,6 +563,219 @@ await test('labels for a large table come after the first frame; numbers until t
   assert(r.later === 'labels' && r.columns.join() === 'qty', `after: ${JSON.stringify(r)}`);
 });
 
+// A screen point inside the cell (aligned row, column index), found through the grid's own hit testing.
+const pointOf = (row, col) => page.evaluate(({ row, col }) => {
+  const g = window.G;
+  const r = g.scroller.getBoundingClientRect();
+  for (let y = r.top + 40; y < r.bottom - 4; y += 6) {
+    for (let x = r.left + 4; x < r.right - 20; x += 12) {
+      const c = g.cellAt(g.hitTest(x, y));
+      if (c && c.row === row && c.columnIndex === col) return { x: x + 2, y: y + 2 };
+    }
+  }
+  return null;
+}, { row, col });
+
+await test('drag, shift-click and shift+arrows select a range; onRangeChange reports it once per change', async () => {
+  await page.evaluate(() => {
+    window.G?.cleanUp();
+    const { parseCsv, diffTables, DiffGrid } = window.sd;
+    const mk = (v) => 'id,a,b,c\n' + Array.from({ length: 30 }, (_, i) => `${i},${v}${i},${i},${i}`).join('\n');
+    window.diff = diffTables(parseCsv(mk('a')), parseCsv(mk('b')));
+    window.ranges = [];
+    window.G = new DiffGrid({ collapseUnchanged: false, tooltips: false, onRangeChange: (r) => window.ranges.push(r && { rows: r.rows, columns: r.columns, a1: r.a1 }) });
+    window.G.render({ diff: window.diff, container: document.getElementById('grid') });
+  });
+  await page.waitForTimeout(150);
+  const a = await pointOf(2, 1);
+  const b = await pointOf(4, 2);
+  assert(a && b, 'cells not found on screen');
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move((a.x + b.x) / 2, (a.y + b.y) / 2);
+  await page.mouse.move(b.x, b.y);
+  await page.mouse.move(b.x, b.y + 1); // same cell: no new event
+  await page.mouse.up();
+  let r = await page.evaluate(() => window.G.getRange());
+  assert(r.rows.join() === '2,3,4' && r.columns.join() === '1,2', `drag: ${JSON.stringify(r)}`);
+  assert(r.a1.new === 'B4:C6' && r.a1.old === 'B4:C6', `a1: ${JSON.stringify(r.a1)}`);
+  const n = await page.evaluate(() => window.ranges.length);
+  const last = await page.evaluate(() => window.ranges[window.ranges.length - 1]);
+  assert(last.rows.join() === '2,3,4', `last event ${JSON.stringify(last)}`);
+  assert(n <= 4, `${n} events for one drag`);
+
+  // Shift-click moves the far corner, keeps the anchor.
+  const c = await pointOf(2, 3);
+  await page.keyboard.down('Shift');
+  await page.mouse.click(c.x, c.y);
+  await page.keyboard.up('Shift');
+  r = await page.evaluate(() => window.G.getRange());
+  assert(r.anchor.row === 2 && r.anchor.col === 1 && r.rows.join() === '2' && r.columns.join() === '1,2,3', `shift-click: ${JSON.stringify(r)}`);
+
+  // Shift+Down extends; a plain arrow collapses to one cell.
+  await page.keyboard.press('Shift+ArrowDown');
+  r = await page.evaluate(() => window.G.getRange());
+  assert(r.rows.join() === '2,3' && r.columns.join() === '1,2,3', `shift+down: ${JSON.stringify(r)}`);
+  await page.keyboard.press('ArrowDown');
+  r = await page.evaluate(() => window.G.getRange());
+  assert(r.rows.join() === '3' && r.columns.join() === '1' && r.anchor.row === 3, `arrow: ${JSON.stringify(r)}`);
+
+  // selectRange, and Escape clears.
+  const ok = await page.evaluate(() => window.G.selectRange(5, 0, 7, 1));
+  r = await page.evaluate(() => window.G.getRange());
+  assert(ok && r.a1.new === 'A7:B9', `selectRange: ${JSON.stringify(r)}`);
+  await page.keyboard.press('Escape');
+  assert((await page.evaluate(() => window.G.getRange())) === null, 'Escape should clear');
+  assert((await page.evaluate(() => window.ranges[window.ranges.length - 1])) === null, 'last event should be null');
+});
+
+await test('a range in A1 per side: an added row is skipped on the old side, moved rows scatter it', async () => {
+  await page.evaluate(() => {
+    window.G?.cleanUp();
+    const { parseCsv, diffTables, DiffGrid } = window.sd;
+    window.diff = diffTables(parseCsv('id,a\n1,x\n3,z'), parseCsv('id,a\n1,x\n2,y\n3,z'));
+    window.G = new DiffGrid({ collapseUnchanged: false, tooltips: false });
+    window.G.render({ diff: window.diff, container: document.getElementById('grid') });
+  });
+  await page.waitForTimeout(100);
+  const r = await page.evaluate(() => (window.G.selectRange(0, 1, 2, 1), window.G.getRange()));
+  assert(r.a1.new === 'B2:B4' && r.a1.old === 'B2:B3', JSON.stringify(r.a1));
+  const one = await page.evaluate(() => (window.G.selectRange(1, 1, 1, 1), window.G.getRange()));
+  assert(one.a1.new === 'B3' && one.a1.old === undefined, JSON.stringify(one.a1));
+  // Rows matched by key in a new order: old rows 3,1 aren't one block in order.
+  const moved = await page.evaluate(() => {
+    const { parseCsv, diffTables } = window.sd;
+    window.G.setDiff(diffTables(parseCsv('id,a\n1,x\n2,y\n3,z'), parseCsv('id,a\n3,z\n2,y\n1,x')));
+    window.G.selectRange(0, 1, 1, 1);
+    return window.G.getRange().a1;
+  });
+  assert(moved.new === 'B2:B3' && moved.old === undefined, JSON.stringify(moved));
+});
+
+await test('a sheet view brings its trace, and the grid finds the traced sheet from the diff', async () => {
+  const r = await page.evaluate(() => {
+    window.G?.cleanUp();
+    const { compareWorkbooks, DiffGrid } = window.sd;
+    const sheet = (name, rows, formulas) => ({ name, columns: ['A', 'B'], rows, formulas, origin: { row: 0, col: 0 } });
+    // Sheet 2 reads sheet 1: an edit on S1 moves S2!B1.
+    const a = { name: 'a', sheets: [sheet('S1', [[1, 2]], [[null, null]]), sheet('S2', [[0, 3]], [[null, '=S1!A1+2']])] };
+    const b = { name: 'b', sheets: [sheet('S1', [[5, 2]], [[null, null]]), sheet('S2', [[0, 7]], [[null, '=S1!A1+2']])] };
+    const cmp = compareWorkbooks(a, b);
+    window.G = new DiffGrid({ tooltips: false });
+    const container = document.getElementById('grid');
+    window.G.render({ sheet: cmp.sheets[1], container });
+    const kindOnS2 = window.G.cellInfo(0, 1).kind;
+    // A wrong index next to the right diff: the diff decides.
+    window.G.setOptions({ trace: { ...cmp.sheets[1].trace, sheet: 0 } });
+    const stillS2 = window.G.cellInfo(0, 1).kind;
+    window.G.render({ sheet: cmp.sheets[0], container });
+    const kindOnS1 = window.G.cellInfo(0, 0).kind;
+    return { kindOnS2, stillS2, kindOnS1 };
+  });
+  assert(r.kindOnS2 === 'computed' && r.stillS2 === 'computed' && r.kindOnS1 === 'input', JSON.stringify(r));
+});
+
+// ---- SpreadsheetDiff --------------------------------------------------------
+const fixtureBytes = (name) => Array.from(readFileSync(new globalThis.URL(`../test/hosted/fixtures/commission/${name}`, import.meta.url)));
+await test('SpreadsheetDiff: two files in, tabs, the traced grid and the outputs panel out', async () => {
+  const r = await page.evaluate(async ({ a, b }) => {
+    window.G?.cleanUp();
+    window.W?.cleanUp();
+    const { SpreadsheetDiff } = window.sd;
+    const container = document.getElementById('grid');
+    const sheets = [];
+    window.W = new SpreadsheetDiff({ onSheetChange: (s) => sheets.push(s.name), tooltips: false });
+    await window.W.render({ oldFile: { name: 'old.xlsx', data: new Uint8Array(a) }, newFile: { name: 'new.xlsx', data: new Uint8Array(b) }, container });
+    const root = window.W.host.shadowRoot;
+    const tabs = [...root.querySelectorAll('.sx-tab')].map((t) => [t.textContent, t.getAttribute('aria-selected')]);
+    const outputs = root.querySelectorAll('.sx-out').length;
+    const sideShown = !root.querySelector('.sx-side').hidden;
+    const traced = !!window.W.grid.getOptions().trace;
+    // Clicking an output reveals its cell (possibly on another sheet) and opens its waterfall.
+    root.querySelector('.sx-out').click();
+    await new Promise((res) => setTimeout(res, 50));
+    const wf = root.querySelectorAll('.sx-wf-bar').length;
+    const label = root.querySelector('.sx-wf')?.getAttribute('aria-label');
+    const sel = window.W.grid.getRange();
+    root.querySelectorAll('.sx-tab')[1].click();
+    return { tabs, outputs, sideShown, traced, wf, label, sel: !!sel, sheet: window.W.sheet, sheets };
+  }, { a: fixtureBytes('old.xlsx'), b: fixtureBytes('new.xlsx') });
+  assert(r.tabs.length === 2 && r.tabs[0][0].startsWith('Reps') && r.tabs[0][1] === 'true', `tabs ${JSON.stringify(r.tabs)}`);
+  assert(r.sideShown && r.outputs > 0 && r.traced, `outputs ${JSON.stringify(r)}`);
+  assert(r.wf >= 3 && /Before .* After /.test(r.label ?? ''), `waterfall ${r.wf} ${r.label}`);
+  assert(r.sel && r.sheet === 1 && r.sheets.includes('Rates'), `navigation ${JSON.stringify(r)}`);
+});
+
+await test('SpreadsheetDiff review: reject a selection, see it marked, download the merged file', async () => {
+  const r = await page.evaluate(async ({ a, b }) => {
+    window.W?.cleanUp();
+    const { SpreadsheetDiff, parseXlsx } = window.sd;
+    const container = document.getElementById('grid');
+    let decided = 0;
+    window.W = new SpreadsheetDiff({ review: true, tooltips: false, onDecisionsChange: () => decided++ });
+    await window.W.render({ oldFile: { name: 'old.xlsx', data: new Uint8Array(a) }, newFile: { name: 'new.xlsx', data: new Uint8Array(b) }, container });
+    const root = window.W.host.shadowRoot;
+    const g = window.W.grid;
+    const reject = () => [...root.querySelectorAll('.sx-btn')].find((x) => x.dataset.kind === 'reject');
+    const disabledBefore = reject().disabled;
+    // Select an edited input (not a downstream result), reject it with the button.
+    const d0 = window.W.comparison.sheets[window.W.sheet].diff;
+    let at = null;
+    for (const [row, mask] of d0.changedCells) {
+      const col = mask.findIndex((x, c) => x && g.cellInfo(row, c).kind === 'input');
+      if (col >= 0) { at = { row, col }; break; }
+    }
+    g.select(at.row, at.col);
+    const range = g.getRange();
+    const enabled = !reject().disabled;
+    reject().click();
+    const info = g.cellInfo(range.anchor.row, range.anchor.col);
+    const tally = root.querySelector('.sx-tally').textContent;
+    const { file, applied, recalculated, skipped } = window.W.exportXlsx();
+    // A whole-sheet selection decides edits only: downstream results follow them.
+    g.selectRange(0, 0, d0.rowCount - 1, d0.columns.length - 1);
+    window.W.decideSelection('reject');
+    const all = root.querySelector('.sx-tally').textContent;
+    window.W.decideSelection(undefined);
+    g.select(at.row, at.col);
+    window.W.decideSelection('reject');
+    const merged = parseXlsx(file).sheets[window.W.sheet];
+    const d = window.W.comparison.sheets[window.W.sheet].diff;
+    const c = d.columns[range.anchor.col];
+    const oldValue = d.oldTable.rows[d.oldRows[range.anchor.row]][c.oldIndex];
+    const mergedValue = merged.rows[d.newRows[range.anchor.row]][c.newIndex];
+    // 'a' in the grid accepts the selection instead.
+    g.scroller.focus();
+    g.scroller.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true, composed: true }));
+    const after = g.cellInfo(range.anchor.row, range.anchor.col).decision;
+    return { disabledBefore, enabled, decision: info.decision, tally, all, applied, recalculated, skipped: skipped.length, oldValue, mergedValue, decided, after, download: [...root.querySelectorAll('.sx-btn')].some((x) => x.textContent === 'Download .xlsx') };
+  }, { a: fixtureBytes('old.xlsx'), b: fixtureBytes('new.xlsx') });
+  assert(r.disabledBefore && r.enabled, `buttons follow the selection ${JSON.stringify(r)}`);
+  assert(r.decision === 'reject' && /^1 rejected/.test(r.tally), `marked ${JSON.stringify(r)}`);
+  assert(r.applied === 1 && r.skipped === 0 && r.mergedValue === r.oldValue && r.recalculated > 0, `merged file ${JSON.stringify(r)}`);
+  const [, rejected, , changes] = /^(\d+) rejected · (\d+) accepted · (\d+) changes/.exec(r.all) ?? [];
+  assert(rejected === changes && Number(changes) < 60, `only edits are decided: ${r.all}`);
+  assert(r.after === 'accept' && r.decided === 5 && r.download, `keyboard ${JSON.stringify(r)}`);
+});
+
+await test('SpreadsheetDiff: an unreadable file shows the error and rejects', async () => {
+  const r = await page.evaluate(async () => {
+    window.W?.cleanUp();
+    const { SpreadsheetDiff } = window.sd;
+    let called = '';
+    window.W = new SpreadsheetDiff({ onError: (e) => (called = e.message) });
+    let threw = '';
+    try {
+      await window.W.render({ oldFile: { name: 'a.xlsx', data: new Uint8Array([80, 75, 3, 4, 0]) }, newFile: { name: 'b.xlsx', data: new Uint8Array([1]) }, container: document.getElementById('grid') });
+    } catch (e) {
+      threw = e.message;
+    }
+    return { threw, called, shown: window.W.host.shadowRoot.querySelector('.sx-msg').textContent };
+  });
+  assert(r.threw && r.called === r.threw && r.shown === r.threw, JSON.stringify(r));
+  await page.evaluate(() => window.W.cleanUp());
+});
+
 assert(true);
 if (errors.length) {
   failed++;

@@ -151,6 +151,23 @@ export interface WorkbookTrace {
   truncated: boolean;
 }
 
+/**
+ * A workbook trace, plus which sheet of the workbook a grid shows. Each
+ * `SheetView` from {@link compareWorkbooks} or `diffFiles` carries one.
+ */
+export interface TraceContext {
+  /** From {@link traceWorkbook}. */
+  trace: WorkbookTrace;
+  /** The workbook diff the trace was made from. Used to label causes on other sheets. */
+  workbook: WorkbookDiff;
+  /**
+   * Index of the grid's sheet in `workbook.sheets`. Optional, and ignored
+   * when the grid's diff is one of `workbook.sheets`: the grid uses that
+   * sheet. Needed only for a diff that isn't (a copy, say).
+   */
+  sheet?: number;
+}
+
 /** Options for {@link traceWorkbook}. */
 export interface TraceOptions {
   /** Max causes kept per cell (`causeCount` stays exact). Default 25. */
@@ -878,7 +895,7 @@ function recalculate(diff: WorkbookDiff, maps: SheetMaps[], traces: Map<number, 
       const calibrate = (): boolean => {
         try {
           const oldCached = cachedAt('old', oid!);
-          return oldCached !== null && sameResult(evaluate(oldEngine, oldHost, 'old', oid!, oldFormula!).value, oldCached);
+          return oldCached !== null && sameResult(evaluate(oldEngine, oldHost, 'old', oid!, oldFormula!).value, oldCached, diff.date1904?.old);
         } catch (e) {
           if (!(e instanceof Unsupported)) throw e;
           return false;
@@ -916,7 +933,7 @@ function recalculate(diff: WorkbookDiff, maps: SheetMaps[], traces: Map<number, 
         unmodelled++;
         return;
       }
-      if (!sameResult(result.value, cachedAt('new', id))) {
+      if (!sameResult(result.value, cachedAt('new', id), diff.date1904?.new)) {
         // Calling the file's value stale takes this very cell calibrated on
         // the same formula; a new or edited formula defers to the file.
         if (oldFormula === null || editedFormula || (!calibrated && !calibrate())) {
@@ -958,7 +975,7 @@ function recalculate(diff: WorkbookDiff, maps: SheetMaps[], traces: Map<number, 
     const info = { cached: toCellValue(cachedAt('new', id)), recalculated: toCellValue(value) };
     const t = traces[ref.sheet].get(k);
     if (t) t.stale = info;
-    else if (!sameResult(oldValue, value)) traces[ref.sheet].set(k, { kind: 'computed', causes: [], causeCount: 0, impacts: [], impactCount: 0, stale: info });
+    else if (!sameResult(oldValue, value, diff.date1904?.new)) traces[ref.sheet].set(k, { kind: 'computed', causes: [], causeCount: 0, impacts: [], impactCount: 0, stale: info });
   }
 
   // 4. The new-side graph from what trusted formulas actually read (an overlay on references).
@@ -1043,7 +1060,7 @@ function recalculate(diff: WorkbookDiff, maps: SheetMaps[], traces: Map<number, 
           if (!p.some((x) => changed.has(x))) continue; // none of its inputs moved
           const v = evaluate(newEngine, newHost, 'new', d, formulaAt('new', d)!).value;
           const now = valueOf(d);
-          if (sameResult(v, now)) continue; // unaffected: the effect stops here
+          if (sameResult(v, now, diff.date1904?.new)) continue; // unaffected: the effect stops here
           set(sheetKey('new', d), v);
           changed.add(d);
           const ref = toAligned('new', d);

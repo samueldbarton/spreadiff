@@ -14,7 +14,7 @@ import { toMarkdown, type MarkdownOptions } from './markdown.js';
 
 export { compare, reportOf, type ChangeReport, type CellChange, type Cause, type CompareOptions, type FileInput, type StructureChange } from './report.js';
 export { toMarkdown, type MarkdownOptions } from './markdown.js';
-export { externalSource, LIVE_FUNCTIONS, tableLabeler, formatLabel, type CellLabel, type ExternalSource } from 'spreadiff/core';
+export { externalSource, LIVE_FUNCTIONS, tableLabeler, formatLabel, type CellLabel, type ExternalSource, type ObjectChange } from 'spreadiff/core';
 
 /**
  * Compare two files and return the Markdown summary in one call.

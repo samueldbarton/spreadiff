@@ -69,7 +69,8 @@ export function toMarkdown(report: ChangeReport, options: MarkdownOptions = {}):
   if (t.external) parts.push(plural(t.external, 'outside-data value'));
   const edits = report.edits.length;
   const shape = report.structure.length;
-  if (!edits && !t.downstream && !shape) {
+  const objects = report.objects.length;
+  if (!edits && !t.downstream && !shape && !objects) {
     out.push('No changes.');
     return out.join('\n') + '\n';
   }
@@ -79,6 +80,7 @@ export function toMarkdown(report: ChangeReport, options: MarkdownOptions = {}):
     if (t.outputs && t.outputs < t.downstream) summary += ` (${plural(t.outputs, 'final output')})`;
   } else if (edits) summary += '; nothing downstream moved';
   if (shape) summary += `${t.downstream || edits ? '; ' : ', '}${plural(shape, 'change')} to rows, columns or sheets`;
+  if (objects) summary += `${t.downstream || edits || shape ? '; ' : ', '}${plural(objects, 'change')} to names, charts or pivot tables`;
   summary += '.';
   if (t.downstream) {
     summary +=
@@ -141,6 +143,18 @@ export function toMarkdown(report: ChangeReport, options: MarkdownOptions = {}):
     out.push(h(1, 'Rows, columns and sheets'), '');
     for (const s of report.structure.slice(0, maxRows)) out.push(`- ${structureLine(s)}`);
     if (shape > maxRows) out.push(`- …and ${plural(shape - maxRows, 'more')}.`);
+    out.push('');
+  }
+
+  // ---- Names, charts and pivot tables ---------------------------------------
+  if (objects) {
+    out.push(h(1, 'Names, charts and pivot tables'), '');
+    const noun = { name: 'Name', chart: 'Chart', pivot: 'Pivot table' };
+    for (const o of report.objects.slice(0, maxRows)) {
+      const details = o.details.filter(Boolean).map((d) => cellText(d)).join('; ');
+      out.push(`- ${noun[o.kind]} \`${cellText(o.name)}\` ${o.change}${details ? `: ${details}` : ''}`);
+    }
+    if (objects > maxRows) out.push(`- …and ${plural(objects - maxRows, 'more')}.`);
     out.push('');
   }
 

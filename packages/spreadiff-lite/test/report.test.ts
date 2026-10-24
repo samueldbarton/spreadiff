@@ -102,3 +102,21 @@ describe('reportOf', () => {
     expect(r.diff).toBe(d);
   });
 });
+
+describe('names, charts and pivot tables', () => {
+  it('reports a chart pointed at a new range, with no cell edits', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const { strFromU8, strToU8, unzipSync, zipSync } = await import('fflate');
+    const bytes = new Uint8Array(readFileSync(fileURLToPath(new URL('../../spreadiff/test/fixtures/poi/WithTwoCharts.xlsx', import.meta.url))));
+    const files = unzipSync(bytes);
+    files['xl/charts/chart1.xml'] = strToU8(strFromU8(files['xl/charts/chart1.xml']).replace('Sheet1!$A$1:$A$6', 'Sheet1!$A$1:$A$7'));
+    const report = compare({ name: 'a.xlsx', data: bytes }, { name: 'b.xlsx', data: zipSync(files) });
+    expect(report.edits).toEqual([]);
+    expect(report.objects).toHaveLength(1);
+    const md = toMarkdown(report);
+    expect(md).toContain('**No cell edits**, 1 change to names, charts or pivot tables.');
+    expect(md).toContain('- Chart `Sheet2 › Chart 1` modified: series 1 (1st Column) values: Sheet1!$A$1:$A$6 → Sheet1!$A$1:$A$7');
+    expect(md).not.toContain('No changes.');
+  });
+});

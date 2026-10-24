@@ -37,8 +37,8 @@ Details, including CSP and server-side rendering, are in
 | Import | Use it for | Size (min+gzip) |
 | --- | --- | --- |
 | `spreadiff/html` | Diff + CSV + an HTML/text renderer. No canvas or DOM APIs, so it runs on servers too | 16.0 KB |
-| `spreadiff/core` | The diff engine, CSV and XLSX parsers, formula tracing. No rendering | 42.1 KB |
-| `spreadiff` | Everything in core plus the canvas `DiffGrid` | 62.6 KB |
+| `spreadiff/core` | The diff engine, CSV and XLSX parsers, formula tracing. No rendering | 43.4 KB |
+| `spreadiff` | Everything in core plus the canvas `DiffGrid` | 63.9 KB |
 | `spreadiff/react` | The `DiffGrid` React component | + React |
 | `spreadiff/worker` | Parse, diff and trace in a Web Worker | small client + worker |
 | `spreadiff-lite` | A separate package with no UI: a Markdown or JSON report of what changed and what it moved downstream, and a CLI | Node / server |

@@ -1,7 +1,10 @@
+import type { ChartInfo, ObjectChange, PivotInfo } from './objects.js';
+
 /**
  * A single cell value. Parsers produce numbers only when the conversion is
  * lossless (`"007"` stays a string), and dates as ISO strings
- * (`"2026-01-31"`, `"2026-01-31 14:05:00"`, or `"14:05:00"` for times).
+ * (`"2026-01-31"`, `"2026-01-31 14:05:00"`, or `"14:05:00"` for times;
+ * milliseconds when there are some, `"14:05:00.25"`).
  */
 export type CellValue = string | number | boolean | null;
 
@@ -57,6 +60,19 @@ export interface Table {
    * under it ("Revenue"). The XLSX reader fills this; it's optional.
    */
   labelStyles?: { r: number; c: number; indent?: number; bold?: boolean }[];
+  /**
+   * Excel number formats of the cells, so they can be shown as the sheet
+   * shows them (`12.3%`, `$1,234`, `1-Jan-24`). `rows[r][c]` indexes
+   * `codes`, parallel to `rows`; 0 means General. Rows without a format may
+   * be missing. The XLSX reader fills this; see `displayValue`.
+   */
+  numberFormats?: { codes: string[]; rows: (Uint16Array | undefined)[]; date1904?: boolean };
+  /**
+   * Hidden rows, 0-based sheet rows, ascending; `filtered` are those an
+   * active filter hid (the rest were hidden by hand). `SUBTOTAL` skips them
+   * as Excel does. The XLSX reader fills this.
+   */
+  hiddenRows?: { rows: number[]; filtered: number[] };
 }
 
 /** An ordered list of sheets. A CSV file is a one-sheet workbook. */
@@ -77,6 +93,10 @@ export interface Workbook {
    * were computed, and how many couldn't be and are left empty.
    */
   computedValues?: { computed: number; failed: number };
+  /** Charts, from the XLSX reader. */
+  charts?: ChartInfo[];
+  /** Pivot tables, from the XLSX reader. */
+  pivots?: PivotInfo[];
 }
 
 /** An Excel table (a ListObject): what a structured reference like `Sales[Amount]` points at. */
@@ -132,6 +152,13 @@ export interface DiffOptions {
   keys?: string[] | 'auto' | 'none';
   /** Treat numbers (or numeric strings) within this absolute difference as equal. Default 0. */
   numericTolerance?: number;
+  /**
+   * Treat numbers within this fraction of the larger one as equal: `0.001`
+   * ignores moves under 0.1%. A materiality threshold: changes below it
+   * aren't changes anywhere (stats, the grid, tracing). Default 0. With
+   * `numericTolerance` too, a number within either counts as equal.
+   */
+  relativeTolerance?: number;
   /**
    * Significant digits two numbers must share to be equal. Default 15,
    * Excel's own precision: Excel writes `0.9382716049382716` where
@@ -271,4 +298,6 @@ export interface WorkbookDiff {
   date1904?: { old?: boolean; new?: boolean };
   /** `Workbook.computedValues` of each side: formula values computed because the file had none. */
   computedValues?: { old?: Workbook['computedValues']; new?: Workbook['computedValues'] };
+  /** Changes to defined names, charts and pivot tables (see `diffWorkbookObjects`). Absent when there are none. */
+  objects?: ObjectChange[];
 }
