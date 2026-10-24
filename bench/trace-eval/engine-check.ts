@@ -29,7 +29,7 @@ for (const f of files) {
       if (cached === null) { uncached++; return; }
       try {
         const { value } = engine.evaluate(formula, t.name, r + o.row, c + o.col);
-        if (sameResult(value, cached)) ok++;
+        if (sameResult(value, cached, wb.date1904)) ok++;
         else {
           mismatch++;
           if (examples.length < 40) examples.push(`${f.split('/').slice(-2).join('/')} ${t.name}!R${r + o.row + 1}C${c + o.col + 1} ${formula.slice(0, 70)} → got ${JSON.stringify(isError(value) ? value.code : value)} cached ${JSON.stringify(isError(cached) ? cached.code : cached)}`);
