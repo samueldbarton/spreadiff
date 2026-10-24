@@ -13,7 +13,7 @@ on this page is a range across repeated runs. Single runs varied by up to
 | How long does the diff take? | 1.1–1.3 s keyed in the browser's worker; 2.9–5.0 s in Node without a key |
 | How long until it's on screen? | 7.4–8.4 s in the benchmark: generate + parse 4.8–4.9 s, diff 1.1–1.3 s, transfer 1.5–2.2 s |
 | How long does a recalculated trace take? | 0.24–0.36 s for a 10,000-formula model; 4.2–5.9 s for 300,000 formulas, 3–5× the references-only trace. See [Tracing → Cost](tracing.md#cost) |
-| What does it cost to ship? | 13.1 KB gzip for `spreadiff/html`, 59.7 KB for everything |
+| What does it cost to ship? | 16.0 KB gzip for `spreadiff/html`, 62.6 KB for everything |
 
 The rest of the page shows where each number comes from.
 
@@ -135,9 +135,9 @@ tree-shaken):
 
 | Entry | min | gzip | Contents |
 | --- | --- | --- | --- |
-| `spreadiff/html` | 33.6 KB | **13.1 KB** | Diff engine, CSV parser, HTML/text renderer |
-| `spreadiff/core` | 108.0 KB | 41.6 KB | + XLSX reader, formula engine and tracing |
-| `spreadiff` | 165.1 KB | 59.7 KB | + canvas `DiffGrid` |
+| `spreadiff/html` | 40.9 KB | **16.0 KB** | Diff engine, CSV parser, HTML/text renderer |
+| `spreadiff/core` | 109.1 KB | 42.1 KB | + XLSX reader, formula engine and tracing |
+| `spreadiff` | 174.2 KB | 62.6 KB | + canvas `DiffGrid` |
 
 The XLSX reader uses [fflate](https://github.com/101arrowz/fflate), which is
 counted in `core`. Most of `core` is now the formula engine used for

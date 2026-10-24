@@ -146,7 +146,7 @@ calling `String(Number(x))` per field.
 
 The reader handles values, shared strings, dates, booleans and shared
 formulas, on top of [fflate](https://github.com/101arrowz/fflate). The
-whole `core` entry, tracing included, is 41.6 KB gzip.
+whole `core` entry, tracing included, is 42.1 KB gzip.
 
 *Cost:* no styles, merged cells, comments or legacy `.xls`. A file that
 needs those needs another parser; any parser that produces a `Table` works.
@@ -199,7 +199,7 @@ a server, in CI or in an email. It shows changes plus context, like a code
 review, and caps the output with `maxRows`.
 
 *Why a separate entry and not a mode of `DiffGrid`?* Different jobs. A
-pull-request comment needs ten rows of static HTML at 13.1 KB; a reviewer
+pull-request comment needs ten rows of static HTML at 16.0 KB; a reviewer
 scrolling a million rows needs the canvas. Sharing the diff model keeps
 them consistent.
 

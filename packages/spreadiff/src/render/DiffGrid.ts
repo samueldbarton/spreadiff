@@ -2,6 +2,7 @@ import { columnLabel } from '../core/csv.js';
 import { diffText, formatCell, numericDelta } from '../core/text.js';
 import { changeKind } from '../core/kind.js';
 import { rowLabelColumn } from '../core/label.js';
+import { sheetLabels, type RowLabel, type SheetLabels } from '../core/labels.js';
 import type { CellRef, CellTrace, ChangeKind, WorkbookTrace } from '../core/trace.js';
 import {
   ROW_STATUS,
@@ -135,6 +136,37 @@ export interface DiffGridOptions<A = unknown> {
    * first data row under a header).
    */
   rowNumberOffset?: number;
+  /**
+   * What the row headers (the gutter) show:
+   * - `'labels'` (default): what the sheet calls each row, inferred from
+   *   the layout: its label, under its section headings
+   *   (`India › Revenue`). Section headings are bold; long labels drop
+   *   their outer sections first. A row with no label shows its number.
+   * - `'numbers'`: spreadsheet row numbers (old and new, in `unified`).
+   * - `'both'`: the label, then the row number.
+   * - `'none'`: only the change bar and sign.
+   *
+   * See [How cells are named](https://github.com/samueldbarton/spreadiff/blob/main/docs/spreadiff-lite.md#how-cells-are-named).
+   */
+  rowHeaders?: 'labels' | 'numbers' | 'both' | 'none';
+  /**
+   * What the column headers show:
+   * - `'labels'` (default): each column's heading, the header-row name or
+   *   the heading rows above the data (`Forecast › Q2`, `2025`), as they
+   *   stand at the top row in view. A column with neither shows its letter.
+   * - `'letters'`: spreadsheet letters (`A`, `B`, …).
+   * - `'both'`: the letter, then the heading.
+   */
+  columnHeaders?: 'labels' | 'letters' | 'both';
+  /** Width of labelled row headers, in CSS pixels. Default: fits the labels, between 96 and 260. */
+  rowHeaderWidth?: number;
+  /**
+   * When the headers show labels, fold away what they already show, unless
+   * it changed: columns that only hold row labels (a model's label column,
+   * a records table's id and name) and rows that only hold column headings
+   * (a model's row of years). Default true.
+   */
+  foldLabels?: boolean;
   /** `system` (default) follows the page's `prefers-color-scheme`; `light` / `dark` force one. */
   theme?: 'system' | 'light' | 'dark';
   /** Change overview strip on the right edge; click it to jump. Default true. */
@@ -192,6 +224,12 @@ const CELL_PAD = 10;
 const MIN_COL = 56;
 const MAX_COL = 360;
 const BAR_WIDTH = 3;
+/** Room for the +, −, • or ↕ at the right of a labelled gutter. */
+const SIGN_SLOT = 18;
+/** Between a row's sections and its label. */
+const LABEL_SEP = ' › ';
+/** Tables with more cells than this (both sides) infer labels after the first frame. */
+const LABELS_SYNC_CELLS = 600_000;
 
 interface Hit {
   area: 'header' | 'gutter' | 'cell' | 'separator' | 'annotation' | 'minimap' | 'none';
@@ -281,6 +319,13 @@ export class DiffGrid<A = unknown> {
   private focusKey = '';
   private themeFrame = 0;
   private textCache = new Map<string, string>();
+  /** Inferred labels for the current diff (see `ensureLabels`), and the columns the row headers show. */
+  private labels: { diff: TableDiff; old: SheetLabels; new: SheetLabels; absorbed: Set<number>; width: number } | null = null;
+  private labelsPending: TableDiff | null = null;
+  /** Rows whose label didn't fit this frame (`pane:row`), for the full label on hover. */
+  private truncatedLabels = new Set<string>();
+  /** Table rows at the top of the view, per side: column headings are read there. */
+  private headerTop = { old: 0, new: 0 };
   private minimapCache: { key: string; colors: (string | null)[]; alphas: Float32Array } | null = null;
   private cleanups: (() => void)[] = [];
 
@@ -348,6 +393,8 @@ export class DiffGrid<A = unknown> {
     this.selected = null;
     this.hover = null;
     this.widthOverrides.clear();
+    this.labels = null;
+    this.labelsPending = null;
     this.scroller.scrollTop = 0;
     this.scroller.scrollLeft = 0;
     if (!this.theme) this.refreshTheme();
@@ -377,7 +424,7 @@ export class DiffGrid<A = unknown> {
     if (has('columnWidths', 'cellDisplay')) this.measureColumns();
     if (has('annotations', 'renderAnnotation')) this.syncAnnotations();
     if (has('trace', 'traceFocus')) this.updateFocus();
-    if (has('layout', 'collapseUnchanged', 'context', 'hideUnchangedColumns', 'frozenColumns', 'columnWidths', 'annotations', 'renderAnnotation', 'rowNumberOffset', 'minimap', 'cellDisplay')) {
+    if (has('layout', 'collapseUnchanged', 'context', 'hideUnchangedColumns', 'frozenColumns', 'columnWidths', 'annotations', 'renderAnnotation', 'rowNumberOffset', 'minimap', 'cellDisplay', 'rowHeaders', 'columnHeaders', 'rowHeaderWidth', 'foldLabels')) {
       this.relayout();
     } else {
       this.schedule();
@@ -635,6 +682,7 @@ export class DiffGrid<A = unknown> {
       modifiedHeight: unified && this.tallRows ? Math.round(lh * 1.6) : lh,
       separatorHeight: SEPARATOR_HEIGHT,
       annotationsAfter,
+      filter: this.foldedRows(),
     });
     this.minimapCache = null;
     this.relayoutColumns();
@@ -645,12 +693,17 @@ export class DiffGrid<A = unknown> {
     const diff = this.diff!;
     const keys = new Set(diff.keyColumns);
     const label = this.options.hideUnchangedColumns ? rowLabelColumn(diff) : -1; // without keys, keep what names the rows
+    // Columns the row headers already show (labels mode), unless they changed.
+    const mode = this.rowHeaderMode();
+    const absorbed = (mode === 'labels' || mode === 'both') && this.options.foldLabels !== false ? this.labels?.absorbed : undefined;
     const visible: number[] = [];
     diff.columns.forEach((c, i) => {
+      if (absorbed?.has(i)) return;
       if (!this.options.hideUnchangedColumns || c.status !== 'equal' || c.changes > 0 || keys.has(c.name) || i === label) {
         visible.push(i);
       }
     });
+    if (!visible.length && diff.columns.length) visible.push(0); // never an empty grid
     // Pinned columns first, in their original order.
     const frozenOpt = this.options.frozenColumns ?? 'keys';
     let frozenCount: number;
@@ -683,16 +736,152 @@ export class DiffGrid<A = unknown> {
       (this.diff?.oldTable.rows.length ?? 0) + this.rowOffset('old'),
       (this.diff?.newTable.rows.length ?? 0) + this.rowOffset('new'),
     )).length;
-    const numW = Math.max(28, digits * 7.5 + 14);
+    // Digits at the gutter font (~7px each) plus the padding `text` keeps on both sides.
+    const numW = Math.max(28, Math.ceil(digits * 7 + CELL_PAD * 2 + 2));
+    const mode = this.rowHeaderMode();
+    // Labels (and 'none') keep a sign slot on the right of the gutter, in both layouts.
+    const labelW = mode === 'labels' || mode === 'both' ? (this.options.rowHeaderWidth ?? this.labels?.width ?? 120) : 0;
+    const extra = mode === 'both' ? numW : 0;
     if (this.layout === 'split') {
       const pw = Math.floor((w - SPLIT_DIVIDER) / 2);
-      const gutter = numW + BAR_WIDTH + 4;
+      const gutter = mode === 'numbers' ? numW + BAR_WIDTH + 4 : labelW + extra + BAR_WIDTH + SIGN_SLOT;
       return [
         { x: 0, width: pw, gutter, side: 'old' },
         { x: pw + SPLIT_DIVIDER, width: w - pw - SPLIT_DIVIDER, gutter, side: 'new' },
       ];
     }
-    return [{ x: 0, width: w, gutter: numW * 2 + BAR_WIDTH + 16, side: 'unified' }];
+    const gutter = mode === 'numbers' ? numW * 2 + BAR_WIDTH + 16 : labelW + extra + BAR_WIDTH + SIGN_SLOT;
+    return [{ x: 0, width: w, gutter, side: 'unified' }];
+  }
+
+  /** The row-header mode in effect: labels fall back to numbers until they're inferred. */
+  private rowHeaderMode(): 'labels' | 'numbers' | 'both' | 'none' {
+    const m = this.options.rowHeaders ?? 'labels';
+    return (m === 'labels' || m === 'both') && !this.ensureLabels() ? 'numbers' : m;
+  }
+
+  /** Whether labels are needed at all (row or column headers in a labels mode). */
+  private wantsLabels(): boolean {
+    const r = this.options.rowHeaders ?? 'labels';
+    const c = this.options.columnHeaders ?? 'labels';
+    return r === 'labels' || r === 'both' || c !== 'letters';
+  }
+
+  /**
+   * Infer row and column labels for the current diff. Small tables are done
+   * now; large ones after the first frame (about 50 ms per 100,000 rows), so
+   * showing a big diff never waits on it. Returns whether labels are ready.
+   */
+  private ensureLabels(): boolean {
+    const diff = this.diff;
+    if (!diff || !this.wantsLabels()) return false;
+    if (this.labels?.diff === diff) return true;
+    const cells = (diff.oldTable.rows.length + diff.newTable.rows.length) * Math.max(1, diff.columns.length);
+    if (cells <= LABELS_SYNC_CELLS) {
+      this.computeLabels(diff);
+      return true;
+    }
+    if (this.labelsPending !== diff) {
+      this.labelsPending = diff;
+      setTimeout(() => {
+        if (this.diff !== diff || this.labelsPending !== diff) return;
+        this.labelsPending = null;
+        this.computeLabels(diff);
+        this.measureColumns();
+        this.relayout();
+      }, 0);
+    }
+    return false;
+  }
+
+  private computeLabels(diff: TableDiff): void {
+    const opts = { keyColumns: diff.keyColumns };
+    const old = sheetLabels(diff.oldTable, opts);
+    const neu = sheetLabels(diff.newTable, opts);
+    const absorbed = new Set<number>();
+    const oldAbs = new Set(old.labelColumns());
+    const newAbs = new Set(neu.labelColumns());
+    diff.columns.forEach((c, i) => {
+      if (c.status === 'equal' && c.changes === 0 && newAbs.has(c.newIndex) && oldAbs.has(c.oldIndex)) absorbed.add(i);
+    });
+    // Width: fit the sampled labels, within bounds; longer ones truncate (outer sections first).
+    const t = this.theme;
+    const ctx = this.ctx;
+    let widest = 0;
+    for (const r of this.sampleRows(400)) {
+      const side = diff.newRows[r] >= 0 ? 'new' : 'old';
+      const ti = side === 'new' ? diff.newRows[r] : diff.oldRows[r];
+      const l = (side === 'new' ? neu : old).row(ti);
+      if (!l.row.length && !l.sections.length) continue;
+      ctx.font = `${l.heading ? 600 : 400} ${t.fontSize - 1}px ${t.fontFamily}`;
+      const main = ctx.measureText(l.row.join(LABEL_SEP)).width;
+      ctx.font = `${t.fontSize - 1}px ${t.fontFamily}`;
+      const sec = l.sections.length ? ctx.measureText(l.sections.join(LABEL_SEP) + LABEL_SEP).width : 0;
+      widest = Math.max(widest, main + sec);
+    }
+    const width = Math.round(Math.min(260, Math.max(96, widest + 18)));
+    this.labels = { diff, old, new: neu, absorbed, width };
+  }
+
+  /**
+   * Rows to keep when column headers show labels: unchanged rows that only
+   * hold column headings (the header shows them) are folded away.
+   */
+  private foldedRows(): ((r: number) => boolean) | undefined {
+    const diff = this.diff!;
+    if (this.options.foldLabels === false || (this.options.columnHeaders ?? 'labels') === 'letters' || !this.ensureLabels()) return undefined;
+    const L = this.labels!;
+    return (r) => {
+      if (diff.status[r] !== ROW_STATUS.equal) return true;
+      const oi = diff.oldRows[r];
+      const ni = diff.newRows[r];
+      return !(ni >= 0 && L.new.headingRow(ni) && oi >= 0 && L.old.headingRow(oi));
+    };
+  }
+
+  /** The labels of an aligned row, on a side (`unified`: the new row, else the old). */
+  private rowLabelOf(r: number, side: 'old' | 'new' | 'unified'): RowLabel | null {
+    const diff = this.diff!;
+    const L = this.labels;
+    if (!L || L.diff !== diff) return null;
+    const s = side === 'unified' ? (diff.newRows[r] >= 0 ? 'new' : 'old') : side;
+    const ti = s === 'new' ? diff.newRows[r] : diff.oldRows[r];
+    if (ti < 0) return null;
+    const l = L[s].row(ti);
+    return l.row.length || l.sections.length ? l : null;
+  }
+
+  /** The heading of an aligned column at a table row, on a side: inferred parts, outermost first; empty when none. */
+  private columnHeadingOf(ci: number, side: 'old' | 'new', tableRow: number): string[] {
+    const diff = this.diff!;
+    const L = this.labels;
+    const col = diff.columns[ci];
+    const s = side === 'new' && col.newIndex < 0 ? 'old' : side === 'old' && col.oldIndex < 0 ? 'new' : side;
+    const idx = s === 'new' ? col.newIndex : col.oldIndex;
+    if (!L || L.diff !== diff || idx < 0) return [];
+    return L[s].column(tableRow, idx);
+  }
+
+  /** Column heading parts for the header, at the top row in view; the column's name when it has a real one. */
+  private columnHeading(ci: number, side: 'old' | 'new'): string[] {
+    const col = this.diff!.columns[ci];
+    const h = this.columnHeadingOf(ci, side, side === 'old' ? this.headerTop.old : this.headerTop.new);
+    if (h.length) return h;
+    return /^[A-Z]{1,3}$/.test(col.name) ? [] : [col.name];
+  }
+
+  /** `C7`: a cell's address in the new table (the old one for removed cells). */
+  private addressOf(info: CellInfo): string {
+    const diff = this.diff!;
+    const side = info.newRow >= 0 && info.column.newIndex >= 0 ? 'new' : 'old';
+    const row = side === 'new' ? info.newRow : info.oldRow;
+    const t = side === 'new' ? diff.newTable : diff.oldTable;
+    return `${this.columnLetter(info.column, side)}${row + (t.origin?.row ?? 1) + 1}`;
+  }
+
+  /** A row label as one line: `India › Revenue`. */
+  private rowLabelText(l: RowLabel): string {
+    return [...l.sections, ...l.row].join(LABEL_SEP);
   }
 
   /** Display row number = index + this. Real sheet rows when the table knows its origin. */
@@ -716,10 +905,14 @@ export class DiffGrid<A = unknown> {
     const t = this.theme;
     const rows = this.sampleRows(400);
     this.numericCols = new Uint8Array(diff.columns.length);
+    const headings = (this.options.columnHeaders ?? 'labels') !== 'letters' && this.ensureLabels();
     this.widths = diff.columns.map((c, i) => {
       const fixed = this.options.columnWidths?.[c.name];
       ctx.font = `600 ${t.fontSize - 1}px ${t.fontFamily}`;
-      let header = ctx.measureText(c.status === 'renamed' ? `${c.oldName} → ${c.name}` : c.status === 'equal' ? c.name : `+ ${c.name}`).width;
+      // The widest of the name and the inferred heading (at the top: "Forecast › Q2").
+      const heading = headings ? this.columnHeadingOf(i, c.newIndex >= 0 ? 'new' : 'old', 0).join(LABEL_SEP) : '';
+      const title = heading.length > c.name.length ? heading : c.name;
+      let header = ctx.measureText(c.status === 'renamed' ? `${c.oldName} → ${c.name}` : c.status === 'equal' ? title : `+ ${title}`).width;
       if (c.status === 'renamed') header += 20;
       ctx.font = `500 ${t.fontSize - 3}px ${t.monoFontFamily}`;
       header += ctx.measureText(this.columnLetter(c, 'new')).width + 6;
@@ -985,7 +1178,9 @@ export class DiffGrid<A = unknown> {
     header.append(cell('columnheader', 'Row', 1));
     for (const vi of visible) {
       const c = diff.columns[cols.cols[vi]];
-      const name = c.status === 'renamed' ? `${c.name}, renamed from ${c.oldName}` : c.status === 'added' ? `${c.name}, added column` : c.status === 'removed' ? `${c.name}, removed column` : c.name;
+      const heading = (this.options.columnHeaders ?? 'labels') === 'letters' ? [] : this.columnHeading(cols.cols[vi], 'new');
+      const title = heading.length && c.status !== 'renamed' ? heading.join(', ') : c.name;
+      const name = c.status === 'renamed' ? `${c.name}, renamed from ${c.oldName}` : c.status === 'added' ? `${title}, added column` : c.status === 'removed' ? `${title}, removed column` : title;
       header.append(cell('columnheader', name, vi + 2));
     }
     out.push(header);
@@ -1026,7 +1221,8 @@ export class DiffGrid<A = unknown> {
     const ni = diff.newRows[r];
     const n = ni >= 0 ? ni + this.rowOffset('new') : oi + this.rowOffset('old');
     const status = ROW_STATUS_NAMES[diff.status[r]];
-    let text = `Row ${n}${status === 'equal' ? '' : `, ${status}`}`;
+    const label = this.rowHeaderMode() === 'numbers' ? null : this.rowLabelOf(r, 'unified');
+    let text = `${label ? `${this.rowLabelText(label)}, row ${n}` : `Row ${n}`}${status === 'equal' ? '' : `, ${status}`}`;
     if (diff.moved?.[r]) text += `, moved from row ${oi + this.rowOffset('old')}`;
     return text;
   }
@@ -1174,6 +1370,15 @@ export class DiffGrid<A = unknown> {
       ctx.restore();
     }
 
+    // Column headings follow the top row in view (a model may repeat its year row per section).
+    const top = { old: -1, new: -1 };
+    for (let d = first, k = 0; d < rows.count && k < 80 && (top.old < 0 || top.new < 0); d++, k++) {
+      if (rows.kind[d] !== ROW_KIND.data) continue;
+      const r = rows.ref[d];
+      if (top.old < 0 && diff.oldRows[r] >= 0) top.old = diff.oldRows[r];
+      if (top.new < 0 && diff.newRows[r] >= 0) top.new = diff.newRows[r];
+    }
+    this.headerTop = { old: Math.max(0, top.old), new: Math.max(0, top.new) };
     this.drawHeader(p, firstScrolled, lastScrolled, colX);
     ctx.restore();
   }
@@ -1489,6 +1694,12 @@ export class DiffGrid<A = unknown> {
     const cy = y + h / 2 + 0.5;
     const oi = diff.oldRows[r];
     const ni = diff.newRows[r];
+    const mode = this.rowHeaderMode();
+    if (mode !== 'numbers') {
+      this.drawRowHeader(p, r, status, missing, cy, mode, numColor, selected || hovered, d);
+      vline(this.ctx, p.x + p.gutter, y, y + h, t.border);
+      return;
+    }
     if (p.side === 'unified') {
       const numW = (p.gutter - BAR_WIDTH - 16) / 2;
       if (oi >= 0) this.text(String(oi + offOld), p.x + BAR_WIDTH, cy, numW, 'right', mono, numColor);
@@ -1518,6 +1729,86 @@ export class DiffGrid<A = unknown> {
       if (diff.moved?.[r] && p.side === 'new') this.text('↕', p.x + BAR_WIDTH + 2, cy, 12, 'left', `600 ${t.fontSize - 1}px ${t.monoFontFamily}`, t.modifiedFg);
     }
     vline(this.ctx, p.x + p.gutter, y, y + h, t.border);
+  }
+
+  /** A labelled (or bare) row header: label, optional number, and the sign slot. */
+  private drawRowHeader(p: PaneGeometry, r: number, status: number, missing: boolean, cy: number, mode: 'labels' | 'both' | 'none', numColor: string, active: boolean, d: number): void {
+    const ctx = this.ctx;
+    const t = this.theme;
+    const diff = this.diff!;
+    const signX = p.x + p.gutter - SIGN_SLOT / 2;
+    // Sign slot: ↕ moved, • modified, + / − added or removed (the unified gutter, or each side's own rows).
+    if (!missing) {
+      const added = status === ROW_STATUS.added;
+      const removed = status === ROW_STATUS.removed;
+      if (diff.moved?.[r] && p.side !== 'old') {
+        ctx.font = `600 ${t.fontSize}px ${t.monoFontFamily}`;
+        ctx.fillStyle = t.modifiedFg;
+        ctx.textAlign = 'center';
+        ctx.fillText('↕', signX, cy);
+      } else if (status === ROW_STATUS.modified && p.side === 'unified') {
+        ctx.fillStyle = t.modifiedFg;
+        ctx.beginPath();
+        ctx.arc(signX, cy - 0.5, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (added || removed) {
+        ctx.font = `600 ${t.fontSize}px ${t.monoFontFamily}`;
+        ctx.fillStyle = added ? t.addedFg : t.removedFg;
+        ctx.textAlign = 'center';
+        ctx.fillText(added ? '+' : '−', signX, cy);
+      }
+    }
+    if (missing || mode === 'none') return;
+    const side = p.side === 'unified' ? (diff.newRows[r] >= 0 ? 'new' : 'old') : p.side;
+    const ti = side === 'new' ? diff.newRows[r] : diff.oldRows[r];
+    const number = ti >= 0 ? String(ti + this.rowOffset(side)) : '';
+    const mono = `${t.fontSize - 2}px ${t.monoFontFamily}`;
+    const numW = mode === 'both' ? p.gutter - BAR_WIDTH - SIGN_SLOT - (this.options.rowHeaderWidth ?? this.labels?.width ?? 120) : 0;
+    const x0 = p.x + BAR_WIDTH + 8;
+    const x1 = p.x + p.gutter - SIGN_SLOT - numW - 4;
+    if (mode === 'both' && number) this.text(number, x1, cy, numW + CELL_PAD, 'right', mono, t.fgFaint);
+    const label = this.rowLabelOf(r, p.side);
+    const key = `${p.side}:${r}`;
+    if (!label) {
+      // No label for this row: its number, where the label would be.
+      if (mode === 'labels' && number) this.text(number, x0 - CELL_PAD, cy, x1 - x0 + CELL_PAD * 2, 'left', mono, numColor);
+      this.truncatedLabels.delete(key);
+      return;
+    }
+    const main = label.row.join(LABEL_SEP) || label.sections[label.sections.length - 1] || '';
+    const sections = label.row.length ? label.sections : label.sections.slice(0, -1);
+    const strong = label.heading || active;
+    const mainFont = `${label.heading ? 600 : 450} ${t.fontSize - 1}px ${t.fontFamily}`;
+    const secFont = `${t.fontSize - 1}px ${t.fontFamily}`;
+    const mainColor = status === ROW_STATUS.added ? t.addedFg : status === ROW_STATUS.removed ? t.removedFg : strong ? t.fg : t.fgMuted;
+    const room = x1 - x0;
+    ctx.font = mainFont;
+    const mw = ctx.measureText(main).width;
+    // Drop outer sections until the label fits; mark the cut with "…".
+    ctx.font = secFont;
+    let secs = sections;
+    let prefix = secs.length ? secs.join(LABEL_SEP) + LABEL_SEP : '';
+    let cut = false;
+    while (secs.length && ctx.measureText(prefix).width + mw > room) {
+      secs = secs.slice(1);
+      cut = true;
+      prefix = `…${LABEL_SEP}${secs.length ? secs.join(LABEL_SEP) + LABEL_SEP : ''}`;
+    }
+    let pw = prefix ? ctx.measureText(prefix).width : 0;
+    if (pw + mw > room) {
+      prefix = '';
+      pw = 0;
+    }
+    if (prefix) {
+      ctx.fillStyle = t.fgFaint;
+      ctx.textAlign = 'left';
+      ctx.fillText(prefix, x0, cy);
+    }
+    const fits = pw + mw <= room;
+    this.text(main, x0 + pw - CELL_PAD, cy, room - pw + CELL_PAD * 2, 'left', mainFont, mainColor, status === ROW_STATUS.removed && p.side === 'unified');
+    if (cut || !fits) this.truncatedLabels.add(key);
+    else this.truncatedLabels.delete(key);
+    void d;
   }
 
   private drawSeparator(p: PaneGeometry, d: number, y: number, h: number): void {
@@ -1586,7 +1877,16 @@ export class DiffGrid<A = unknown> {
       ctx.textAlign = 'right';
       ctx.fillText(s, rightX, ly);
     };
-    if (p.side !== 'unified') {
+    const mode = this.rowHeaderMode();
+    if (mode !== 'numbers') {
+      // The columns the labels stand for ("region"), or nothing; OLD / NEW in split.
+      if (mode !== 'none') {
+        const names = [...(this.labels?.absorbed ?? [])].map((ci) => this.diff!.columns[ci].name).filter((n) => !/^[A-Z]{1,3}$/.test(n));
+        const title = names.length ? names.join(' · ') : '';
+        this.text(title, p.x + BAR_WIDTH + 8 - CELL_PAD, ly, p.gutter - BAR_WIDTH - SIGN_SLOT - (p.side === 'unified' ? 0 : 26) + CELL_PAD, 'left', `600 ${t.fontSize - 1}px ${t.fontFamily}`, t.fgMuted);
+      }
+      if (p.side !== 'unified') label(p.side === 'old' ? 'OLD' : 'NEW', p.x + p.gutter - 4, p.side === 'old' ? t.removedFg : t.addedFg);
+    } else if (p.side !== 'unified') {
       label(p.side === 'old' ? 'OLD' : 'NEW', p.x + p.gutter - CELL_PAD, p.side === 'old' ? t.removedFg : t.addedFg);
     } else {
       const numW = (p.gutter - BAR_WIDTH - 16) / 2;
@@ -1626,19 +1926,47 @@ export class DiffGrid<A = unknown> {
     }
     vline(ctx, x + w, 0, HEADER_HEIGHT, t.border);
     if (missing) return;
-    const letter = this.columnLetter(col, p.side === 'old' ? 'old' : 'new');
-    const small = `500 ${t.fontSize - 3}px ${t.monoFontFamily}`;
-    ctx.font = small;
-    const lw = ctx.measureText(letter).width;
-    ctx.fillStyle = t.fgFaint;
-    ctx.textAlign = 'left';
-    ctx.fillText(letter, x + CELL_PAD, cy);
-    let tx = x + CELL_PAD + lw + 6;
+    const side = p.side === 'old' ? 'old' : 'new';
+    const letter = this.columnLetter(col, side);
+    const mode = this.options.columnHeaders ?? 'labels';
+    const heading = mode === 'letters' ? [] : this.columnHeading(ci, side);
     const bold = `600 ${t.fontSize - 1}px ${t.fontFamily}`;
+    const showLetter = mode !== 'labels' || !heading.length;
+    let tx = x + CELL_PAD;
+    if (showLetter) {
+      // The letter alone is the heading when there is no other ('letters', or no label found).
+      const lone = mode === 'letters' || !heading.length;
+      const font = lone ? `600 ${t.fontSize - 2}px ${t.monoFontFamily}` : `500 ${t.fontSize - 3}px ${t.monoFontFamily}`;
+      ctx.font = font;
+      ctx.fillStyle = lone ? t.fgMuted : t.fgFaint;
+      ctx.textAlign = 'left';
+      ctx.fillText(letter, tx, cy);
+      tx += ctx.measureText(letter).width + 6;
+    }
     let avail = x + w - tx - CELL_PAD;
     if (col.changes > 0) avail -= 28;
     const accent = col.status === 'added' ? t.addedFg : col.status === 'removed' ? t.removedFg : t.fg;
-    if (col.status === 'renamed' && p.side !== 'new') {
+    if (!heading.length && col.status !== 'renamed') {
+      // Nothing more to say ('letters', or a lettered column with no heading found).
+    } else if (col.status !== 'renamed' && heading.length) {
+      // Outer headings muted, the innermost bold: "Forecast › Q2".
+      const inner = heading[heading.length - 1];
+      const prefix = heading.length > 1 ? heading.slice(0, -1).join(LABEL_SEP) + LABEL_SEP : '';
+      const sign = col.status === 'added' && p.side === 'unified' ? '+ ' : col.status === 'removed' && p.side === 'unified' ? '− ' : '';
+      ctx.font = `${t.fontSize - 1}px ${t.fontFamily}`;
+      const pwid = prefix ? ctx.measureText(prefix).width : 0;
+      ctx.font = bold;
+      const iw = ctx.measureText(sign + inner).width;
+      const usePrefix = prefix && pwid + iw <= avail;
+      if (usePrefix) {
+        ctx.font = `${t.fontSize - 1}px ${t.fontFamily}`;
+        ctx.fillStyle = t.fgFaint;
+        ctx.textAlign = 'left';
+        ctx.fillText(prefix, tx, cy);
+      }
+      const ix = usePrefix ? tx + pwid : tx;
+      this.text(sign + inner, ix - CELL_PAD, cy, x + w - ix - (col.changes ? 28 : 0) + CELL_PAD, 'left', bold, accent, col.status === 'removed' && p.side === 'unified');
+    } else if (col.status === 'renamed' && p.side !== 'new') {
       const oldName = col.oldName ?? '';
       if (p.side === 'old') {
         this.text(oldName, tx - CELL_PAD, cy, avail + CELL_PAD * 2, 'left', bold, t.fg);
@@ -1863,6 +2191,11 @@ export class DiffGrid<A = unknown> {
       this.hideTooltip();
       if ((info?.changed || info?.moved) && this.options.tooltips !== false) {
         this.tooltipTimer = window.setTimeout(() => this.showTooltip(info, hit), 260);
+      } else if (hit.area === 'gutter' && this.options.tooltips !== false) {
+        // A label cut short: the whole of it, and the row's numbers.
+        const p = this.panes()[hit.pane];
+        const r = this.rows.ref[hit.display];
+        if (this.truncatedLabels.has(`${p.side}:${r}`)) this.tooltipTimer = window.setTimeout(() => this.showRowTooltip(r, p.side, hit), 260);
       }
     }
   }
@@ -2069,8 +2402,13 @@ export class DiffGrid<A = unknown> {
             .map((s) => (s.kind === 'equal' ? esc(s.text) : kind === 'removed' ? `<del>${esc(s.text)}</del>` : `<ins>${esc(s.text)}</ins>`))
             .join('')
         : esc(kind === 'removed' ? before : after);
-    const rowLabel = info.newRow >= 0 ? `row ${info.newRow + this.rowOffset('new')}` : `row ${info.oldRow + this.rowOffset('old')}`;
-    let html = `<div class="sd-tt-head"><span class="sd-tt-col">${esc(info.column.name)}</span><span>${rowLabel}</span></div>`;
+    const rowNumber = info.newRow >= 0 ? `row ${info.newRow + this.rowOffset('new')}` : `row ${info.oldRow + this.rowOffset('old')}`;
+    // With labels: "India › Revenue · C7" under the column heading; else the column name and row number.
+    const rl = this.rowHeaderMode() === 'numbers' ? null : this.rowLabelOf(info.row, 'unified');
+    const heading = (this.options.columnHeaders ?? 'labels') === 'letters' ? [] : this.columnHeading(info.columnIndex, info.newRow >= 0 ? 'new' : 'old');
+    const colTitle = heading.length && info.column.status !== 'renamed' ? heading.join(LABEL_SEP) : info.column.name;
+    const where = rl ? `${esc(this.rowLabelText(rl))} · ${esc(this.addressOf(info))}` : rowNumber;
+    let html = `<div class="sd-tt-head"><span class="sd-tt-col">${esc(colTitle)}</span><span>${where}</span></div>`;
     if (info.moved) html += `<div class="sd-tt-moved">↕ Moved from row ${info.oldRow + this.rowOffset('old')}</div>`;
     if (!info.changed) {
       this.placeTooltip(html, hit);
@@ -2142,7 +2480,7 @@ export class DiffGrid<A = unknown> {
     const panes = this.panes();
     const p = panes[hit.pane];
     const cols = this.cols;
-    const vx = hit.vcol < cols.frozen ? p.x + p.gutter + cols.offsets[hit.vcol] : p.x + p.gutter + cols.offsets[hit.vcol] - this.scroller.scrollLeft;
+    const vx = hit.vcol < 0 ? p.x + BAR_WIDTH : hit.vcol < cols.frozen ? p.x + p.gutter + cols.offsets[hit.vcol] : p.x + p.gutter + cols.offsets[hit.vcol] - this.scroller.scrollLeft;
     const y = HEADER_HEIGHT + this.rows.offsets[hit.display + 1] - this.scroller.scrollTop;
     const tw = this.tooltip.offsetWidth;
     const th = this.tooltip.offsetHeight;
@@ -2161,6 +2499,15 @@ export class DiffGrid<A = unknown> {
     this.tooltip.setAttribute('data-open', '');
     this.tooltip.removeAttribute('aria-hidden');
     this.scroller.setAttribute('aria-describedby', this.tooltip.id);
+  }
+
+  private showRowTooltip(r: number, side: 'old' | 'new' | 'unified', hit: Hit): void {
+    const label = this.rowLabelOf(r, side);
+    if (!label) return;
+    const diff = this.diff!;
+    const esc = (s: string) => s.replace(/[&<>]/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'));
+    const nums = [diff.oldRows[r] >= 0 ? `old row ${diff.oldRows[r] + this.rowOffset('old')}` : '', diff.newRows[r] >= 0 ? `new row ${diff.newRows[r] + this.rowOffset('new')}` : ''].filter(Boolean).join(' · ');
+    this.placeTooltip(`<div class="sd-tt-head"><span class="sd-tt-col">${esc(this.rowLabelText(label))}</span><span>${nums}</span></div>`, hit);
   }
 
   private hideTooltip(): void {

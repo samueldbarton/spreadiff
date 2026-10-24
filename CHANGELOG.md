@@ -7,6 +7,19 @@ the repository.
 
 ### Added
 
+- **Labelled headers.** `DiffGrid` and `renderHTML` now show what the
+  sheet calls rows and columns (`India › Revenue`, `FY2025`) instead of
+  row numbers and letters, inferred from the layout. The column heading
+  follows the section in view. Label columns and heading rows the headers
+  now show are folded away unless they changed. New options:
+  - `rowHeaders`: `'labels'` (default), `'numbers'`, `'both'` or `'none'`;
+  - `columnHeaders`: `'labels'`, `'letters'` or `'both'`;
+  - `rowHeaderWidth` and `foldLabels`.
+
+  The viewer has both under Options. New core API: `sheetLabels`,
+  `SheetLabels`, `RowLabel`. Label inference is now one allocation-free
+  pass: 1M rows in 0.15–0.3 s, down from 2–5.5 s. Sizes: `spreadiff/html`
+  13.1 → 16.0 KB gzip (it now infers labels), `spreadiff` 59.7 → 62.6 KB.
 - **spreadiff-lite**, a new package with no UI. `compare` two workbooks
   into a report of every edit, with its before and after values and what
   the sheet calls the cell. Each downstream result comes with the edits
@@ -190,6 +203,12 @@ the repository.
   effect.
 
 ### Fixed
+
+- Unified row numbers of two digits or more could be cut off: the number
+  gutter didn't allow for the text padding.
+- Labels: a row less indented than an open section now ends it, and a
+  numeric id or a year-like number in a data row is no longer taken for a
+  label or a heading.
 
 - The text renderer wrote "1 unchanged rows".
 - The closed tooltip was exposed to assistive technology without a name.

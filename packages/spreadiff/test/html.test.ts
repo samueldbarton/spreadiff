@@ -81,3 +81,23 @@ describe('changedColumnsOnly keeps what names the rows', () => {
     expect(renderText(numeric, { changedColumnsOnly: true, context: 0 }).split('\n')[0].trim().split(/\s+/)).toEqual(['b']);
   });
 });
+
+describe('html: row and column labels', () => {
+  const model = (g: number) => [',FY2024,FY2025', 'India,,', '  Revenue,8300,' + 8300 * (1 + g), '  Costs,4150,4565'].join('\n');
+  const d = diffTables(parseCsv(model(0.1), { header: false }), parseCsv(model(0.12), { header: false }), { keys: 'none' });
+  it('labels rows and columns, and folds the label column and the year row', () => {
+    const html = renderHTML(d, { layout: 'unified', context: 9 });
+    expect(html).toContain('<span class="sdl-sec">India › </span><span class="sdl-lab">Revenue</span>');
+    expect(html).toContain('>FY2025</th>');
+    expect(html).not.toContain('>A</span>'); // the label column is in the row headers now
+    expect(html).not.toMatch(/<td[^>]*>FY2024<\/td>/); // and the year row in the column headers
+  });
+  it('shows numbers and letters when asked', () => {
+    const html = renderHTML(d, { layout: 'unified', context: 9, rowHeaders: 'numbers', columnHeaders: 'letters' });
+    expect(html).toContain('<th class="sdl-ln">old</th><th class="sdl-ln">new</th>');
+    expect(html).toContain('<span class="sdl-letter">C</span></th>');
+    expect(html).not.toContain('sdl-label');
+    const both = renderHTML(d, { layout: 'split', context: 9, rowHeaders: 'both' });
+    expect(both).toMatch(/<span class="sdl-lab">Revenue<\/span><span class="sdl-n">3<\/span>/);
+  });
+});

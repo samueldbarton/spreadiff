@@ -54,6 +54,10 @@ report.
   - Rows match by an id column when there is one, and by sequence alignment when there isn't.
   - An edited row reads as *modified*, not as a deletion plus an insertion.
   - A reordered row reads as *moved*.
+  - Headers read like the sheet: rows are labelled `India › Revenue` and
+    columns `FY2025`, inferred from the layout, instead of `7` and `C`.
+    [Row numbers and letters](docs/grid.md#row-and-column-headers) are an
+    option away.
 - **It explains formula changes.** Every changed cell is an input edit, a
   formula edit, or a downstream result. For each result, spreadiff finds
   the edits that actually moved it by undoing each one and recalculating
@@ -165,9 +169,9 @@ and `npm run test:hosted` reproduce them.
 
 | Import | Contents | min + gzip |
 | --- | --- | --- |
-| `spreadiff/html` | Diff engine, CSV parser, HTML and text renderers. No DOM | 13.1 KB |
-| `spreadiff/core` | + XLSX reader, formula engine and tracing | 41.6 KB |
-| `spreadiff` | + canvas `DiffGrid` | 59.7 KB |
+| `spreadiff/html` | Diff engine, CSV parser, HTML and text renderers. No DOM | 16.0 KB |
+| `spreadiff/core` | + XLSX reader, formula engine and tracing | 42.1 KB |
+| `spreadiff` | + canvas `DiffGrid` | 62.6 KB |
 | `spreadiff/react` | React component for `DiffGrid` | + React |
 | `spreadiff/worker` | Parse, diff and trace in a Web Worker | |
 

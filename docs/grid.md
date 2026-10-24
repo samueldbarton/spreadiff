@@ -55,11 +55,54 @@ Props are the [options](#options) plus `diff`, `className` and `style`. The
 
 | `layout: 'unified'` | `layout: 'split'` |
 | --- | --- |
-| One grid. A changed cell shows old and new together. Two row-number gutters (old, new) and a marker per row: `+` added, `−` removed, a dot for modified, `↕` for moved | Old on the left, new on the right, rows aligned and scrolled together. Rows and columns that exist on one side only are hatched on the other |
+| One grid. A changed cell shows old and new together. Row headers (labels, or old and new numbers) and a marker per row: `+` added, `−` removed, a dot for modified, `↕` for moved | Old on the left, new on the right, rows aligned and scrolled together. Rows and columns that exist on one side only are hatched on the other |
 | ![](images/grid-unified.png) | ![](images/grid-split.png) |
 
 For a code-review-style split view rendered as HTML instead of canvas, see
 [spreadiff/html](html.md).
+
+## Row and column headers
+
+A spreadsheet's rows and columns have names: "India › Revenue", "FY2025".
+By default the headers show those names instead of row numbers and column
+letters. The grid infers them from the sheet's layout, the same way
+[spreadiff-lite names cells](spreadiff-lite.md#how-cells-are-named):
+
+| `rowHeaders: 'labels'` (default) | `rowHeaders: 'numbers'`, `columnHeaders: 'letters'` |
+| --- | --- |
+| ![Row headers read India › Revenue, China › Costs; column headers read FY2024 and FY2025](images/headers-labels.png) | ![The same diff with row numbers 1–10 and column letters A–C, the label column and the year row shown as cells](images/headers-numbers.png) |
+
+- **Row headers** show each row's label, under the section headings above
+  it:
+  - section headings are bold, and outer sections are muted;
+  - added and removed rows take their colour;
+  - a label too long for the header drops its outer sections first
+    (`… › Revenue`); hovering shows all of it;
+  - a row with no label shows its number.
+- **Column headers** show each column's heading: the header-row name, or
+  the heading rows above the data (`Forecast › Q2`, `2025`). In a model
+  that repeats its year row per section, the header follows the section in
+  view. A column with no heading shows its letter.
+- **Folding.** Whatever the headers now show is folded away, unless it
+  changed:
+  - the label column (a model's column A, a records table's id and name);
+  - a row of years under the header.
+
+  A changed label still shows as a cell. `foldLabels: false` keeps
+  everything in place.
+
+| Option | Values | |
+| --- | --- | --- |
+| `rowHeaders` | `'labels'` (default), `'numbers'`, `'both'`, `'none'` | Labels; spreadsheet row numbers (old and new in `unified`); the label then the number; or only the change bar and sign |
+| `columnHeaders` | `'labels'` (default), `'letters'`, `'both'` | Headings; spreadsheet letters; the letter then the heading |
+| `rowHeaderWidth` | px | Fixed width for labelled row headers. Default: fits the labels, 96–260 px |
+| `foldLabels` | `true` | Fold away the columns and rows the headers show |
+
+Labels are inferred, so they can be wrong. A guess is only a guess: the
+tooltip, the [accessibility mirror](#accessibility) and `CellInfo` still
+give each cell's address. Inference is one pass over the table, about
+50 ms per 100,000 rows. Tables over about 100,000 rows get it after the
+first frame, and show numbers until then.
 
 ## Displaying a change
 
@@ -98,6 +141,10 @@ In every display:
 | `hideUnchangedColumns` | `false` | Hide columns with no changed cells. Key, added, removed and renamed columns stay; without keys, so does the first mostly-text column, which names the rows |
 | `frozenColumns` | `'keys'` | Pin columns while scrolling sideways: `'keys'` moves the key columns to the front and pins them; a number pins that many leading columns |
 | `columnWidths` | — | Fixed widths in px, by column name. Others size to their content (also resizable by dragging a header edge) |
+| `rowHeaders` | `'labels'` | `'labels'`, `'numbers'`, `'both'` or `'none'`; see [Row and column headers](#row-and-column-headers) |
+| `columnHeaders` | `'labels'` | `'labels'`, `'letters'` or `'both'` |
+| `rowHeaderWidth` | fits | Width of labelled row headers, in px |
+| `foldLabels` | `true` | Fold away the label columns and heading rows the headers show, unless they changed |
 | `rowNumberOffset` | from `origin` | Added to row indexes for display. By default numbers match the sheet |
 | `theme` | `'system'` | `'system'` follows the page; `'light'` / `'dark'` force one |
 | `minimap` | `true` | Change overview on the right edge. Click to jump |

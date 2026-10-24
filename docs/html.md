@@ -2,7 +2,7 @@
 
 `spreadiff/html` renders a diff as an **HTML string** or as **plain text**.
 It uses no canvas, no DOM APIs and no workers, so the same call works in a
-browser, a Node server, a CI job or a static-site build. At 13.1 KB
+browser, a Node server, a CI job or a static-site build. At 16.0 KB
 (min+gzip) for the diff engine, the CSV parser and both renderers, it's the
 lightest way to use spreadiff.
 
@@ -46,6 +46,9 @@ Cell values are HTML-escaped: rendering an untrusted file is safe.
 | `maxRows` | `2000` | Stop after this many rows; a note says how many more changed rows exist |
 | `kindOf` | local | `(row, col) => ChangeKind` override, e.g. from a [trace](tracing.md) |
 | `rowNumberOffset` | from `origin` | Row number of row index 0 |
+| `rowHeaders` | `'labels'` | What the row headers show: `'labels'` (inferred row labels, as in the [grid](grid.md#row-and-column-headers)), `'numbers'` or `'both'` |
+| `columnHeaders` | `'labels'` | `'labels'` (headings), `'letters'` or `'both'` |
+| `foldLabels` | `true` | With labels, leave out unchanged label columns and heading rows |
 
 Downstream (computed) changes are amber, formula edits get an `ƒ`, and
 deltas are green or red by direction, as in the grid.

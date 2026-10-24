@@ -478,6 +478,91 @@ await test('accessibility: false skips the mirror', async () => {
   assert(n === 0, `cells: ${n}`);
 });
 
+// ---- Row and column labels ------------------------------------------------
+const MODEL = (g, c) => [',FY2024,FY2025', 'India,,', '  Revenue,8300,' + 8300 * (1 + g), '  Costs,4150,4565', 'China,,', '  Revenue,' + c + ',' + c * 2, '  Costs,360,396'].join('\n');
+async function labelled(opts = {}) {
+  return page.evaluate(({ opts, a, b }) => {
+    window.G?.cleanUp();
+    const { parseCsv, diffTables, DiffGrid } = window.sd;
+    const d = diffTables(parseCsv(a, { header: false }), parseCsv(b, { header: false }), { keys: 'none' });
+    const g = new DiffGrid({ collapseUnchanged: false, ...opts });
+    g.render({ diff: d, container: document.getElementById('grid') });
+    const drawn = [];
+    const ctx = g.ctx;
+    const fill = ctx.fillText.bind(ctx);
+    ctx.fillText = (s, ...rest) => { drawn.push(s); return fill(s, ...rest); };
+    g.drawNow();
+    ctx.fillText = fill;
+    window.G = g;
+    return {
+      drawn,
+      columns: Array.from(g.cols.cols, (ci) => d.columns[ci].name),
+      rows: g.rows.count,
+      gutter: g.panes()[0].gutter,
+      rowHeaders: [...g.scroller.querySelectorAll('[role=rowheader]')].map((e) => e.textContent),
+      colHeaders: [...g.scroller.querySelectorAll('[role=columnheader]')].map((e) => e.textContent),
+    };
+  }, { opts, a: MODEL(0.1, 720), b: MODEL(0.12, 800) });
+}
+
+await test('row headers show inferred labels; the label column and the year row fold into the headers', async () => {
+  const r = await labelled();
+  assert(r.drawn.includes('India › ') && r.drawn.some((s) => s === 'Revenue' || s.startsWith('Revenue')), `drawn: ${r.drawn.slice(0, 40)}`);
+  assert(r.drawn.includes('FY2025') && !r.drawn.includes('C'), 'the column header shows the year, not the letter');
+  assert(r.columns.join() === 'B,C', `the label column A is folded: ${r.columns}`);
+  assert(r.rows === 6, `the unchanged year row is folded: ${r.rows} rows`);
+  assert(r.rowHeaders.some((t) => t.startsWith('India › Revenue, row 3')), `aria: ${r.rowHeaders}`);
+  assert(r.colHeaders.includes('FY2025'), `aria headers: ${r.colHeaders}`);
+});
+
+await test("rowHeaders: 'numbers' and columnHeaders: 'letters' show the sheet as it is", async () => {
+  const r = await labelled({ rowHeaders: 'numbers', columnHeaders: 'letters' });
+  assert(r.columns.join() === 'A,B,C' && r.rows === 7, JSON.stringify({ c: r.columns, rows: r.rows }));
+  assert(r.drawn.includes('C') && !r.drawn.includes('India › '), 'letters and no labels');
+  const both = await labelled({ rowHeaders: 'both', columnHeaders: 'both' });
+  assert(both.drawn.includes('India › ') && both.drawn.includes('3') && both.drawn.includes('C') && both.drawn.includes('FY2025'), `both: ${both.drawn.slice(0, 60)}`);
+  const none = await labelled({ rowHeaders: 'none' });
+  assert(none.gutter < 30 && !none.drawn.includes('India › '), `none: gutter ${none.gutter}`);
+  const kept = await labelled({ foldLabels: false });
+  assert(kept.columns.join() === 'A,B,C' && kept.rows === 7, 'foldLabels: false keeps the label column and the year row');
+});
+
+await test('a label that does not fit drops outer sections, and shows in full on hover', async () => {
+  await labelled({ rowHeaderWidth: 70 });
+  const r = await page.evaluate(() => {
+    const g = window.G;
+    const keys = [...g.truncatedLabels];
+    const d = g.rows.displayOf[2];
+    const s = g.scroller.getBoundingClientRect();
+    return { keys, x: s.x + 20, y: s.y + 36 + g.rows.offsets[d] + 8 };
+  });
+  assert(r.keys.length > 0, 'some labels are cut short at 70px');
+  await page.mouse.move(r.x, r.y);
+  await page.waitForFunction(() => window.G.tooltip.hasAttribute('data-open'), null, { timeout: 3000 }).catch(() => {});
+  const tip = await page.evaluate(() => window.G.tooltip.textContent ?? '');
+  assert(/India › /.test(tip) && /row/.test(tip), `tooltip: ${tip}`);
+  await page.mouse.move(1, 1);
+});
+
+await test('labels for a large table come after the first frame; numbers until then', async () => {
+  const r = await page.evaluate(async () => {
+    window.G?.cleanUp();
+    const { parseCsv, diffTables, DiffGrid } = window.sd;
+    const mk = (b) => 'sku,name,qty\n' + Array.from({ length: 120000 }, (_, i) => `S${i},Item ${i},${b && i % 1000 === 0 ? 9 : i % 50}`).join('\n');
+    const d = diffTables(parseCsv(mk(false)), parseCsv(mk(true)));
+    const g = new DiffGrid();
+    const t0 = performance.now();
+    g.render({ diff: d, container: document.getElementById('grid') });
+    g.drawNow();
+    const first = { ms: performance.now() - t0, mode: g.rowHeaderMode() };
+    window.G = g;
+    await new Promise((res) => setTimeout(res, 400));
+    return { first, later: g.rowHeaderMode(), columns: Array.from(g.cols.cols, (ci) => d.columns[ci].name) };
+  });
+  assert(r.first.mode === 'numbers', `first frame: ${JSON.stringify(r.first)}`);
+  assert(r.later === 'labels' && r.columns.join() === 'qty', `after: ${JSON.stringify(r)}`);
+});
+
 assert(true);
 if (errors.length) {
   failed++;

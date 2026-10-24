@@ -10,6 +10,6 @@ export { packTable, unpackTable, packWorkbookDiff, unpackWorkbookDiff, packWorkb
 export { tokenizeFormula, formulaRefs, canonicalFormula, structuredRange, scopedNames, type SheetRange, type FormulaRefs, type FormulaToken, type FormulaContext } from './formula.js';
 export { traceWorkbook, traceTable, applyRecalculation, type WorkbookTrace, type CellTrace, type CellRef, type ChangeKind, type TraceOptions, type TraceStats } from './trace.js';
 export { externalSource, LIVE_FUNCTIONS, type ExternalSource } from './external.js';
-export { tableLabeler, formatLabel, type CellLabel, type LabelOptions } from './labels.js';
+export { tableLabeler, sheetLabels, formatLabel, type CellLabel, type LabelOptions, type RowLabel, type SheetLabels } from './labels.js';
 export { changeKind } from './kind.js';
 export { computeMissingValues, type MissingValues } from './recalc.js';

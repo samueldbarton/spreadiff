@@ -56,19 +56,22 @@ function gridDemo(el: HTMLElement) {
   const diff = diffWorkbooks(a, b).sheets[0].diff;
   let layout: DiffLayout = 'split';
   let cellDisplay: CellDisplay = 'stacked';
+  let headers: 'labels' | 'numbers' = 'labels';
   const code = () => `import { DiffGrid, diffTables } from 'spreadiff';
 
 const diff = diffTables(before, after); // matched by the id column
-new DiffGrid({ layout: '${layout}', cellDisplay: '${cellDisplay}' }).render({ diff, container });`;
+new DiffGrid({ layout: '${layout}', cellDisplay: '${cellDisplay}'${headers === 'numbers' ? ", rowHeaders: 'numbers', columnHeaders: 'letters'" : ''} })
+  .render({ diff, container });`;
   const controls = h('div', { class: 'demo-controls' });
   const grid = new DiffGrid({ layout, cellDisplay });
   const update = () => {
-    grid.setOptions({ layout, cellDisplay });
+    grid.setOptions({ layout, cellDisplay, rowHeaders: headers, columnHeaders: headers === 'numbers' ? 'letters' : 'labels' });
     el.querySelector('.demo-code code')!.textContent = code();
   };
   controls.append(
     segmented('Layout', ['unified', 'split'] as DiffLayout[], layout, (v) => ((layout = v), update())),
     segmented('Cells', ['stacked', 'new', 'delta', 'inline'] as CellDisplay[], cellDisplay, (v) => ((cellDisplay = v), update())),
+    segmented('Headers', ['labels', 'numbers'] as ('labels' | 'numbers')[], headers, (v) => ((headers = v), update())),
   );
   const preview = frame(el, code(), controls);
   const box = h('div', { class: 'demo-grid' });

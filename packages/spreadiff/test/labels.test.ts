@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatLabel, parseCsv, tableLabeler, type Table } from '../src/core';
+import { formatLabel, parseCsv, sheetLabels, tableLabeler, type Table } from '../src/core';
 
 /** A model sheet from CSV, without a header row, as a financial model is read. */
 const model = (csv: string) => parseCsv(csv, { header: false });
@@ -38,6 +38,11 @@ describe('cell labels', () => {
     expect(at(t, 3, 1)).toBe('Asia › India › Revenue · 2025');
     expect(at(t, 5, 1)).toBe('Asia › China › Revenue · 2025');
     expect(at(t, 7, 1)).toBe('Europe › Revenue · 2025');
+  });
+
+  it('ends a section at a less indented row', () => {
+    const t = model([',2025', 'India,', '  Revenue,1', 'China,', '  Revenue,2', 'Total profit,3'].join('\n'));
+    expect(at(t, 5, 1)).toBe('Total profit · 2025');
   });
 
   it('reads leading spaces as indentation', () => {
@@ -90,5 +95,45 @@ describe('cell labels: dates', () => {
     expect(at(t, 1, 2)).toBe('Cash · 2024-02-29');
     const lone = model(['2024-01-31', '5', '6'].join('\n'));
     expect(tableLabeler(lone)(2, 0).column).toEqual([]);
+  });
+});
+
+describe('sheetLabels', () => {
+  const t = parseCsv([',FY2024,FY2025', 'India,,', 'Revenue,100,120', 'China,,', 'Revenue,80,95'].join('\n'), { header: false });
+  const l = sheetLabels(t);
+  it('gives row labels, with headings marked', () => {
+    expect(l.row(1)).toEqual({ sections: [], row: ['India'], heading: true });
+    expect(l.row(4)).toEqual({ sections: ['China'], row: ['Revenue'], heading: false });
+  });
+  it('gives the column headings for a row, and the ones below for the heading row itself', () => {
+    expect(l.column(4, 2)).toEqual(['FY2025']);
+    expect(l.column(0, 1)).toEqual(['FY2024']);
+  });
+  it('finds the columns the row labels hold', () => {
+    expect(l.labelColumns()).toEqual([0]);
+    const recs = parseCsv('id,name,price\nP-1,Lamp,10\nP-2,Desk,30');
+    expect(sheetLabels(recs, { keyColumns: ['id'] }).labelColumns()).toEqual([0, 1]);
+    // A label column holding something the labels don't (a third text cell) isn't one.
+    const three = parseCsv('a,b,c,n\nx,y,z,1\nx,y,w,2', { header: true });
+    expect(sheetLabels(three).labelColumns()).toEqual([0, 1]);
+  });
+});
+
+describe('cell labels: what is not a heading', () => {
+  it("doesn't take a row with an id that looks like a year for headings", () => {
+    const t = model(['x,1900,a', 'y,2001,b', 'z,2002,c'].join('\n'));
+    expect(sheetLabels(t).headingRow(1)).toBe(false);
+  });
+  it('uses the header row, not rows of text, when the table has one', () => {
+    const t = parseCsv('name,status,note\nLamp,n/a,tbd\nDesk,ok,fine');
+    const l = sheetLabels(t);
+    expect(l.headingRow(0)).toBe(false);
+    expect(l.column(1, 2)).toEqual(['note']);
+  });
+  it('leaves numeric keys out of row labels', () => {
+    const t = parseCsv('id,name,qty\n1,Lamp,2\n2,Desk,3');
+    const l = sheetLabels(t, { keyColumns: ['id'] });
+    expect(l.row(0).row).toEqual(['Lamp']);
+    expect(l.labelColumns()).toEqual([1]);
   });
 });

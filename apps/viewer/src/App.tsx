@@ -100,6 +100,8 @@ export function App() {
   const [layout, setLayout] = useState<DiffLayout>('unified');
   const [collapse, setCollapse] = useState(true);
   const [changedColsOnly, setChangedColsOnly] = useState(false);
+  const [rowHeaders, setRowHeaders] = useState<'labels' | 'numbers' | 'both'>('labels');
+  const [columnHeaders, setColumnHeaders] = useState<'labels' | 'letters' | 'both'>('labels');
   const [theme, setTheme] = useState<Theme>(readTheme);
   const [renderer, setRenderer] = useState<Renderer>('spreadiff');
   const [options, setOptions] = useState<DiffOptions>({ keys: 'auto', trimWhitespace: true, ignoreCase: false, numericTolerance: 0 });
@@ -316,7 +318,7 @@ export function App() {
               <button className={`btn ${showOptions ? 'on' : ''}`} onClick={() => setShowOptions((v) => !v)} aria-expanded={showOptions}>
                 <Icon name="sliders" />
                 Options
-                {(changedColsOnly || options.ignoreCase || options.trimWhitespace === false || header !== 'auto' || options.numericTolerance || options.keys !== 'auto') && <span className="pip" title="Some options differ from the defaults" />}
+                {(changedColsOnly || rowHeaders !== 'labels' || columnHeaders !== 'labels' || options.ignoreCase || options.trimWhitespace === false || header !== 'auto' || options.numericTolerance || options.keys !== 'auto') && <span className="pip" title="Some options differ from the defaults" />}
               </button>
               {showOptions && (
                 <>
@@ -324,6 +326,22 @@ export function App() {
                   <div className="popover" role="dialog" aria-label="Options">
                     <span className="popover-title">View</span>
                     <Toggle checked={changedColsOnly} onChange={setChangedColsOnly} label="Changed columns only" />
+                    <label className="field">
+                      <span>Rows show</span>
+                      <select value={rowHeaders} title="Labels: what the sheet calls each row (India › Revenue), inferred from the layout" onChange={(e) => setRowHeaders(e.target.value as typeof rowHeaders)}>
+                        <option value="labels">Labels</option>
+                        <option value="numbers">Row numbers</option>
+                        <option value="both">Labels and numbers</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Columns show</span>
+                      <select value={columnHeaders} title="Labels: each column's heading (FY2025), inferred from the layout" onChange={(e) => setColumnHeaders(e.target.value as typeof columnHeaders)}>
+                        <option value="labels">Headings</option>
+                        <option value="letters">Letters</option>
+                        <option value="both">Letters and headings</option>
+                      </select>
+                    </label>
                     <hr />
                     <span className="popover-title">Matching</span>
                     <label className="field">
@@ -428,6 +446,8 @@ export function App() {
                   layout={layout}
                   collapseUnchanged={collapse}
                   hideUnchangedColumns={changedColsOnly}
+                  rowHeaders={rowHeaders}
+                  columnHeaders={columnHeaders}
                   cellDisplay={display}
                   trace={traceCtx}
                   theme={theme}

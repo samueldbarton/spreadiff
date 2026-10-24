@@ -47,7 +47,12 @@ export interface LabelOptions {
 
 /** Rows scanned to find label columns. */
 const SAMPLE = 5000;
-const TOTAL = /^(?:total|sub-?total|grand total)\b|\btotal$/i;
+const TOTAL = /^\s*(?:total|sub-?total|grand total)\b|\btotal\s*$/i;
+/** Whether a string has a non-space character, without allocating. */
+const hasText = (v: string) => {
+  for (let i = 0; i < v.length; i++) if (v.charCodeAt(i) > 32) return true;
+  return false;
+};
 
 const isBlank = (v: CellValue | undefined) => v === null || v === undefined || v === '';
 const text = (v: CellValue | undefined): string => (v === null || v === undefined ? '' : typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : String(v));
@@ -56,18 +61,6 @@ const ERROR = /^#(?:VALUE!|N\/A|REF!|DIV\/0!|NUM!|NAME\?|NULL!|SPILL!|CALC!|GETT
 const MAX_HEADING_ROWS = 3;
 const yearLike = (v: CellValue) => typeof v === 'number' && Number.isInteger(v) && v >= 1900 && v <= 2100;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}(?:[ T]|$)/;
-
-interface RowInfo {
-  /** Label cells (column, text) in the label columns. */
-  labels: [number, string][];
-  /** Non-empty cells right of the label columns. */
-  data: number;
-  /** Only text, dates and years right of the label columns (a column-heading row). */
-  band: boolean;
-  /** Depth key of the first label: column × 64 + indent. */
-  depth: number;
-  bold: boolean;
-}
 
 /**
  * Labels for the cells of one table. Returns a function of table
@@ -81,30 +74,70 @@ interface RowInfo {
  * ```
  */
 export function tableLabeler(table: Table, options: LabelOptions = {}): (row: number, col: number) => CellLabel {
-  let analysed: ReturnType<typeof analyse> | null = null;
+  let analysed: SheetLabels | null = null;
   return (row, col) => {
-    analysed ??= analyse(table, options);
-    return analysed.label(row, col);
+    analysed ??= sheetLabels(table, options);
+    return analysed.cell(row, col);
   };
 }
 
-function analyse(table: Table, options: LabelOptions) {
+/** A row's labels, from {@link SheetLabels}. */
+export interface RowLabel {
+  /** Section headings above the row, outermost first. */
+  sections: string[];
+  /** The row's own label cells. */
+  row: string[];
+  /** The row is itself a section heading (a label with nothing to its right). */
+  heading: boolean;
+}
+
+/** The labels of a whole table, from {@link sheetLabels}. Table coordinates throughout. */
+export interface SheetLabels {
+  /** A cell's labels: what {@link tableLabeler} returns. */
+  cell(row: number, col: number): CellLabel;
+  /** A row's labels, and whether it is a section heading. */
+  row(row: number): RowLabel;
+  /** The column headings in force at a row (the nearest heading rows above it, or the header). */
+  column(row: number, col: number): string[];
+  /** The row holds column headings (a row of years, dates or titles right of the labels), and no label of its own. */
+  headingRow(row: number): boolean;
+  /**
+   * Columns whose every non-blank cell is part of its row's label: shown
+   * by the row labels, so a view that shows those can hide the columns.
+   * Computed once, on the first call.
+   */
+  labelColumns(): number[];
+}
+
+/**
+ * Every label of a table at once: rows, columns and cells. The layout is
+ * analysed once, when this is called; lookups are then cheap. `DiffGrid`
+ * uses this for its row and column headers.
+ */
+export function sheetLabels(table: Table, options: LabelOptions = {}): SheetLabels {
+  return analyse(table, options);
+}
+
+function analyse(table: Table, options: LabelOptions): SheetLabels {
   const { rows, columns } = table;
   const width = columns.length;
+  const n = rows.length;
   const o = table.origin ?? { row: 1, col: 0 };
   // Column names count as headings when they came from a header row (not letters).
   const lettered = columns.every((c, i) => c === columnLabel(i + o.col));
   const header: CellValue[] | null = table.header?.length ? table.header : !lettered && width ? columns : null;
+  const hasHeaderRow = !!header;
   const maxCells = options.maxRowCells ?? 2;
   const keyIdx = (options.keyColumns ?? []).map((k) => columns.indexOf(k)).filter((i) => i >= 0);
 
   // Label columns: left of the first column that is mostly numbers, in rows
   // that hold any (heading rows of text alone don't count).
-  const n = Math.min(rows.length, SAMPLE);
+  const sample = Math.min(n, SAMPLE);
   const numberRows: number[] = [];
-  for (let r = 0; r < n; r++) if (rows[r].some((v) => typeof v === 'number')) numberRows.push(r);
+  for (let r = 0; r < sample; r++) if (rows[r].some((v) => typeof v === 'number')) numberRows.push(r);
   let zone = 0;
   for (; zone < width; zone++) {
+    if (keyIdx.includes(zone)) continue; // a numeric id doesn't end the labels (id, name, qty)
     let filled = 0;
     let numeric = 0;
     for (const r of numberRows) {
@@ -122,20 +155,27 @@ function analyse(table: Table, options: LabelOptions) {
   for (const s of table.labelStyles ?? []) styles.set((s.r - o.row) * width + (s.c - o.col), s);
   const merges = (table.merges ?? []).filter((m) => m.r0 === m.r1).map((m) => ({ r: m.r0 - o.row, c0: m.c0 - o.col, c1: m.c1 - o.col }));
 
-  const info: RowInfo[] = new Array(rows.length);
-  const rowInfo = (r: number): RowInfo => {
+  // One pass over the rows, into typed arrays (a million rows allocate nothing per row).
+  const isLabel = (v: CellValue | undefined) => (typeof v === 'string' ? hasText(v) && !(v.charCodeAt(0) === 35 && ERROR.test(v)) : typeof v === 'boolean');
+  const firstLabel = new Int16Array(n).fill(-1); // column of the row's first label cell
+  const dataCount = new Uint32Array(n); // non-empty cells right of the label columns
+  const band = new Uint8Array(n); // a column-heading row
+  const depth = new Uint16Array(n); // column × 64 + indent of the first label
+  const bold = new Uint8Array(n);
+  for (let r = 0; r < n; r++) {
     const cells = rows[r];
-    const labels: [number, string][] = [];
+    let first = -1;
     for (let c = 0; c < zone; c++) {
-      const v = cells[c];
-      if (typeof v === 'string' && v.trim() && !ERROR.test(v)) labels.push([c, text(v)]);
-      else if (typeof v === 'boolean') labels.push([c, text(v)]);
+      if (isLabel(cells[c])) {
+        first = c;
+        break;
+      }
     }
     // A heading row holds text, or dates or years running on (2024, 2025, or
     // 2024, 2024, … for quarters). One date or year alone is data, unless
     // the row's label introduces it ("Period end").
     let data = 0;
-    let band = true;
+    let isBand = true;
     let words = 0;
     let years = 0;
     let lastYear = NaN;
@@ -145,100 +185,128 @@ function analyse(table: Table, options: LabelOptions) {
       const v = cells[c];
       if (isBlank(v)) continue;
       data++;
-      if (typeof v === 'string' && ISO_DATE.test(v)) {
-        if (v <= lastDate) band = false;
-        lastDate = v;
-        dates++;
-      } else if (typeof v === 'string' && ERROR.test(v)) band = false;
-      else if (typeof v === 'string' || typeof v === 'boolean') words++;
+      if (!isBand) continue; // only the count matters now
+      if (typeof v === 'string') {
+        if (v.length >= 10 && ISO_DATE.test(v)) {
+          if (v <= lastDate) isBand = false;
+          lastDate = v;
+          dates++;
+        } else if (v.charCodeAt(0) === 35 && ERROR.test(v)) isBand = false;
+        else words++;
+      } else if (typeof v === 'boolean') words++;
       else if (yearLike(v) && (Number.isNaN(lastYear) || v - lastYear === 0 || v - lastYear === 1)) {
         lastYear = v;
         years++;
-      } else band = false;
+      } else isBand = false;
     }
-    if (!words && years + dates === 1 && (labels.length ? years === 1 : dates === 1)) band = false;
-    let depth = 0;
-    let bold = false;
-    if (labels.length) {
-      const c = labels[0][0];
-      const raw = cells[c];
+    // A run of years or dates, or text alone; one year or date beside text is data (an id of 2001, a due date).
+    const runs = years + dates;
+    if (runs === 1 && (words > 0 || first >= 0 || dates === 1)) isBand = false;
+    // A table with a header row has its column headings already.
+    if (hasHeaderRow) isBand = false;
+    firstLabel[r] = first;
+    dataCount[r] = data;
+    band[r] = data > 0 && isBand ? 1 : 0;
+    if (first >= 0) {
+      const raw = cells[first];
       const lead = typeof raw === 'string' ? raw.length - raw.trimStart().length : 0;
-      const st = styles.get(r * width + c);
-      depth = c * 64 + Math.min(63, (st?.indent ?? 0) + Math.floor(lead / 2));
-      bold = !!st?.bold;
+      const st = styles.size ? styles.get(r * width + first) : undefined;
+      depth[r] = first * 64 + Math.min(63, (st?.indent ?? 0) + Math.floor(lead / 2));
+      bold[r] = st?.bold ? 1 : 0;
     }
-    return { labels, data, band: data > 0 && band, depth, bold };
-  };
-  for (let r = 0; r < rows.length; r++) info[r] = rowInfo(r);
+  }
+  const labelOf = (r: number) => text(rows[r][firstLabel[r]]);
+  const hasLabel = (r: number) => firstLabel[r] >= 0;
+  const isHeading = (r: number) => hasLabel(r) && dataCount[r] === 0 && !band[r];
 
-  // Section headings, top to bottom: a stack of open sections. Tables
-  // matched by key are records, not a model: no sections there.
-  const sections: string[][] = new Array(rows.length);
+  // Section headings, top to bottom: a stack of open sections, kept as a
+  // tree of nodes; each row records the innermost open one. Tables matched
+  // by key are records, not a model: no sections there.
+  const nodeLabel: string[] = [];
+  const nodeParent: number[] = [];
+  const sectionAt = new Int32Array(n).fill(-1);
   const noSections = keyIdx.length > 0 || zone === 0;
-  const isHeading = (r: number) => !!info[r].labels.length && info[r].data === 0 && !info[r].band;
-  // A heading whose next row is another heading opens a group ("India" over "Revenue").
-  const group = new Uint8Array(rows.length);
   if (!noSections) {
+    // A heading whose next row is another heading opens a group ("India" over "Revenue").
+    const group = new Uint8Array(n);
     let next = -1; // the next row with content below r
-    for (let r = rows.length - 1; r >= 0; r--) {
+    for (let r = n - 1; r >= 0; r--) {
       if (isHeading(r)) group[r] = next >= 0 && isHeading(next) ? 1 : 0;
-      if (info[r].labels.length || info[r].data) next = r;
+      if (hasLabel(r) || dataCount[r]) next = r;
     }
-  }
-  // With indentation (or labels in several columns) depth alone orders headings.
-  let depths = 0;
-  const seen = new Set<number>();
-  for (let r = 0; r < rows.length; r++) if (info[r].labels.length && !seen.has(info[r].depth)) seen.add(info[r].depth), depths++;
-  const byDepth = depths > 1;
-  type Open = { label: string; depth: number; group: boolean };
-  const stack: Open[] = [];
-  const snapshot = () => stack.map((x) => x.label);
-  let prev: 'heading' | 'data' | null = null;
-  for (let r = 0; r < rows.length; r++) {
-    const ri = info[r];
-    const label = ri.labels[0]?.[1];
-    sections[r] = snapshot();
-    if (noSections || !label || ri.band) continue; // blank and column-heading rows leave sections as they are
-    while (stack.length && stack[stack.length - 1].depth > ri.depth) stack.pop();
-    if (isHeading(r)) {
-      // Right under another heading, it nests. Otherwise it ends its sibling
-      // at the same depth: a group ends the last group too.
-      const isGroup = !!group[r] || ri.bold;
-      if (byDepth) {
-        while (stack.length && stack[stack.length - 1].depth >= ri.depth) stack.pop();
-      } else if (prev !== 'heading') {
-        const atDepth = (x: Open | undefined) => !!x && x.depth === ri.depth;
-        while (atDepth(stack[stack.length - 1]) && !stack[stack.length - 1].group) stack.pop();
-        if (isGroup && atDepth(stack[stack.length - 1])) stack.pop();
+    // With indentation (or labels in several columns) depth alone orders headings.
+    let firstDepth = -1;
+    let byDepth = false;
+    for (let r = 0; r < n && !byDepth; r++) {
+      if (!hasLabel(r)) continue;
+      if (firstDepth < 0) firstDepth = depth[r];
+      else if (depth[r] !== firstDepth) byDepth = true;
+    }
+    type Open = { node: number; depth: number; group: boolean; label: string };
+    const stack: Open[] = [];
+    const top = () => stack[stack.length - 1];
+    const innermost = () => (stack.length ? top().node : -1);
+    let prev: 'heading' | 'data' | null = null;
+    for (let r = 0; r < n; r++) {
+      sectionAt[r] = innermost();
+      if (!hasLabel(r) || band[r]) continue; // blank and column-heading rows leave sections as they are
+      const d = depth[r];
+      while (stack.length && top().depth > d) stack.pop();
+      if (isHeading(r)) {
+        const label = labelOf(r);
+        // Right under another heading, it nests. Otherwise it ends its sibling
+        // at the same depth: a group ends the last group too.
+        const isGroup = !!group[r] || !!bold[r];
+        if (byDepth) {
+          while (stack.length && top().depth >= d) stack.pop();
+        } else if (prev !== 'heading') {
+          while (stack.length && top().depth === d && !top().group) stack.pop();
+          if (isGroup && stack.length && top().depth === d) stack.pop();
+        }
+        sectionAt[r] = innermost();
+        nodeLabel.push(label);
+        nodeParent.push(innermost());
+        stack.push({ node: nodeLabel.length - 1, depth: d, group: isGroup, label });
+        prev = 'heading';
+        continue;
       }
-      sections[r] = snapshot();
-      stack.push({ label, depth: ri.depth, group: isGroup });
-      prev = 'heading';
-      continue;
+      // With indentation, a row at a heading's own depth isn't inside it ("Total profit" under "  Costs").
+      if (byDepth) while (stack.length && top().depth >= d) stack.pop();
+      sectionAt[r] = innermost();
+      const raw = rows[r][firstLabel[r]];
+      if (typeof raw === 'string' && TOTAL.test(raw)) {
+        // "Total India" closes India (and anything inside it); a bare "Total revenue" closes the innermost.
+        const rest = text(raw).replace(TOTAL, '').trim().toLowerCase();
+        let named = -1;
+        if (rest) for (let i = stack.length - 1; i >= 0 && named < 0; i--) if (stack[i].label.toLowerCase() === rest) named = i;
+        stack.length = named >= 0 ? named : Math.max(0, stack.length - 1);
+      }
+      prev = 'data';
     }
-    sections[r] = snapshot();
-    if (TOTAL.test(label)) {
-      // "Total India" closes India (and anything inside it); a bare "Total revenue" closes the innermost.
-      const rest = label.replace(TOTAL, '').trim().toLowerCase();
-      const named = rest ? stack.map((x) => x.label.toLowerCase()).lastIndexOf(rest) : -1;
-      stack.length = named >= 0 ? named : Math.max(0, stack.length - 1);
-    }
-    prev = 'data';
   }
+  const sectionsOf = (r: number): string[] => {
+    const out: string[] = [];
+    for (let k = sectionAt[r] ?? -1; k >= 0; k = nodeParent[k]) out.push(nodeLabel[k]);
+    return out.reverse();
+  };
 
-  // Column headings: the nearest block of heading rows above each row.
-  const bandRows: number[][] = new Array(rows.length); // shared arrays per block
-  let current: number[] = header ? [-1] : [];
+  // Column headings: the nearest block of heading rows above each row, as a block id.
+  const blocks: number[][] = [header ? [-1] : []];
+  const blockAt = new Int32Array(n);
+  let current = 0;
   let open: number[] | null = null;
-  for (let r = 0; r < rows.length; r++) {
-    bandRows[r] = current;
-    if (info[r].band) {
+  for (let r = 0; r < n; r++) {
+    blockAt[r] = current;
+    if (band[r]) {
       if (!open) open = [];
       open.push(r);
-    } else if (info[r].data > 0 || info[r].labels.length) {
-      if (open) current = open;
+    } else if (dataCount[r] > 0 || hasLabel(r)) {
+      if (open) {
+        blocks.push(open);
+        current = blocks.length - 1;
+      }
       open = null;
-      bandRows[r] = current;
+      blockAt[r] = current;
     }
   }
   const valueAt = (r: number, c: number): CellValue => (r < 0 ? header![c] ?? null : rows[r][c]);
@@ -252,28 +320,67 @@ function analyse(table: Table, options: LabelOptions) {
     return '';
   };
 
+  const rowLabel = (row: number, col = -1) => {
+    const own: string[] = [];
+    if (row < 0 || row >= n) return own;
+    const cells = rows[row];
+    // Text keys lead the label; a numeric id would read like a row number.
+    for (const k of keyIdx) if (typeof cells[k] === 'string' && hasText(cells[k] as string)) own.push(text(cells[k]));
+    for (let c = Math.max(0, firstLabel[row]); c < zone && own.length < maxCells && firstLabel[row] >= 0; c++) {
+      if (!isLabel(cells[c])) continue;
+      if (c === col && dataCount[row] > 0) continue; // the cell itself isn't its own label
+      const t = text(cells[c]);
+      if (!own.includes(t)) own.push(t);
+    }
+    return own;
+  };
+  const columnHeading = (row: number, col: number) => {
+    const column: string[] = [];
+    let b = row >= 0 && row < n ? blockAt[row] : 0;
+    // Above the first heading rows (or on them), with no header: the headings just below apply.
+    if (!blocks[b].length && b + 1 < blocks.length) b++;
+    const block = blocks[b].slice(-MAX_HEADING_ROWS);
+    block.forEach((br, i) => {
+      const h = heading(br, col, i < block.length - 1);
+      if (h && column[column.length - 1] !== h) column.push(h);
+    });
+    if (!column.length && header && !block.includes(-1)) {
+      const h = text(header[col]);
+      if (h) column.push(h);
+    }
+    return column;
+  };
+  let absorbed: number[] | null = null;
   return {
-    label(row: number, col: number): CellLabel {
-      const ri = info[row];
-      if (!ri) return { sections: [], row: [], column: [] };
-      const own: string[] = [];
-      for (const k of keyIdx) if (!isBlank(rows[row][k])) own.push(text(rows[row][k]));
-      for (const [c, t] of ri.labels) {
-        if (own.length >= maxCells) break;
-        if (c === col && ri.data > 0) continue; // the cell itself isn't its own label
-        if (!own.includes(t)) own.push(t);
-      }
-      const block = bandRows[row].slice(-MAX_HEADING_ROWS);
-      const column: string[] = [];
-      block.forEach((br, i) => {
-        const h = heading(br, col, i < block.length - 1);
-        if (h && column[column.length - 1] !== h) column.push(h);
+    cell: (row: number, col: number): CellLabel => (row >= 0 && row < n ? { sections: sectionsOf(row), row: rowLabel(row, col), column: columnHeading(row, col) } : { sections: [], row: [], column: [] }),
+    row: (row: number): RowLabel => (row >= 0 && row < n ? { sections: sectionsOf(row), row: rowLabel(row), heading: isHeading(row) } : { sections: [], row: [], heading: false }),
+    column: columnHeading,
+    headingRow: (row: number) => row >= 0 && row < n && !!band[row] && !hasLabel(row),
+    labelColumns(): number[] {
+      if (absorbed) return absorbed;
+      // A column every cell of which is blank or one of its row's label cells: the row labels show it.
+      const textKeys = keyIdx.filter((k) => rows.every((r) => isBlank(r[k]) || typeof r[k] === 'string'));
+      const candidates = new Set<number>(keyIdx.length <= maxCells ? textKeys : []);
+      for (let c = 0; c < zone; c++) candidates.add(c);
+      absorbed = [...candidates].filter((c) => {
+        let used = false;
+        const isKey = textKeys.includes(c);
+        for (let r = 0; r < n; r++) {
+          const v = rows[r][c];
+          if (isBlank(v)) continue;
+          used = true;
+          if (isKey) continue;
+          if (!isLabel(v)) return false;
+          // Cheap path: the label holds every key and the first label cells up to maxCells.
+          let before = 0;
+          for (const k of keyIdx) if (typeof rows[r][k] === 'string') before++;
+          for (let x = Math.max(0, firstLabel[r]); x < c; x++) if (!keyIdx.includes(x) && isLabel(rows[r][x])) before++;
+          if (before < maxCells) continue;
+          if (!rowLabel(r).includes(text(v))) return false;
+        }
+        return used;
       });
-      if (!column.length && header && !block.includes(-1)) {
-        const h = text(header[col]);
-        if (h) column.push(h);
-      }
-      return { sections: sections[row], row: own, column };
+      return absorbed;
     },
   };
 }

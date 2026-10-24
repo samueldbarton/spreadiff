@@ -501,6 +501,33 @@ outermost first (`['India']`), the row's label cells (`['Revenue']`) and
 the column headings outermost first (`['Actual', 'Q2']`, or the column
 name). Any can be empty.
 
+### sheetLabels
+
+```ts signature
+sheetLabels(table: Table, options?: LabelOptions): SheetLabels
+```
+
+Every label of a table at once. The layout is analysed when this is called
+(one pass, about 50 ms per 100,000 rows); lookups are cheap after.
+`DiffGrid` and `renderHTML` use it for their headers.
+
+### SheetLabels
+
+| Member | |
+| --- | --- |
+| `cell(row, col): CellLabel` | A cell's labels, as `tableLabeler` gives them |
+| `row(row): RowLabel` | A row's sections and label, and whether it is a section heading |
+| `column(row, col): string[]` | The column headings in force at a row: the nearest heading rows above it, or below for rows above the first, or the header |
+| `headingRow(row): boolean` | The row holds column headings (years, dates or titles) and no label of its own |
+| `labelColumns(): number[]` | Columns whose every non-blank cell is part of its row's label: the row labels show them |
+
+Table coordinates throughout.
+
+### RowLabel
+
+`{ sections, row, heading }`: section headings outermost first, the row's
+label cells, and whether the row is itself a heading.
+
 ### formatLabel
 
 ```ts signature
@@ -647,7 +674,8 @@ The interactive canvas grid; see [The DiffGrid](grid.md) for a guide.
 
 All optional; see the [options table](grid.md#options) for defaults and
 behavior: `layout`, `cellDisplay`, `collapseUnchanged`, `context`,
-`hideUnchangedColumns`, `frozenColumns`, `columnWidths`, `rowNumberOffset`,
+`hideUnchangedColumns`, `frozenColumns`, `columnWidths`, `rowHeaders`,
+`columnHeaders`, `rowHeaderWidth`, `foldLabels`, `rowNumberOffset`,
 `theme`, `minimap`, `tooltips`, `highlightComputed`, `trace`, `traceFocus`,
 `annotations`, `renderAnnotation`, `onCellClick`, `onCellHover`,
 `onSelectionChange`, `accessibility`, `ariaLabel`.
@@ -755,6 +783,9 @@ logs and ```` ```diff ```` blocks. `maxWidth` (default 24) caps column width.
 | `maxRows` | `2000` | Rows of output before truncating |
 | `kindOf` | — | `(row, col) => ChangeKind \| undefined` override |
 | `rowNumberOffset` | from `origin` | Displayed number of row index 0 |
+| `rowHeaders` | `'labels'` | `'labels'` (inferred row labels, or the number when a row has none), `'numbers'` or `'both'` |
+| `columnHeaders` | `'labels'` | `'labels'` (headings), `'letters'` or `'both'` |
+| `foldLabels` | `true` | With labels, leave out unchanged label columns and heading rows |
 
 ### HtmlLayout
 
