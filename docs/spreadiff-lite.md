@@ -31,9 +31,8 @@ It uses the same engine as `spreadiff`, so the
 
 ## Quick start
 
-spreadiff-lite isn't on npm yet; [Getting started → Install](getting-started.md#install)
-builds it from this repository (`npm run build -w spreadiff-lite` after
-the library). Once installed:
+Install it with `npm install spreadiff-lite`, or run it without
+installing:
 
 ```bash
 npx spreadiff-lite model-v1.xlsx model-v2.xlsx            # Markdown to stdout
@@ -312,6 +311,10 @@ const unexpected = report.downstream.filter((c) => c.output && c.sheet === 'Budg
 console.log(toMarkdown(report, { maxRows: 30 }) + (unexpected.length ? `\nAlso moved ${unexpected.length} budget lines.` : ''));
 ```
 
+For coding agents that load skills, [`skills/spreadiff/SKILL.md`](../skills/spreadiff/SKILL.md)
+packages this workflow: when to run it, what to check in the report, and
+the limits to mention. Copy it into the agent's skills directory.
+
 Tips:
 - **Keep it short.** `--outputs-only` (or `intermediate: false`) lists
   only final outputs; `maxRows` caps each table and counts the rest.
@@ -340,6 +343,9 @@ spreadiff-lite OLD NEW [options]
 | `--no-recalc` | Follow formula references instead of recalculating: faster, may over-attribute, no contributions |
 | `--live NAME[,NAME]` | More data-feed functions to treat as inputs, as `Provider:FN,FN` or `FN` |
 | `--tolerance X` | Numbers within X of each other are equal |
+| `--min-change P` | Ignore moves smaller than this share of the number (`0.1%` or `0.001`): a materiality threshold |
+| `--textconv FILE` | Print a workbook as line-per-row text, for git ([Spreadsheets in git](git.md)) |
+| `--git …` | Act as git's diff driver; `spreadiff-lite merge BASE OURS THEIRS` is the merge driver ([Spreadsheets in git](git.md)) |
 
 Exit status: 0 no changes, 1 changes, 2 error.
 

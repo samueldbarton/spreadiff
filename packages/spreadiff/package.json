@@ -1,8 +1,17 @@
 {
   "name": "spreadiff",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Fast, beautiful spreadsheet diffs. Canvas-rendered, virtualized, framework-agnostic.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/samueldbarton/spreadiff.git",
+    "directory": "packages/spreadiff"
+  },
+  "homepage": "https://github.com/samueldbarton/spreadiff#readme",
+  "bugs": {
+    "url": "https://github.com/samueldbarton/spreadiff/issues"
+  },
   "type": "module",
   "sideEffects": [
     "./dist/worker/worker.js"
@@ -68,5 +77,26 @@
     "react-dom": "^18.3.1",
     "typescript": "^5.6.3",
     "vitest": "^3.2.4"
+  },
+  "keywords": [
+    "spreadsheet",
+    "excel",
+    "xlsx",
+    "xlsb",
+    "xls",
+    "ods",
+    "csv",
+    "diff",
+    "canvas",
+    "react",
+    "formula",
+    "review"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }

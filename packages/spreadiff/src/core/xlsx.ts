@@ -1,15 +1,21 @@
 /**
  * A small, fast XLSX reader: cached values, formulas and dates. It does not
  * evaluate formulas or keep styling; for diffing, the stored values are what
- * you want. ~4 KB on top of fflate, versus ~900 KB for a full SheetJS build.
+ * you want. The reader is a few KB on top of fflate; a full SheetJS build is ~900 KB.
  *
  * Elements are found with `indexOf`, never with backtracking regexes, so a
  * malformed or hostile file costs linear time.
  */
 import { unzipSync, strFromU8 } from 'fflate';
-import { columnLabel, uniqueNames } from './csv.js';
-import { formulaRefs, scopedNames } from './formula.js';
+import { columnLabel } from './csv.js';
 import { computeMissingValues } from './recalc.js';
+import { BUILTIN_FORMATS } from './numfmt.js';
+import { attr, decode, decodeRef, eachElement, removeElements, resolvePath, textRuns } from './xml.js';
+import { parseObjects } from './objects.js';
+import { serialToIso } from './serial.js';
+import { rawSheet, tablesFromRaw, type RawSheet } from './sheet.js';
+
+export { applyDecisionsToXlsx, type SkippedDecision } from './xlsx-write.js';
 import type { CellValue, Table, TableDefinition, Workbook } from './types.js';
 
 /** Options for {@link parseXlsx}. */
@@ -59,9 +65,26 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
       f.name === 'xl/styles.xml' ||
       f.name === 'xl/_rels/workbook.xml.rels' ||
       f.name.startsWith('xl/worksheets/') ||
-      f.name.startsWith('xl/tables/'),
+      f.name.startsWith('xl/tables/') ||
+      // Charts and pivot tables (see parseObjects): their links and definitions, not their data.
+      f.name.startsWith('xl/chartsheets/') ||
+      f.name.startsWith('xl/drawings/_rels/') ||
+      /^xl\/charts\/chart\d+\.xml$/.test(f.name) ||
+      f.name.startsWith('xl/pivotTables/') ||
+      /^xl\/pivotCache\/pivotCacheDefinition\d+\.xml$/.test(f.name),
   });
-  const text = (path: string) => (files[path] ? stripPrefixes(strFromU8(files[path])) : '');
+  // Part names are case-insensitive (OPC): some writers name a sheet Sheet1.xml and its links sheet1.xml.rels.
+  let lower: Map<string, string> | null = null;
+  const part = (path: string): Uint8Array | undefined => {
+    if (files[path]) return files[path];
+    lower ??= new Map(Object.keys(files).map((k) => [k.toLowerCase(), k]));
+    const k = lower.get(path.toLowerCase());
+    return k ? files[k] : undefined;
+  };
+  const text = (path: string) => {
+    const f = part(path);
+    return f ? stripPrefixes(strFromU8(f)) : '';
+  };
 
   const workbookXml = text('xl/workbook.xml');
   if (!workbookXml) throw new Error('Not an XLSX file (missing xl/workbook.xml)');
@@ -80,8 +103,10 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
   const stylesXml = text('xl/styles.xml');
   const dateStyles = parseDateStyles(stylesXml);
   const labelStyles = parseLabelStyles(stylesXml);
+  const numberFormats = parseNumberFormats(stylesXml);
 
   const raws: RawSheet[] = [];
+  const sheetParts: { name: string; path: string }[] = [];
   const tables: TableDefinition[] = [];
   const allSheets: string[] = []; // every sheet in workbook order: localSheetId indexes this
   eachElement(workbookXml, 'sheet', (a) => {
@@ -91,16 +116,20 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
     // The relationships prefix is conventionally `r:` but may be anything.
     const rid = attr(a, 'r:id') ?? /\s[\w.-]+:id\s*=\s*["']([^"']*)/.exec(a)?.[1];
     const path = rid ? rels.get(rid) : undefined;
-    if (!path || !files[path]) return;
-    raws.push(parseCells(name, text(path), strings, dateStyles, date1904, labelStyles));
+    if (!path || !part(path)) return;
+    raws.push(parseCells(name, text(path), strings, dateStyles, date1904, labelStyles, numberFormats));
+    sheetParts.push({ name, path });
     // Excel tables on this sheet, for structured references (Sales[Amount]).
     const relsPath = path.replace(/([^/]+)$/, '_rels/$1.rels');
     eachElement(text(relsPath), 'Relationship', (ra) => {
       const target = attr(ra, 'Target');
       if (!target || !/\/table$/.test(attr(ra, 'Type') ?? '')) return;
       const tablePath = resolvePath(path, target);
-      const t = parseTableDefinition(text(tablePath), name);
+      const tableXml = text(tablePath);
+      const t = parseTableDefinition(tableXml, name);
       if (t) tables.push(t);
+      const raw = raws[raws.length - 1];
+      if (raw.hidden.length) raw.filters.push(...activeFilters(tableXml));
     });
   });
   // Defined names (TaxRate → Inputs!$B$2) let formula tracing see through them.
@@ -121,14 +150,7 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
     }
   });
 
-  const header = options.header ?? 'auto';
-  const headers = header === 'auto' ? detectHeaders(raws, names, tables, localNames) : raws.map(() => header);
-  const sheets = raws.map((r, i) => {
-    const t = buildTable(r, headers[i], header === 'auto');
-    const own = localNames.get(r.name);
-    if (own) t.names = own;
-    return t;
-  });
+  const sheets = tablesFromRaw(raws, options.header ?? 'auto', names, tables, localNames);
   const workbook: Workbook = {
     name: options.name ?? 'workbook.xlsx',
     sheets,
@@ -136,6 +158,9 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
     ...(Object.keys(names).length ? { names } : {}),
     ...(tables.length ? { tables } : {}),
   };
+  const { charts, pivots } = parseObjects(text, sheetParts);
+  if (charts.length) workbook.charts = charts;
+  if (pivots.length) workbook.pivots = pivots;
   if (options.computeMissing !== false) {
     const m = computeMissingValues(workbook);
     if (m.computed || m.failed) workbook.computedValues = m;
@@ -144,16 +169,6 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
 }
 
 /** `xl/worksheets/sheet1.xml` + `../tables/table1.xml` → `xl/tables/table1.xml`. */
-function resolvePath(from: string, target: string): string {
-  if (target.startsWith('/')) return target.slice(1);
-  const parts = from.split('/').slice(0, -1);
-  for (const seg of target.split('/')) {
-    if (seg === '..') parts.pop();
-    else if (seg !== '.') parts.push(seg);
-  }
-  return parts.join('/');
-}
-
 function parseTableDefinition(xml: string, sheet: string): TableDefinition | null {
   let def: TableDefinition | null = null;
   eachElement(xml, 'table', (a) => {
@@ -175,185 +190,9 @@ function parseTableDefinition(xml: string, sheet: string): TableDefinition | nul
   return d;
 }
 
-/**
- * Decide, per sheet, whether its first row is a header: all text, no
- * formulas, and not read by any formula in the workbook. A model's first
- * row often holds inputs; treating them as column names would hide edits
- * to them and every change they cause.
- */
-function detectHeaders(raws: RawSheet[], names: Record<string, string>, tables: TableDefinition[], localNames: Map<string, Record<string, string>>): boolean[] {
-  const candidate = new Map<string, number>(); // sheet name (upper) → index
-  const result = raws.map((r, i) => {
-    const ok = headerLike(r);
-    if (ok) candidate.set(r.name.toUpperCase(), i);
-    return ok;
-  });
-  if (!candidate.size) return result;
-  const sheets = raws.map((r) => r.name);
-  // Only formulas that could read a candidate row need tokenizing: a
-  // reference to sheet row n spells it after a column letter or $ (A1, $B$1,
-  // A1:A9) or as a row range (1:1). Names and structured references can
-  // hide it, so formulas that may use them are always read. Tokenizing every
-  // formula made parsing 2× slower on a 10,000-formula model.
-  // A range covering row n starts at n or above, so every row number up to
-  // the lowest candidate counts; past 64 of them, read everything.
-  const top = Math.max(...[...candidate.values()].map((i) => raws[i].first + 1));
-  const rowNumbers = Array.from({ length: top }, (_, i) => i + 1).join('|');
-  const spells = top <= 64 ? new RegExp(`(?:[A-Za-z$](?:${rowNumbers})(?!\\d))|(?:(?:^|[^\\w.$])\\$?(?:${rowNumbers}):)`) : /./;
-  const nameList = [...Object.keys(names), ...[...localNames.values()].flatMap((m) => Object.keys(m))].map((n) => n.toUpperCase());
-  const scoped = raws.map((r) => (localNames.size ? scopedNames(names, raws.map((x) => ({ name: x.name, names: localNames.get(x.name) })), r.name) : names));
-  const mayHide = (f: string) => f.includes('[') || (nameList.length > 0 && (nameList.length > 64 || nameList.some((n) => f.toUpperCase().includes(n))));
-  raws.forEach((r, ri) => {
-    for (let row = 0; row < r.formulaGrid.length && candidate.size; row++) {
-      const fr = r.formulaGrid[row];
-      if (!fr) continue;
-      for (const f of fr) {
-        if (!f) continue;
-        if (!spells.test(f) && !mayHide(f)) continue;
-        for (const rg of formulaRefs(f, scoped[ri], { tables, row, sheets }).ranges) {
-          const key = (rg.sheet ?? r.name).toUpperCase();
-          const i = candidate.get(key);
-          if (i === undefined || rg.r0 < 0) continue; // whole columns (A:A) don't single out the header
-          const first = raws[i].first;
-          if (rg.r0 <= first && first <= rg.r1) {
-            result[i] = false;
-            candidate.delete(key);
-          }
-        }
-        if (!candidate.size) break;
-      }
-    }
-  });
-  return result;
-}
-
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}/;
-
-function headerLike(r: RawSheet): boolean {
-  if (r.maxCol < 0) return false;
-  const row = r.grid[r.first];
-  if (r.formulaGrid[r.first]?.some(Boolean)) return false;
-  let n = 0;
-  for (let c = r.minCol; c <= r.maxCol; c++) {
-    const v = row?.[c];
-    if (v === null || v === undefined || v === '') continue;
-    // Whole years next to labels are column names (Region | 2023 | 2024);
-    // a formula reading them still makes the row data (detectHeaders).
-    if (isYear(v)) continue;
-    // Other numbers, booleans and dates make it a data row.
-    if (typeof v !== 'string' || ISO_DATE.test(v)) return false;
-    n++;
-  }
-  return n > 0;
-}
-
-const isYear = (v: unknown) => typeof v === 'number' && Number.isInteger(v) && v >= 1900 && v <= 2100;
-
-/** Drop namespace prefixes (`<x:c>` → `<c>`), as written by e.g. the OpenXML SDK. */
 function stripPrefixes(xml: string): string {
   if (!/<[A-Za-z_][\w.-]*:(?:workbook|worksheet|sst|styleSheet|Relationships)\b/.test(xml.slice(0, 4096))) return xml;
   return xml.replace(/<(\/?)[A-Za-z_][\w.-]*:/g, '<$1');
-}
-
-/**
- * Call `fn(attrs, body)` for each `<tag …>body</tag>` or `<tag …/>` in
- * `xml`. Stops at the first unclosed element instead of rescanning.
- */
-function eachElement(xml: string, tag: string, fn: (attrs: string, body: string | null) => void): void {
-  const open = `<${tag}`;
-  const close = `</${tag}>`;
-  let i = xml.indexOf(open);
-  while (i >= 0) {
-    const next = xml.charCodeAt(i + open.length);
-    // Must be the whole tag name: followed by whitespace, '>' or '/'.
-    if (next !== 62 && next !== 47 && next !== 32 && next !== 9 && next !== 10 && next !== 13) {
-      i = xml.indexOf(open, i + 1);
-      continue;
-    }
-    const gt = xml.indexOf('>', i);
-    if (gt < 0) return;
-    if (xml.charCodeAt(gt - 1) === 47) {
-      fn(xml.slice(i + open.length, gt - 1), null);
-      i = xml.indexOf(open, gt + 1);
-      continue;
-    }
-    const end = xml.indexOf(close, gt + 1);
-    if (end < 0) return;
-    fn(xml.slice(i + open.length, gt), xml.slice(gt + 1, end));
-    i = xml.indexOf(open, end + close.length);
-  }
-}
-
-/** Concatenated text of every `<t>` in `body`, skipping phonetic `<rPh>` runs. */
-function textRuns(body: string): string {
-  let s = '';
-  const clean = body.indexOf('<rPh') < 0 ? body : removeElements(body, 'rPh');
-  eachElement(clean, 't', (_, b) => {
-    if (b) s += b;
-  });
-  return decode(s);
-}
-
-function removeElements(xml: string, tag: string): string {
-  let out = '';
-  let pos = 0;
-  const open = `<${tag}`;
-  const close = `</${tag}>`;
-  for (;;) {
-    const i = xml.indexOf(open, pos);
-    if (i < 0) break;
-    const end = xml.indexOf(close, i);
-    if (end < 0) break;
-    out += xml.slice(pos, i);
-    pos = end + close.length;
-  }
-  return out + xml.slice(pos);
-}
-
-/** Attribute value by name; accepts either quote style and any whitespace. */
-function attr(attrs: string, name: string): string | undefined {
-  let i = attrs.indexOf(name);
-  while (i >= 0) {
-    const before = attrs.charCodeAt(i - 1);
-    let j = i + name.length;
-    if (before === 32 || before === 9 || before === 10 || before === 13) {
-      while (attrs.charCodeAt(j) === 32) j++;
-      if (attrs.charCodeAt(j) === 61) {
-        j++;
-        while (attrs.charCodeAt(j) === 32) j++;
-        const q = attrs[j];
-        if (q === '"' || q === "'") {
-          const end = attrs.indexOf(q, j + 1);
-          if (end >= 0) return attrs.slice(j + 1, end);
-        }
-      }
-    }
-    i = attrs.indexOf(name, i + 1);
-  }
-  return undefined;
-}
-
-const ENTITY = /&(amp|lt|gt|quot|apos|#x[0-9a-fA-F]+|#\d+);/g;
-function decode(s: string): string {
-  // XML parsers must read a literal CR LF (or lone CR) as LF; an escaped
-  // &#13; survives. Excel writes CR LF, LibreOffice LF, for the same text.
-  if (s.indexOf('\r') >= 0) s = s.replace(/\r\n?/g, '\n');
-  // Excel escapes control characters in text as _xHHHH_ (OOXML ST_Xstring).
-  if (s.indexOf('_x') >= 0) s = s.replace(/_x([0-9A-Fa-f]{4})_/g, (_, h: string) => String.fromCharCode(parseInt(h, 16)));
-  if (s.indexOf('&') < 0) return s;
-  return s.replace(ENTITY, (all, e: string) => {
-    switch (e) {
-      case 'amp': return '&';
-      case 'lt': return '<';
-      case 'gt': return '>';
-      case 'quot': return '"';
-      case 'apos': return "'";
-      default: {
-        const cp = e[1] === 'x' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
-        return cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : all;
-      }
-    }
-  });
 }
 
 function parseSharedStrings(xml: string): string[] {
@@ -362,7 +201,8 @@ function parseSharedStrings(xml: string): string[] {
   return out;
 }
 
-const BUILTIN_DATE_FORMATS = new Set([14, 15, 16, 17, 18, 19, 20, 21, 22, 45, 46, 47]);
+// 27-36 and 50-58: the built-in dates and times of East Asian Excel.
+const BUILTIN_DATE_FORMATS = new Set([14, 15, 16, 17, 18, 19, 20, 21, 22, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 45, 46, 47, 50, 51, 52, 53, 54, 55, 56, 57, 58]);
 
 /** Set of cellXfs indices whose number format renders as a date/time. */
 function parseDateStyles(xml: string): Set<number> {
@@ -382,6 +222,25 @@ function parseDateStyles(xml: string): Set<number> {
     let i = 0;
     eachElement(body ?? '', 'xf', (a) => {
       if (isDate(Number(attr(a, 'numFmtId') ?? 0))) out.add(i);
+      i++;
+    });
+  });
+  return out;
+}
+
+/** cellXfs index → number format code, for styles with a format other than General. */
+function parseNumberFormats(xml: string): Map<number, string> {
+  const custom = new Map<number, string>();
+  eachElement(xml, 'numFmt', (a) => {
+    custom.set(Number(attr(a, 'numFmtId')), decode(attr(a, 'formatCode') ?? ''));
+  });
+  const out = new Map<number, string>();
+  eachElement(xml, 'cellXfs', (_, body) => {
+    let i = 0;
+    eachElement(body ?? '', 'xf', (a) => {
+      const id = Number(attr(a, 'numFmtId') ?? 0);
+      const code = custom.get(id) ?? BUILTIN_FORMATS[id];
+      if (code && !/^general$/i.test(code)) out.set(i, code);
       i++;
     });
   });
@@ -408,32 +267,6 @@ function parseLabelStyles(xml: string): Map<number, { indent?: number; bold?: bo
     });
   });
   return out;
-}
-
-/** Excel serial → ISO date/time, or null when it isn't a representable date. */
-function serialToIso(serial: number, date1904: boolean): string | null {
-  if (!Number.isFinite(serial) || serial < 0 || serial > 2958465) return null; // > 9999-12-31
-  // Excel's 1900 system pretends 1900-02-29 existed (serial 60); serials
-  // below it are one day later than the naive conversion.
-  const s = date1904 ? serial + 1462 : serial < 60 ? serial + 1 : serial;
-  const ms = Math.round((s - 25569) * 86400000);
-  const iso = new Date(ms).toISOString();
-  if (Number.isInteger(serial)) return iso.slice(0, 10);
-  // Milliseconds only when there are some: "04:05:06.009", else "04:05:06".
-  const frac = iso.slice(19, 23) === '.000' ? '' : iso.slice(19, 23).replace(/0+$/, '');
-  if (serial < 1) return iso.slice(11, 19) + frac;
-  return `${iso.slice(0, 10)} ${iso.slice(11, 19)}${frac}`;
-}
-
-function decodeRef(ref: string): [row: number, col: number] {
-  let col = 0;
-  let i = 0;
-  for (; i < ref.length; i++) {
-    const c = ref.charCodeAt(i);
-    if (c < 65 || c > 90) break;
-    col = col * 26 + (c - 64);
-  }
-  return [Number(ref.slice(i)) - 1, col - 1];
 }
 
 /** Shift relative A1 references in a shared formula by a row/column offset. */
@@ -475,24 +308,31 @@ function shiftFormula(formula: string, dRow: number, dCol: number): string {
   );
 }
 
-interface RawSheet {
-  name: string;
-  grid: CellValue[][];
-  formulaGrid: (string | null)[][];
-  minCol: number;
-  maxCol: number;
-  /** First non-empty row. */
-  first: number;
-  /** Array-formula blocks (sheet coordinates). */
-  arrays: { r0: number; c0: number; r1: number; c1: number }[];
-  /** Merged ranges (sheet coordinates). */
-  merges: { r0: number; c0: number; r1: number; c1: number }[];
-  /** Indented or bold text cells (sheet coordinates). */
-  labelStyles: NonNullable<Table['labelStyles']>;
+function activeFilters(xml: string): { r0: number; r1: number }[] {
+  const out: { r0: number; r1: number }[] = [];
+  eachElement(xml, 'autoFilter', (a, body) => {
+    const ref = attr(a, 'ref');
+    if (!ref || !body || !/<(?:\w+:)?filterColumn\b/.test(body)) return;
+    const [from, to = from] = ref.split(':');
+    out.push({ r0: decodeRef(from)[0] + 1, r1: decodeRef(to)[0] });
+  });
+  return out;
 }
 
-function parseCells(name: string, xml: string, strings: string[], dateStyles: Set<number>, date1904: boolean, labelStyles: Map<number, { indent?: number; bold?: boolean }>): RawSheet {
+function parseCells(
+  name: string,
+  xml: string,
+  strings: string[],
+  dateStyles: Set<number>,
+  date1904: boolean,
+  labelStyles: Map<number, { indent?: number; bold?: boolean }>,
+  numberFormats: Map<number, string>,
+): RawSheet {
   const styled: NonNullable<Table['labelStyles']> = [];
+  // Format codes, numbered from 1 in order of first use; per cell, the code's number.
+  const codes: string[] = [''];
+  const codeIds = new Map<string, number>();
+  const fmtGrid: number[][] = [];
   const grid: CellValue[][] = [];
   const formulaGrid: (string | null)[][] = [];
   const shared = new Map<string, { formula: string; row: number; col: number }>();
@@ -502,10 +342,13 @@ function parseCells(name: string, xml: string, strings: string[], dateStyles: Se
   let minCol = Infinity;
   let maxCol = -1;
   let implicitRow = 0;
+  const hidden: number[] = [];
   eachElement(xml, 'row', (rowAttrs, rowBody) => {
     const rAttr = attr(rowAttrs, 'r');
     const r = rAttr ? Number(rAttr) - 1 : implicitRow;
     implicitRow = r + 1;
+    const h = attr(rowAttrs, 'hidden');
+    if ((h === '1' || h === 'true') && r >= 0) hidden.push(r);
     if (!rowBody || !(r >= 0)) return;
     let implicitCol = 0;
     eachElement(rowBody, 'c', (attrs, cellBody) => {
@@ -578,6 +421,22 @@ function parseCells(name: string, xml: string, strings: string[], dateStyles: Se
       }
       (grid[r] ??= [])[c] = value;
       if (formula !== null) (formulaGrid[r] ??= [])[c] = '=' + formula;
+      if (numberFormats.size && value !== null && typeof value !== 'boolean') {
+        const code = numberFormats.get(Number(attr(attrs, 's') ?? 0));
+        // Text cells only matter with a text section (`;;;@` or `"Re: "@`).
+        if (code && (typeof value !== 'string' || dateStyles.has(Number(attr(attrs, 's'))) || code.includes('@'))) {
+          let id = codeIds.get(code);
+          if (id === undefined) {
+            id = codes.length;
+            if (id > 0xffff) id = 0; // more distinct codes than a Uint16 holds: the rest show as General
+            else {
+              codes.push(code);
+              codeIds.set(code, id);
+            }
+          }
+          if (id) (fmtGrid[r] ??= [])[c] = id;
+        }
+      }
       if (c < minCol) minCol = c;
       if (c > maxCol) maxCol = c;
     });
@@ -611,63 +470,18 @@ function parseCells(name: string, xml: string, strings: string[], dateStyles: Se
   });
   let first = 0;
   while (first < grid.length && !grid[first]) first++;
-  return { name, grid, formulaGrid, minCol, maxCol, first, arrays, merges, labelStyles: styled };
-}
-
-/**
- * A first row of labels that 'auto' kept as data (formulas read it, or a
- * parameter sits among the labels): mostly text, at least two labels.
- */
-function labelRow(r: RawSheet): boolean {
-  const row = r.grid[r.first];
-  let text = 0;
-  let filled = 0;
-  for (let c = r.minCol; c <= r.maxCol; c++) {
-    const v = row?.[c];
-    if (v === null || v === undefined || v === '') continue;
-    filled++;
-    if (typeof v === 'string' && !ISO_DATE.test(v) && !r.formulaGrid[r.first]?.[c]) text++;
-  }
-  return text >= 2 && text * 2 >= filled;
-}
-
-function buildTable(raw: RawSheet, header: boolean, auto = false): Table {
-  const { name, grid, formulaGrid, minCol, maxCol, first, arrays, merges, labelStyles } = raw;
-  if (maxCol < 0) return { name, columns: [], rows: [], formulas: [], origin: { row: 0, col: 0 }, ...(merges.length ? { merges } : {}) };
-  const width = maxCol - minCol + 1;
-  const dense = <T,>(src: (T | null)[] | undefined): (T | null)[] => {
-    const out = new Array<T | null>(width);
-    for (let c = 0; c < width; c++) out[c] = src?.[minCol + c] ?? null;
-    return out;
-  };
-  // A row of labels kept as data still names the columns, so key detection
-  // and the grid see "id", "price" rather than A, B: it stays a data row too.
-  const columns = header
-    ? uniqueNames(dense(grid[first]).map((v) => (v === null ? '' : String(v))))
-    : auto && labelRow(raw)
-      ? uniqueNames(dense(grid[first]).map((v, c) => (typeof v === 'string' && v.trim() && !formulaGrid[first]?.[minCol + c] ? v : columnLabel(minCol + c))))
-      : Array.from({ length: width }, (_, c) => columnLabel(minCol + c));
-  const start = header ? first + 1 : first;
-  const rows: CellValue[][] = [];
-  // Formulas are always present (sparse) for XLSX, so a formula replaced by
-  // a constant counts as a change.
-  const formulas: (string | null)[][] = [];
-  for (let r = start; r < grid.length; r++) {
-    rows.push(dense(grid[r]));
-    if (formulaGrid[r]) formulas[r - start] = dense(formulaGrid[r]);
-  }
-  // Trim trailing empty rows (rows holding only a formula are not empty).
-  while (rows.length && !formulas[rows.length - 1] && rows[rows.length - 1].every((v) => v === null)) rows.pop();
-  formulas.length = Math.min(formulas.length, rows.length);
   return {
     name,
-    columns,
-    rows,
-    formulas,
-    origin: { row: start, col: minCol },
-    ...(header ? { header: dense(grid[first]) } : {}),
-    ...(arrays.length ? { arrays } : {}),
-    ...(merges.length ? { merges } : {}),
-    ...(labelStyles.length ? { labelStyles } : {}),
+    grid,
+    formulaGrid,
+    minCol,
+    maxCol,
+    first,
+    arrays,
+    merges,
+    labelStyles: styled,
+    formats: codes.length > 1 ? { codes, grid: fmtGrid, date1904 } : undefined,
+    hidden,
+    filters: hidden.length ? activeFilters(xml) : [],
   };
 }

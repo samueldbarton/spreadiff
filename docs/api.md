@@ -6,10 +6,10 @@ from several entry points: import from the smallest one that has it.
 | Entry point | Contents |
 | --- | --- |
 | `spreadiff` | Everything below except React, the HTML renderer and the worker client |
-| `spreadiff/core` | Diffing, parsing (CSV, XLSX), tracing, formulas, transfer, utilities. No DOM |
+| `spreadiff/core` | Comparing, diffing, parsing (XLSX, XLSB, XLS, ODS, CSV), tracing, formulas, number formats, review and merge, transfer, utilities. No DOM |
 | `spreadiff/html` | `diffTables`, `parseCsv`, text utilities, and the HTML/text renderers |
-| `spreadiff/xlsx` | `parseXlsx` only |
-| `spreadiff/react` | The `DiffGrid` React component and its types |
+| `spreadiff/xlsx` | `parseXlsx`, and `applyDecisionsToXlsx` for writing a reviewed file |
+| `spreadiff/react` | The `SpreadsheetDiff` and `DiffGrid` React components and their types |
 | `spreadiff/worker` | `createDiffWorker` and its types |
 | `spreadiff/worker/worker.js` | The worker script itself (load it with `new Worker`) |
 | `spreadiff-lite` | A separate package: `compare`, `toMarkdown`, `summarize` and the report types ([below](#spreadiff-lite)) |
@@ -21,6 +21,76 @@ Coordinates used throughout:
 
 All indexes are 0-based. Display row numbers (2, 3, …) are derived from
 `Table.origin`.
+
+---
+
+## Comparing files
+
+The short path: two files in, every sheet diffed and traced, each sheet
+ready for a grid. See [Getting started](getting-started.md).
+
+### diffFiles
+
+```ts signature
+diffFiles(oldInput: SpreadsheetInput, newInput: SpreadsheetInput, options?: DiffFilesOptions): Promise<Comparison>
+```
+
+Read both inputs (fetching URLs, reading Blobs), parse them by content,
+diff every sheet and, when either has formulas, trace downstream changes.
+With `worker`, the parsing, diffing and tracing run in a Web Worker.
+
+```ts
+import { diffFiles, DiffGrid } from 'spreadiff';
+declare const container: HTMLElement;
+
+const cmp = await diffFiles(new URL('/v1.xlsx', location.href), new URL('/v2.xlsx', location.href));
+new DiffGrid().render({ sheet: cmp.sheets[cmp.firstChanged], container });
+```
+
+### compareWorkbooks
+
+```ts signature
+compareWorkbooks(a: Workbook | Table, b: Workbook | Table, options?: CompareOptions): Comparison
+```
+
+The same, synchronously, for workbooks or tables you already have.
+
+### SpreadsheetInput
+
+`Blob | URL | ArrayBuffer | Uint8Array | { name, data } | Workbook | Table`.
+`File` is a `Blob`. `{ name, data }` takes bytes, or text for CSV. Bytes are
+parsed by content, so a missing or wrong extension still works.
+
+### DiffFilesOptions
+
+| Field | Type | Default | |
+| --- | --- | --- | --- |
+| `diff` | `DiffOptions` | | How to match rows and compare cells |
+| `parse` | `ParseFileOptions` | | `header`, `delimiter`; ignored for parsed inputs |
+| `trace` | `boolean \| 'auto' \| TraceOptions` | `'auto'` | Trace downstream changes; `'auto'` traces when either side has formulas |
+| `worker` | `DiffWorker \| (() => Worker)` | none | Run in a worker: a client from `createDiffWorker`, or a function that creates the `Worker` on first use |
+| `signal` | `AbortSignal` | | Abort fetching URL inputs |
+
+`compareWorkbooks` takes the first three (its `CompareOptions`).
+
+### Comparison
+
+| Field | Type | |
+| --- | --- | --- |
+| `names` | `{ old, new }` | File names |
+| `workbook` | `WorkbookDiff` | The workbook diff |
+| `trace` | `WorkbookTrace \| null` | Null when not traced |
+| `sheets` | `SheetView[]` | One per sheet, in `workbook.sheets` order |
+| `firstChanged` | `number` | The first sheet with a change (0 if none) |
+| `report()` | `ChangeReport` | Every change with its causes and contributions, built on first call (the same report as `spreadiff-lite`'s [`compare`](#compare)) |
+| `timings` | `{ parse, diff, trace }` | Milliseconds |
+
+### SheetView
+
+A `SheetDiff` plus `index` (its position in `sheets`) and `trace` (a
+`TraceContext` bound to this sheet, or undefined). Pass it to
+`DiffGrid.render({ sheet, container })`: the grid finds the sheet's trace
+by the diff itself, so a sheet can't be shown with another sheet's trace.
 
 ---
 
@@ -86,6 +156,7 @@ Options for `diffTables` and `diffWorkbooks`.
 | `compareFormulas` | `boolean` | `true` | Count formula-meaning changes (when both sides have formulas) |
 | `rowSimilarity` | `number` | `0.5` | Share of equal non-formula cells needed to pair a removed and an added row as modified |
 | `detectRenames` | `boolean` | `true` | Pair look-alike removed/added columns (≥ 80% matching values) as renames |
+| `relativeTolerance` | `number` | `0` | Numbers within this fraction of the larger are equal: `0.001` ignores moves under 0.1%. A materiality threshold: such changes aren't changes anywhere (stats, grid, tracing) |
 
 ### TableDiff
 
@@ -161,6 +232,7 @@ of added/removed rows and columns aren't included. `rowsMoved` overlaps
 | `tables` | `{ old?, new? }?` | `TableDefinition`s of each workbook, for structured references |
 | `date1904` | `{ old?, new? }?` | Each workbook's date system, for recalculation |
 | `computedValues` | `{ old?, new? }?` | Each workbook's `computedValues` |
+| `objects` | `ObjectChange[]?` | Changes to defined names, charts and pivot tables; absent when none (see [`diffWorkbookObjects`](#diffworkbookobjects)) |
 
 ---
 
@@ -185,6 +257,8 @@ strings: `"2026-01-31"`, `"2026-01-31 14:05:00"` or `"14:05:00"`.
 | `arrays` | `{ r0, c0, r1, c1 }[]?` | Array-formula and spill blocks, 0-based inclusive sheet coordinates. Every cell of a block holds the block's formula |
 | `labelStyles` | `{ r, c, indent?, bold? }[]?` | Indented or bold text cells, 0-based sheet coordinates. The XLSX reader fills it; row labels use it to nest sections |
 | `merges` | `{ r0, c0, r1, c1 }[]?` | Merged ranges, 0-based inclusive sheet coordinates. The value is in the top-left cell. `DiffGrid` draws an unchanged horizontal merge as one cell |
+| `numberFormats` | `{ codes, rows, date1904? }?` | Excel number formats: `rows[r][c]` (a `Uint16Array` per row, parallel to `rows`) indexes `codes`; 0 is General. See [`displayValue`](#displayvalue) |
+| `hiddenRows` | `{ rows, filtered }?` | Hidden sheet rows (0-based, ascending); `filtered` are those an active filter hid. `SUBTOTAL` skips them as Excel does |
 | `names` | `Record<string, string>?` | Defined names scoped to this sheet. Its formulas see them over `Workbook.names`; other sheets reach them as `Sheet!Name`. See `scopedNames` |
 
 Build tables by hand when your data isn't a file:
@@ -210,6 +284,8 @@ const d = diffTables(toTable([{ sku: 'A1', qty: 3 }]), toTable([{ sku: 'A1', qty
 | `tables` | `TableDefinition[]?` | Excel tables, to resolve structured references (`Sales[Amount]`) |
 | `date1904` | `boolean?` | Dates count from 1904-01-01 (old Mac Excel) |
 | `computedValues` | `MissingValues?` | Set when formulas without cached values were computed on parsing |
+| `charts` | `ChartInfo[]?` | Charts (XLSX reader only) |
+| `pivots` | `PivotInfo[]?` | Pivot tables (XLSX reader only) |
 
 ### TableDefinition
 
@@ -234,12 +310,14 @@ An Excel table (*Insert → Table*), as structured references see it.
 parseFile(name: string, data: ArrayBuffer | Uint8Array, options?: ParseFileOptions): Workbook
 ```
 
-Parse a file by content and name:
-- zip content → XLSX;
-- `.tsv` → tab-delimited;
-- otherwise → CSV, decoded as UTF-8, or UTF-16 when it has a byte-order mark.
+Parse a file by its content:
+- a zip: `.xlsx`/`.xlsm`, `.xlsb` (it holds `xl/workbook.bin`) or `.ods` (its `mimetype` says so);
+- a compound file: `.xls` (Excel 97-2003). A password-protected workbook of
+  any kind is one too, and throws a "password-protected" error;
+- otherwise text: CSV (`.tsv` names are tab-delimited), decoded as UTF-8, or
+  UTF-16 when it has a byte-order mark.
 
-Throws for legacy `.xls` files and for files named `.xlsx` that aren't zips.
+Throws for files named `.xlsx`, `.xlsb`, `.xls` or `.ods` that are none of these.
 
 ### ParseFileOptions
 
@@ -308,6 +386,53 @@ From `spreadiff`, `spreadiff/core`, `spreadiff/xlsx`.
 | `sheets` | `string[]` | all | Only parse these sheets |
 | `name` | `string` | `'workbook.xlsx'` | Workbook name |
 | `computeMissing` | `boolean` | `true` | Compute formulas the file has no value for (files from openpyxl and other tools that don't calculate) |
+
+### parseXlsb
+
+```ts signature
+parseXlsb(data: ArrayBuffer | Uint8Array, options?: ParseXlsbOptions): Workbook
+```
+
+Read an Excel binary workbook (`.xlsb`): what `parseXlsx` reads, from the
+binary parts. Formulas are decoded from their tokens, shared and array
+formulas included. Not read: structured references to tables (those cells
+keep their values, without a formula), charts and pivot tables.
+
+### ParseXlsbOptions
+
+`{ name?: string; header?: boolean | 'auto' }`, as for `parseXlsx`.
+
+### parseXls
+
+```ts signature
+parseXls(data: ArrayBuffer | Uint8Array, options?: ParseXlsOptions): Workbook
+```
+
+Read an Excel 97-2003 workbook (`.xls`, BIFF8): values, formulas (decoded
+from their tokens: shared, array and data-table formulas, 3-D and
+external references), dates, number formats, merged cells, hidden rows and
+defined names. Excel 5 and older files throw.
+
+### ParseXlsOptions
+
+`{ name?: string; header?: boolean | 'auto' }`, as for `parseXlsx`.
+
+### parseOds
+
+```ts signature
+parseOds(data: ArrayBuffer | Uint8Array, options?: ParseOdsOptions): Workbook
+```
+
+Read an OpenDocument spreadsheet (`.ods`): values, formulas (converted from
+OpenFormula to Excel syntax), merged cells, hidden and filtered rows and
+named ranges. Number formats aren't read.
+
+### ParseOdsOptions
+
+`{ name?: string; header?: boolean | 'auto' }`, as for `parseXlsx`.
+
+How closely the readers agree with LibreOffice reading the same files is
+measured in [Reading other formats](formats.md).
 
 ### computeMissingValues
 
@@ -644,6 +769,277 @@ formulas by meaning.
 
 ---
 
+## Number formats
+
+Showing values as the sheet shows them. The format language is Excel's,
+in the en-US locale.
+
+### displayValue
+
+```ts signature
+displayValue(v: CellValue | undefined, code: string | undefined, date1904?: boolean): string
+```
+
+A value as a cell with this format code shows it: `0.123` with `0.0%` is
+`12.3%`, `"2024-01-01"` (dates are ISO text) with `d-mmm-yy` is
+`1-Jan-24`. Falls back to `formatCell` with no code, or one it can't apply.
+
+### displayCell
+
+```ts signature
+displayCell(table: Table, row: number, col: number): string
+```
+
+`displayValue` with the cell's own code from `table.numberFormats`.
+
+### formatCodeAt
+
+```ts signature
+formatCodeAt(table: Table, row: number, col: number): string | undefined
+```
+
+A cell's format code (`'#,##0.00'`), or undefined for General or none.
+
+### displayMagnitude
+
+```ts signature
+displayMagnitude(abs: number, code: string | undefined): string
+```
+
+The size of a change in the cell's format (`$1,200` for `$#,##0`),
+unsigned. Percentages change in points (`1.2 pp`). Dates, times and changes
+too small for the format to show stay plain numbers.
+
+### formatNumberCode
+
+```ts signature
+formatNumberCode(v: number, code: string, date1904?: boolean, general?: (n: number) => string): string | null
+```
+
+Format a number with a format code: sections and conditions
+(`[>=1000]`), colors, literals, `_` and `*` spacing, thousands and scaling
+commas, `%`, scientific and engineering notation, fractions (`# ?/?`), dates
+and times (including elapsed `[h]:mm`), and the 1900 and 1904 date systems.
+Null for a code it doesn't understand, so you can fall back. The engine's
+`TEXT` uses it.
+
+### formatTextCode
+
+```ts signature
+formatTextCode(v: string, code: string): string | null
+```
+
+Format text with a code's text section (the fourth, or a lone one with
+`@`); null when none applies.
+
+### isDateFormat
+
+```ts signature
+isDateFormat(code: string): boolean
+```
+
+Whether a code shows numbers as dates or times (by its first section).
+
+### BUILTIN_FORMATS
+
+The format codes Excel stores by number instead of text (`14` →
+`m/d/yyyy`), including the East Asian date formats (27–36, 50–58, shown
+in their Japanese forms).
+
+---
+
+## Workbook objects
+
+### diffWorkbookObjects
+
+```ts signature
+diffWorkbookObjects(a: Workbook, b: Workbook): ObjectChange[]
+```
+
+Changes to defined names, charts and pivot tables. `diffWorkbooks` puts
+them in `WorkbookDiff.objects`. Charts pair by sheet and title (then
+position), pivots by sheet and name. References are compared as written:
+a chart whose range moved because rows were inserted shows as changed.
+The XLSX reader fills `Workbook.charts` and `Workbook.pivots`; the other
+readers don't read charts or pivot tables.
+
+### ObjectChange
+
+`{ kind: 'name' | 'chart' | 'pivot'; change: 'added' | 'removed' | 'modified'; name: string; details: string[] }`:
+`details` says what changed, one line each (a name's `Inputs!$B$2 → Inputs!$B$3`, a pivot's `source: Data!$A$1:$D$90 → Data!$A$1:$D$120`).
+
+### ChartInfo
+
+`{ sheet, title, types, series: { name?, categories?, values? }[] }`: a
+chart as read from the file; `types` are its plot types (`bar`, `line`).
+
+### PivotInfo
+
+`{ sheet, name, location, source, values }`: a pivot table, where it sits,
+the range it summarizes and its value fields.
+
+---
+
+## Review
+
+Accepting and rejecting changes. A decision applies to an edit (a value or
+formula someone changed, or data from outside), an added or removed row,
+or an added, removed or renamed column. Downstream results aren't decided:
+they follow their inputs. See [Reviewing changes](review.md).
+
+### Decision
+
+`'accept' | 'reject'`
+
+### SheetDecisions
+
+`{ cells, rows, columns }`: `Map`s from a cell key (`row *
+diff.columns.length + col`), an aligned row, or a column index to a
+`Decision`. Anything not listed is accepted.
+
+### noDecisions
+
+```ts signature
+noDecisions(): SheetDecisions
+```
+
+Empty decisions: everything accepted.
+
+### isDecidable
+
+```ts signature
+isDecidable(diff: TableDiff, row: number, col: number): boolean
+```
+
+Whether a changed cell is a decision to make (an edit), rather than a result.
+
+### decideRange
+
+```ts signature
+decideRange(diff: TableDiff, decisions: SheetDecisions, rows: number[], columns: number[], decision: Decision | undefined): SheetDecisions
+```
+
+Decide every change in a block (a `GridRange`'s `rows` and `columns`):
+its edits and its added or removed rows. Returns new decisions;
+`undefined` clears them.
+
+### decisionOf
+
+```ts signature
+decisionOf(diff: TableDiff, decisions: SheetDecisions | undefined, row: number, col: number): Decision
+```
+
+How a cell was decided, through its row or column decision if it has one.
+
+### decisionStats
+
+```ts signature
+decisionStats(diff: TableDiff, decisions: SheetDecisions): { accepted: number; rejected: number; changes: number }
+```
+
+### applyDecisions
+
+```ts signature
+applyDecisions(diff: TableDiff, decisions: SheetDecisions): Table
+```
+
+The new table with rejected changes undone: old values and formulas back,
+rejected added rows dropped, rejected removed rows restored where they were.
+
+### tableToCsv
+
+```ts signature
+tableToCsv(table: Table, delimiter?: string): string
+```
+
+RFC 4180 CSV (formulas as their values); `'\t'` writes TSV.
+
+### applyDecisionsToXlsx
+
+```ts signature
+applyDecisionsToXlsx(newFile: ArrayBuffer | Uint8Array, diff: WorkbookDiff, decisions: (SheetDecisions | undefined)[], options?: { recalculate?: boolean }): { file: Uint8Array; applied: number; recalculated: number; skipped: SkippedDecision[] }
+```
+
+The new .xlsx with rejected cell changes written back in place, keeping
+styles. Old formulas are moved to the new file's rows and columns.
+Formulas that depend on a reverted cell get fresh cached values, and the
+file is marked for recalculation on open. Row and column decisions, and
+cells in array formulas or table headers, aren't written and come back in
+`skipped`. `.xlsx`/`.xlsm` only. From `spreadiff`, `spreadiff/core`, `spreadiff/xlsx`.
+
+### SkippedDecision
+
+`{ sheet, target, reason }`: a decision `applyDecisionsToXlsx` couldn't write.
+
+### translateFormula
+
+```ts signature
+translateFormula(formula: string, sheet: string, diff: WorkbookDiff): string | null
+```
+
+An old formula with its references moved to the new file's rows and
+columns (`=B4*2` → `=B5*2` after a row went in above). Null when one
+points at a cell the new file doesn't have.
+
+---
+
+## Merge
+
+### mergeTables
+
+```ts signature
+mergeTables(base: Table, ours: Table, theirs: Table, options?: MergeOptions): MergeResult
+```
+
+Three-way merge: changes made on one side are taken, changes both made
+alike are taken once, and changes that differ are conflicts, resolved
+toward `prefer` and listed. Rows are matched by key, as in `diffTables`.
+
+```ts
+import { mergeTables, parseCsv } from 'spreadiff';
+
+const base = parseCsv('id,price,qty\n1,10,5');
+const ours = parseCsv('id,price,qty\n1,12,5');
+const theirs = parseCsv('id,price,qty\n1,10,6');
+mergeTables(base, ours, theirs).table.rows; // [[1, 12, 6]]
+```
+
+### MergeOptions
+
+`DiffOptions` plus `prefer: 'ours' | 'theirs'` (default `'ours'`): the
+side a conflict takes.
+
+### MergeResult
+
+| Field | Type | |
+| --- | --- | --- |
+| `table` | `Table` | The merged table |
+| `conflicts` | `MergeConflict[]` | Each conflict and the side taken |
+| `stats` | `{ ours, theirs, both }` | Changes taken without conflict: from ours, from theirs, and made alike on both |
+| `diff` | `TableDiff` | The merged table against the base, to show in a grid |
+
+### MergeConflict
+
+| Field | Type | |
+| --- | --- | --- |
+| `kind` | `'cell' \| 'delete-edit' \| 'both-added'` | Both changed a cell differently; one deleted a row the other edited; both added a row with the same key |
+| `row` | `number` | Row in the merged table, or -1 for a deleted row left out |
+| `baseRow` | `number?` | Row in the base |
+| `column` | `string?` | For `cell` |
+| `base`, `ours`, `theirs` | `CellValue?` | For `cell` |
+| `oursRow`, `theirsRow` | `CellValue[] \| null?` | For row conflicts; null where that side deleted it |
+| `took` | `'ours' \| 'theirs'` | |
+
+### conflictAnnotations
+
+```ts signature
+conflictAnnotations(result: MergeResult): { row: number; column?: string; data: MergeConflict; id: number }[]
+```
+
+The conflicts as `DiffGrid` annotations for `result.diff`.
+
+---
+
 ## Canvas rendering
 
 ### DiffGrid
@@ -657,12 +1053,15 @@ The interactive canvas grid; see [The DiffGrid](grid.md) for a guide.
 | Member | |
 | --- | --- |
 | `render({ diff, container })` | Mount into `container` and show `diff` |
+| `render({ sheet, container })` | Show a [`SheetView`](#sheetview) from `diffFiles` / `compareWorkbooks`, with its trace |
 | `setDiff(diff)` | Show another diff |
 | `setOptions(partial)` | Change options (cheap when nothing layout-related changed) |
 | `getOptions()` | Current options |
 | `nextChange()` / `prevChange()` | Select the next / previous block of changes; `false` at the end |
 | `scrollToRow(row, align?)` | Scroll an aligned row into view (`'start' \| 'center' \| 'nearest'`) |
 | `select(row, col?)` / `select(null)` | Select a cell; `false` if out of range |
+| `selectRange(row, col, focusRow, focusCol)` | Select a block of cells; `false` if out of range |
+| `getRange()` | The selected [`GridRange`](#gridrange), or `null` |
 | `expandAll()` / `collapseAll()` | Unfold / refold unchanged regions |
 | `cellInfo(row, col)` | A cell's [`CellInfo`](#cellinfo); throws `RangeError` if it doesn't exist |
 | `refreshTheme()` | Re-read CSS variables |
@@ -677,12 +1076,27 @@ behavior: `layout`, `cellDisplay`, `collapseUnchanged`, `context`,
 `hideUnchangedColumns`, `frozenColumns`, `columnWidths`, `rowHeaders`,
 `columnHeaders`, `rowHeaderWidth`, `foldLabels`, `rowNumberOffset`,
 `theme`, `minimap`, `tooltips`, `highlightComputed`, `trace`, `traceFocus`,
-`annotations`, `renderAnnotation`, `onCellClick`, `onCellHover`,
-`onSelectionChange`, `accessibility`, `ariaLabel`.
+`annotations`, `renderAnnotation`, `numberFormats`, `decisions`,
+`onCellClick`, `onCellHover`, `onSelectionChange`, `onRangeChange`,
+`accessibility`, `ariaLabel`.
 
 ### DiffGridRenderProps
 
-`{ diff: TableDiff; container: HTMLElement }`: the argument to `render`.
+`{ diff: TableDiff; container: HTMLElement }` or `{ sheet: SheetView;
+container: HTMLElement }`: the argument to `render`.
+
+### GridRange
+
+| Field | Type | |
+| --- | --- | --- |
+| `anchor` | `{ row, col }` | Where the selection started (the active cell) |
+| `focus` | `{ row, col }` | The opposite corner; equal to `anchor` for one cell |
+| `rows` | `number[]` | Aligned rows in the range, top to bottom; rows folded away aren't in it |
+| `columns` | `number[]` | Column indexes in the range, left to right; hidden columns aren't in it |
+| `a1` | `{ old?, new? }` | The range in A1 notation on each side (`"B2:D5"`), when its cells are one block there |
+
+From a drag, shift-click or shift + arrow keys, `selectRange()`, and
+`onRangeChange`. Pass `rows` and `columns` to [`decideRange`](#deciderange).
 
 ### DiffLayout
 
@@ -723,6 +1137,70 @@ is re-rendered only when its `data` changes (`===`). See
 `{ trace: WorkbookTrace; workbook: WorkbookDiff; sheet: number }`: the
 `trace` option; `sheet` is the grid's sheet within `workbook`.
 
+### SpreadsheetDiff
+
+```ts signature
+new SpreadsheetDiff<A = unknown>(options?: SpreadsheetDiffOptions<A>)
+```
+
+The whole review in one component: give it two files and it compares them
+(in a worker if you pass one), then shows sheet tabs, the grid with
+downstream changes traced, an outputs panel (each changed result and a
+waterfall of what drove it) and changes to names, charts and pivot tables.
+In review mode it accepts and rejects changes and downloads the result.
+
+```ts
+import { SpreadsheetDiff } from 'spreadiff';
+declare const container: HTMLElement;
+
+const view = new SpreadsheetDiff({ layout: 'split', review: true });
+await view.render({ oldFile: new URL('/v1.xlsx', location.href), newFile: new URL('/v2.xlsx', location.href), container });
+```
+
+URL inputs are fetched for you; `File`s and bytes are read directly. The component
+renders inside a shadow root, so page CSS doesn't reach its internals:
+theme it with the same CSS variables as the grid ([Theming](theming.md)),
+and in tests query through `view.host.shadowRoot` (Playwright's
+`getByText` and `getByRole` see into it).
+
+| Member | |
+| --- | --- |
+| `render(props)` | Mount and show two files, or a comparison; resolves when shown, rejects if reading fails (the error is shown too) |
+| `showSheet(index)` | Show a sheet |
+| `reveal(ref)` | Switch to a `CellRef`'s sheet, select it and scroll it into view |
+| `getDecisions()` / `setDecisions(d)` | Review decisions, one `SheetDecisions` per sheet |
+| `decideSelection(decision)` | Accept or reject every change in the selected range (`undefined` clears) |
+| `exportXlsx()` | The new .xlsx with decisions applied (see `applyDecisionsToXlsx`); needs the new file's bytes |
+| `exportCsv(sheet?)` / `mergedTable(sheet?)` | A sheet with decisions applied |
+| `setOptions(partial)` | Change options; grid options go to the grid |
+| `comparison`, `sheet` | The comparison shown, and the index of the sheet shown |
+| `grid` | The `DiffGrid` inside |
+| `host` | The element inserted into your container |
+| `cleanUp()` | Unmount and release everything |
+
+### SpreadsheetDiffOptions
+
+Every `DiffGridOptions` field except `trace` and `decisions` (the component
+supplies them), plus:
+
+| Field | Type | Default | |
+| --- | --- | --- | --- |
+| `compare` | `CompareOptions` | | `diff`, `parse`, `trace` (see [`DiffFilesOptions`](#difffilesoptions)) |
+| `worker` | `DiffWorker \| (() => Worker)` | none | Compare in a worker |
+| `outputs` | `boolean \| 'auto'` | `'auto'` | The outputs panel; `'auto'` shows it when tracing found changed results |
+| `review` | `boolean` | `false` | Accept/reject buttons (and `a` / `r` / `u` keys in the grid) and a download button: `.xlsx` for an .xlsx/.xlsm new file, else the shown sheet as `.csv` |
+| `renderSheetHeader` | `(sheet, comparison) => HTMLElement \| string \| null` | | Content above each sheet's grid |
+| `onLoad` | `(comparison) => void` | | The files were compared |
+| `onError` | `(error) => void` | | Reading or comparing failed |
+| `onSheetChange` | `(sheet) => void` | | Another sheet is shown |
+| `onDecisionsChange` | `(decisions) => void` | | Review decisions changed |
+
+### SpreadsheetDiffRenderProps
+
+`{ oldFile: SpreadsheetInput; newFile: SpreadsheetInput; container }`, or
+`{ comparison: Comparison; newFile?: { name, data }; container }` for a
+comparison you made (`newFile` enables the .xlsx download).
+
 ---
 
 ## React
@@ -737,10 +1215,44 @@ From `spreadiff/react`. Renders a container `<div>` with the canvas grid
 inside; option props update the grid in place. `renderAnnotation` may
 return JSX (portaled into place).
 
+### SpreadsheetDiff (React)
+
+```ts signature
+<SpreadsheetDiff oldFile={…} newFile={…} {...SpreadsheetDiffOptions} className? style? ref? />
+```
+
+From `spreadiff/react`. The `SpreadsheetDiff` component; pass `comparison`
+instead of the files if you have one. New files are compared again; option
+props update in place. `renderSheetHeader` may return JSX.
+
+```tsx
+import { SpreadsheetDiff } from 'spreadiff/react';
+
+export const Review = ({ before, after }: { before: File; after: File }) => (
+  <SpreadsheetDiff oldFile={before} newFile={after} review style={{ height: 600 }} />
+);
+```
+
+### SpreadsheetDiffProps
+
+`SpreadsheetDiffOptions` plus `oldFile`, `newFile`, `comparison`,
+`className`, `style`, and `renderSheetHeader: (sheet, comparison) => ReactNode`.
+
+### SpreadsheetDiffHandle
+
+The `ref` value: `showSheet`, `reveal`, `getDecisions`, `setDecisions`,
+`decideSelection`, `exportXlsx`, `exportCsv`, `mergedTable`, and
+`instance` (the underlying `SpreadsheetDiff`, or `null` before mount).
+
+### DiffGridBaseProps
+
+`DiffGridOptions` plus `className`, `style`, and a React-flavored
+`renderAnnotation: (a) => ReactNode`: the props other than how the diff is
+given.
+
 ### DiffGridProps
 
-`DiffGridOptions` plus `diff`, `className`, `style`, and a React-flavored
-`renderAnnotation: (a) => ReactNode`.
+`DiffGridBaseProps` plus either `diff` or `sheet` (a `SheetView`).
 
 ### DiffGridHandle
 

@@ -1,8 +1,17 @@
 {
   "name": "spreadiff-lite",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "What changed between two spreadsheets, and what it moved downstream, as Markdown or JSON. No UI.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/samueldbarton/spreadiff.git",
+    "directory": "packages/spreadiff-lite"
+  },
+  "homepage": "https://github.com/samueldbarton/spreadiff#readme",
+  "bugs": {
+    "url": "https://github.com/samueldbarton/spreadiff/issues"
+  },
   "type": "module",
   "files": [
     "dist"
@@ -27,7 +36,12 @@
     "markdown",
     "agent",
     "llm",
-    "formula"
+    "formula",
+    "xlsb",
+    "xls",
+    "ods",
+    "csv",
+    "git"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",
@@ -35,12 +49,16 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "spreadiff": "0.1.0"
+    "spreadiff": "0.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "exceljs": "^4.4.0",
     "typescript": "^5.6.3",
     "vitest": "^3.2.4"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }

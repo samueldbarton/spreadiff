@@ -18,16 +18,17 @@ export interface WorkerSettings {
   /** Whether the first row holds column names. Default `'auto'`; see `ParseFileOptions.header`. */
   header?: boolean | 'auto';
   /**
-   * Trace downstream changes in the worker too: `true` or `TraceOptions`.
+   * Trace downstream changes in the worker too: `true`, `'auto'` (only when
+   * some cell holds a formula) or `TraceOptions`.
    * Recalculating can take seconds on a large model; this keeps it off the
    * main thread. Default false.
    */
-  trace?: boolean | TraceOptions;
+  trace?: boolean | 'auto' | TraceOptions;
 }
 
 /** A file's name (used to pick the parser) and bytes. */
 export interface FileData {
-  /** File name; `.xlsx`/`.xlsm` or zip content → XLSX, `.tsv` → tab-delimited, else CSV. */
+  /** File name; the format comes from the contents (see `parseFile`), and `.tsv` text is tab-delimited. */
   name: string;
   /** File contents. Transferred to the worker: unusable afterwards on this side. */
   data: ArrayBuffer;

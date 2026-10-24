@@ -2,7 +2,7 @@
 // both packages, write two .xlsx files, run `spreadiff-lite` from the
 // package's bin, and check its output and exit codes.
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -52,12 +52,60 @@ check('--json prints the report', parsed?.totals?.external === 1 && parsed.edits
 const outputs = cli(a, b, '--outputs-only', '--sheet', 'Summary', '--sheet', 'Model', '--sheet', 'Inputs');
 check('--outputs-only drops intermediate results', outputs.stdout.includes('Final outputs') && !outputs.stdout.includes('Intermediate results'), outputs.stdout);
 
+const minor = cli(a, b, '--min-change', '5%', '--json');
+const minorReport = JSON.parse(minor.stdout || '{}');
+check('--min-change drops moves under the threshold', minorReport.edits?.map((e) => e.cell).join() === 'B1', minor.stdout.slice(0, 500) + minor.stderr);
+check('--min-change above every move: no changes, exit 0', cli(a, b, '--min-change', '0.5').status === 0);
+
 const bad = cli(a);
 check('a usage error exits 2', bad.status === 2 && /needs two files/.test(bad.stderr), bad.stderr);
 const missing = cli(a, join(dir, 'nope.xlsx'));
 check('a missing file exits 2', missing.status === 2 && /can't read/.test(missing.stderr), missing.stderr);
 const help = cli('--help');
 check('--help', help.status === 0 && help.stdout.startsWith('Usage: spreadiff-lite'), help.stdout);
+
+// ---- git: textconv, external diff and merge drivers, in a real repository ----
+const repo = join(dir, 'repo');
+execFileSync('mkdir', ['-p', repo]);
+const git = (...args) => spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+const node = `"${process.execPath}" "${bin}"`;
+git('init', '-q', '-b', 'main');
+git('config', 'user.email', 'test@example.com');
+git('config', 'user.name', 'test');
+git('config', 'diff.spreadiff.command', `${node} --git`);
+git('config', 'diff.sdtext.textconv', `${node} --textconv`);
+git('config', 'merge.spreadiff.driver', `${node} merge %O %A %B -o %A --name %P`);
+writeFileSync(join(repo, '.gitattributes'), '*.xlsx diff=spreadiff\n*.csv merge=spreadiff\n*.tsv diff=sdtext\n');
+writeFileSync(join(repo, 'model.xlsx'), readFileSync(a));
+writeFileSync(join(repo, 'prices.csv'), 'id,price,qty\n1,10,5\n2,20,1\n3,30,7\n');
+writeFileSync(join(repo, 'list.tsv'), 'id\tname\n1\tLamp\n');
+git('add', '.');
+git('commit', '-qm', 'base');
+writeFileSync(join(repo, 'model.xlsx'), readFileSync(b));
+writeFileSync(join(repo, 'list.tsv'), 'id\tname\n1\tDesk lamp\n');
+const gd = git('diff', '--', 'model.xlsx');
+check('git diff runs the external driver: the report for the workbook', gd.status === 0 && gd.stdout.includes('## a/model.xlsx → b/model.xlsx') && gd.stdout.includes('USD/INR *(Bloomberg BDP)*'), gd.stdout + gd.stderr);
+const tc = git('diff', '--', 'list.tsv');
+check('git diff with textconv shows the changed row', /^-2: 1 \| Lamp$/m.test(tc.stdout) && /^\+2: 1 \| Desk lamp$/m.test(tc.stdout), tc.stdout + tc.stderr);
+git('checkout', '-q', '--', '.');
+// Two branches editing different cells: the driver merges them cleanly.
+git('checkout', '-qb', 'theirs');
+writeFileSync(join(repo, 'prices.csv'), 'id,price,qty\n1,10,6\n2,20,1\n3,30,7\n4,40,4\n');
+git('commit', '-qam', 'theirs: qty and a row');
+git('checkout', '-q', 'main');
+writeFileSync(join(repo, 'prices.csv'), 'id,price,qty\n1,12,5\n2,20,1\n3,30,7\n');
+git('commit', '-qam', 'ours: price');
+const merged = git('merge', '-q', '--no-edit', 'theirs');
+const result = readFileSync(join(repo, 'prices.csv'), 'utf8');
+check('git merge with the driver merges edits to different cells', merged.status === 0 && result === 'id,price,qty\r\n1,12,6\r\n2,20,1\r\n3,30,7\r\n4,40,4\r\n', merged.stdout + merged.stderr + result);
+// The same cell on both branches: a conflict git reports, keeping ours.
+git('checkout', '-qb', 'theirs2', git('rev-list', '--max-parents=0', 'HEAD').stdout.trim()); // from the base commit
+writeFileSync(join(repo, 'prices.csv'), 'id,price,qty\n1,15,5\n2,20,1\n3,30,7\n');
+git('commit', '-qam', 'theirs: price too');
+git('checkout', '-q', 'main');
+const clash = git('merge', '-q', '--no-edit', 'theirs2');
+check('a conflicting cell fails the merge and says which', clash.status !== 0 && /conflict: row 2, price: ours 12, theirs 15 \(base 10\); took ours/.test(clash.stdout + clash.stderr), clash.stdout + clash.stderr);
+git('merge', '--abort');
 
 // As installed from npm: pack both packages, install the tarballs into an
 // empty project, and run the installed bin.

@@ -10,7 +10,7 @@
     "build": "npm run build -w spreadiff && npm run build -w spreadiff-lite && npm run build -w @spreadiff/viewer",
     "dev": "npm run dev -w @spreadiff/viewer",
     "test": "npm test -w spreadiff && npm test -w spreadiff-lite",
-    "typecheck": "npm run typecheck --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present && tsc -p action",
     "bench": "node bench/run.mjs",
     "size": "node bench/size.mjs",
     "test:browser": "node bench/browser-test.mjs",
@@ -23,7 +23,10 @@
     "test:cli": "node scripts/test-cli.mjs",
     "docs:site": "npm run build -w @spreadiff/docs",
     "docs:dev": "npm run dev -w @spreadiff/docs",
-    "bench:engine": "node bench/engine-fuzz/run.mjs"
+    "bench:engine": "node bench/engine-fuzz/run.mjs",
+    "build:action": "npm run build -w spreadiff && node scripts/build-action.mjs",
+    "test:action": "node scripts/test-action.mjs",
+    "check:pack": "node scripts/check-pack.mjs"
   },
   "devDependencies": {
     "axe-core": "^4.14.0",

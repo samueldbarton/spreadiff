@@ -23,10 +23,11 @@ export interface WorkerRequest {
   parse?: { header?: boolean | 'auto' };
   /**
    * Also trace downstream changes here, off the main thread, when the files
-   * have formulas: `true` or {@link TraceOptions}. The reply then carries a
-   * packed trace (see `packWorkbookTrace`).
+   * have formulas: `true`, `'auto'` (only if some cell holds a formula) or
+   * {@link TraceOptions}. The reply then carries a packed trace (see
+   * `packWorkbookTrace`).
    */
-  trace?: boolean | TraceOptions;
+  trace?: boolean | 'auto' | TraceOptions;
 }
 
 self.onmessage = (e: MessageEvent<WorkerRequest>) => {
@@ -38,8 +39,11 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
     const t1 = performance.now();
     const result = diffWorkbooks(a, b, options);
     const t2 = performance.now();
-    const hasFormulas = result.sheets.some((s) => s.diff.oldTable.formulas || s.diff.newTable.formulas);
-    const traced = trace && hasFormulas ? packWorkbookTrace(traceWorkbook(result, trace === true ? {} : trace), result) : undefined;
+    const hasFormulas =
+      trace === 'auto'
+        ? [a, b].some((wb) => wb.sheets.some((t) => t.formulas?.some((r) => r?.some((f) => f))))
+        : result.sheets.some((s) => s.diff.oldTable.formulas || s.diff.newTable.formulas);
+    const traced = trace && hasFormulas ? packWorkbookTrace(traceWorkbook(result, trace === true || trace === 'auto' ? {} : trace), result) : undefined;
     const t3 = performance.now();
     const { packed, transfer } = packWorkbookDiff(result);
     (self as unknown as Worker).postMessage({ id, packed, trace: traced?.packed, timings: { parse: t1 - t0, diff: t2 - t1, trace: t3 - t2 } }, [...transfer, ...(traced?.transfer ?? [])]);

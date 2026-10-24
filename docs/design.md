@@ -146,9 +146,14 @@ calling `String(Number(x))` per field.
 
 The reader handles values, shared strings, dates, booleans and shared
 formulas, on top of [fflate](https://github.com/101arrowz/fflate). The
-whole `core` entry, tracing included, is 43.4 KB gzip.
+whole `core` entry, tracing and the other readers included, is 74.0 KB gzip;
+`parseXlsx` alone, with the engine it uses to compute missing values, is
+about 30 KB.
 
-*Cost:* no styles, merged cells, comments or legacy `.xls`. A file that
+The .xlsb, .xls and .ods readers share its sheet model (`core/sheet.ts`),
+and .xls and .xlsb share one formula-token decoder.
+
+*Cost:* no styles beyond number formats, and no comments. A file that
 needs those needs another parser; any parser that produces a `Table` works.
 
 ## The renderer
@@ -199,7 +204,7 @@ a server, in CI or in an email. It shows changes plus context, like a code
 review, and caps the output with `maxRows`.
 
 *Why a separate entry and not a mode of `DiffGrid`?* Different jobs. A
-pull-request comment needs ten rows of static HTML at 16.0 KB; a reviewer
+pull-request comment needs ten rows of static HTML at 19.9 KB; a reviewer
 scrolling a million rows needs the canvas. Sharing the diff model keeps
 them consistent.
 
@@ -213,8 +218,8 @@ Still open, roughly by how much they'd matter:
   - possibly remove the occasional long frame at 1M rows ([Performance](performance.md#the-1m-row-outlier)).
 
   It changes how every renderer gets its data, so it needs its own measurement work.
-- **Legacy `.xls`.** The binary BIFF format needs a separate reader. `parseFile` rejects it with a clear message.
-- **Styles and number formats.** Dates are read from the number format, but other formatting isn't. Currencies, percentages and colours show as the raw number or text. A change of format alone isn't detected.
+- **Formats other than .xlsx are read-only**, and .xlsb structured references aren't decoded. See [File formats](formats.md).
+- **Styles.** Number formats are read and cells show as the sheet shows them, but other formatting isn't read, and a change of format alone isn't detected.
 - **Vertical merges** are drawn cell by cell, since an inserted row can split them. Horizontal merges are drawn as one cell.
 - **Formula-edit undo across inserted rows.** Tracing undoes an edited formula by re-evaluating its old text. When rows or columns were inserted or deleted, that text points elsewhere, so it restores the old result instead ([Tracing → Limits](tracing.md#limits)).
 - **Screen readers, manually.** The grid's ARIA mirror passes automated checks but hasn't been tried with NVDA, JAWS or VoiceOver ([Accessibility](accessibility.md#not-covered-yet)).

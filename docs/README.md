@@ -13,9 +13,12 @@ has complete solutions to common jobs, and
 | [Getting started](getting-started.md) | Install, choose an entry point, diff and render your first table |
 | [How diffing works](diffing.md) | Understand how columns, rows and cells are matched; tune the options; debug a surprising result |
 | [Tracing downstream changes](tracing.md) | Tell edited inputs apart from formula results that moved, and find each result's causes |
+| [Reviewing and merging](review.md) | Accept and reject changes, write the reviewed .xlsx back, merge two people's edits |
+| [File formats](formats.md) | What each reader reads, how well it agrees with LibreOffice, and number formats |
 | [The DiffGrid](grid.md) | Use the canvas grid: layouts, cell displays, options, methods, keyboard, annotations |
 | [spreadiff/html](html.md) | Render a diff as HTML or text, on a server, in CI or in an email |
 | [spreadiff-lite](spreadiff-lite.md) | Get a Markdown or JSON report of what changed and what it moved downstream, for agents, CI and scripts; the CLI |
+| [Spreadsheets in git](git.md) | Readable `git diff`, the full report in `git diff`, merging CSVs, pull-request comments |
 | [Theming](theming.md) | Change colours, fonts and metrics with CSS variables; dark mode |
 | [Workers](workers.md) | Parse, diff and trace off the main thread; bundler setup |
 | [Accessibility](accessibility.md) | What screen-reader and keyboard users get, how it's tested, and what isn't covered |

@@ -151,6 +151,23 @@ export interface WorkbookTrace {
   truncated: boolean;
 }
 
+/**
+ * A workbook trace, plus which sheet of the workbook a grid shows. Each
+ * `SheetView` from {@link compareWorkbooks} or `diffFiles` carries one.
+ */
+export interface TraceContext {
+  /** From {@link traceWorkbook}. */
+  trace: WorkbookTrace;
+  /** The workbook diff the trace was made from. Used to label causes on other sheets. */
+  workbook: WorkbookDiff;
+  /**
+   * Index of the grid's sheet in `workbook.sheets`. Optional, and ignored
+   * when the grid's diff is one of `workbook.sheets`: the grid uses that
+   * sheet. Needed only for a diff that isn't (a copy, say).
+   */
+  sheet?: number;
+}
+
 /** Options for {@link traceWorkbook}. */
 export interface TraceOptions {
   /** Max causes kept per cell (`causeCount` stays exact). Default 25. */

@@ -2,7 +2,7 @@
 
 **An elegant but fully featured spreadsheet diff and UI library.**
 
-spreadiff diffs CSV and Excel files the way a spreadsheet is read: by rows
+spreadiff diffs Excel, OpenDocument and CSV files the way a spreadsheet is read: by rows
 and columns, not lines of text. For workbooks with formulas, it separates
 what someone *edited* from what *moved as a consequence*. It traces every
 changed result back to the edits that caused it, with how much each one
@@ -63,6 +63,13 @@ report.
   the edits that actually moved it by undoing each one and recalculating
   the workbook with its own formula engine. It also finds results that
   were saved stale.
+- **It closes the loop.** Accept or reject each change and download the
+  reviewed .xlsx, with formulas and styles intact. Merge two people's edits
+  to the same table by row key. See [Reviewing and merging](docs/review.md).
+- **It fits where spreadsheets live.** It reads .xlsx, .xlsb, .xls, .ods
+  and CSV, and shows cells in their number formats (`12.3%`, `$1,234`). In
+  git, it gives a readable `git diff`, a merge driver for CSVs, and a
+  GitHub Action that comments on pull requests ([Spreadsheets in git](docs/git.md)).
 - **It's verified against a real spreadsheet engine.**
   - Causes and contributions are checked against LibreOffice's
     recalculation on generated models and on real files saved by Excel.
@@ -94,8 +101,18 @@ report.
 
 ## Quick start
 
-spreadiff isn't on npm yet. [Getting started → Install](docs/getting-started.md#install)
-builds it from this repository.
+```bash
+npm install spreadiff        # the library and UI
+npm install spreadiff-lite   # the report and CLI, no UI
+```
+
+**Two files in, the whole review out** (tabs, the traced grid, the outputs panel):
+
+```ts
+import { SpreadsheetDiff } from 'spreadiff';
+
+await new SpreadsheetDiff({ review: true }).render({ oldFile, newFile, container }); // Files, URLs or bytes; give the container a height
+```
 
 **A grid in the browser:**
 
@@ -106,23 +123,23 @@ const diff = diffTables(parseCsv(before), parseCsv(after)); // rows match by an 
 new DiffGrid({ layout: 'split', cellDisplay: 'delta' }).render({ diff, container }); // give the container a height
 ```
 
-**Two Excel files, with formulas traced, off the main thread:**
+**Two workbooks, with formulas traced, off the main thread:**
 
 ```ts
-import { DiffGrid } from 'spreadiff';
-import { createDiffWorker } from 'spreadiff/worker';
+import { DiffGrid, diffFiles } from 'spreadiff';
 
-const differ = createDiffWorker(new Worker(new URL('spreadiff/worker/worker.js', import.meta.url), { type: 'module' }));
-const { result, trace } = await differ.diffFiles(oldFile, newFile, {}, { trace: true });
-new DiffGrid({ trace: trace && { trace, workbook: result, sheet: 0 } }).render({ diff: result.sheets[0].diff, container });
+const cmp = await diffFiles(oldFile, newFile, {
+  worker: () => new Worker(new URL('spreadiff/worker/worker.js', import.meta.url), { type: 'module' }),
+});
+new DiffGrid().render({ sheet: cmp.sheets[cmp.firstChanged], container }); // each sheet brings its own trace
 ```
 
 **React:**
 
 ```tsx
-import { DiffGrid } from 'spreadiff/react';
+import { SpreadsheetDiff } from 'spreadiff/react';
 
-export const Review = () => <DiffGrid diff={diff} layout="unified" style={{ height: 600 }} />;
+export const Review = () => <SpreadsheetDiff oldFile={oldFile} newFile={newFile} style={{ height: 600 }} />;
 ```
 
 **HTML or text, on a server or in CI:**
@@ -159,6 +176,11 @@ contribution.
 | Values computed for files saved without them | 12,560 of 12,560 |
 | The same checks, in Chromium, hosted, network blocked | 1,955 / 1,955 causes · 3,304 / 3,304 contributions |
 
+The file readers are checked the same way, cell by cell against
+LibreOffice's reading of the same files: .xls values agree on 99.84% of
+71,627 cells, .ods on 100% of 52,738, and .xlsb on 464 of 467, a corpus
+too small to say much ([File formats](docs/formats.md)).
+
 When spreadiff's engine can't reproduce a formula, it says so: that
 part of the trace falls back to following references, and is marked
 that way. [Tracing → How it was tested](docs/tracing.md#how-it-was-tested)
@@ -169,9 +191,9 @@ and `npm run test:hosted` reproduce them.
 
 | Import | Contents | min + gzip |
 | --- | --- | --- |
-| `spreadiff/html` | Diff engine, CSV parser, HTML and text renderers. No DOM | 16.0 KB |
-| `spreadiff/core` | + XLSX reader, formula engine and tracing | 43.4 KB |
-| `spreadiff` | + canvas `DiffGrid` | 63.9 KB |
+| `spreadiff/html` | Diff engine, CSV parser, number formats, HTML and text renderers. No DOM | 19.9 KB |
+| `spreadiff/core` | + XLSX, XLSB, XLS and ODS readers, formula engine, tracing, review and merge | 74.0 KB |
+| `spreadiff` | + canvas `DiffGrid` and `SpreadsheetDiff` | 101.1 KB |
 | `spreadiff/react` | React component for `DiffGrid` | + React |
 | `spreadiff/worker` | Parse, diff and trace in a Web Worker | |
 
@@ -196,9 +218,10 @@ tested yet. See [Browser support](docs/browser-support.md).
 
 ## Limits
 
-- **Files.** No legacy `.xls`, `.xlsb` or `.ods`. Styles and number
-  formats other than dates aren't read, so a change of format alone isn't
-  a change.
+- **Files.** Reads .xlsx, .xlsb, .xls, .ods and CSV, but writes only .xlsx
+  and CSV. Styles other than number formats aren't read, so a change of
+  format alone isn't a change. The .xlsb reader is checked against a small
+  corpus ([File formats](docs/formats.md)).
 - **One spreadsheet engine.** Recalculation is spreadiff's own engine,
   checked against LibreOffice, not Excel. Files saved by different apps
   can differ slightly with nothing edited.

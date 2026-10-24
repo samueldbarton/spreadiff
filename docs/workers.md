@@ -63,7 +63,7 @@ but it isn't tested here.
   `const { diffFiles } = createDiffWorker(w)`.
 
 **Errors.** A parse or diff error rejects the promise with the worker's
-message, e.g. `old.xls: legacy .xls (BIFF) files aren't supported`. If the
+message, e.g. `old.xlsx: This workbook is password-protected. Save a copy without a password to compare it`. If the
 worker itself dies (most often out of memory on a huge file), every pending
 request rejects instead of waiting forever. Create a new worker to continue.
 
@@ -152,3 +152,10 @@ once, while the files load.
 
 Everything runs in the browser. Nothing calls a server, and LibreOffice
 was only used to produce the expected answers the tests check against.
+
+## A small extra chunk
+
+Code that imports `diffFiles` or `SpreadsheetDiff` gets a small extra chunk in
+its build even without the `worker` option: the worker client, which
+`diffFiles` imports only when given a worker. Without one it's never
+fetched.

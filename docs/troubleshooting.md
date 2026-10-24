@@ -100,8 +100,11 @@ faster, pass `{ recalculate: false }`.
 
 ## Files
 
-**"legacy .xls (BIFF) files aren't supported".** Save the file as
-`.xlsx` or `.csv`. `.xlsb` and `.ods` aren't read either.
+**"Excel 5 and older (.xls before Excel 97) isn't supported".** The file
+is from before Excel 97. Save it as `.xlsx`.
+
+**"This workbook is password-protected".** Its contents are encrypted.
+Save a copy without the password.
 
 **A CSV column of numbers is text.** Numbers are only converted when
 they round-trip exactly: `007`, `1.50` and `1e5` stay text, so a
