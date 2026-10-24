@@ -139,8 +139,11 @@ export function compareWorkbooks(a: Workbook | Table, b: Workbook | Table, optio
 
 const toWorkbook = (x: Workbook | Table): Workbook => (isWorkbook(x) ? x : { name: x.name, sheets: [x] });
 
-/** Read an input's name and bytes (fetching a URL, reading a Blob). */
-async function readInput(input: Exclude<SpreadsheetInput, Workbook | Table>, fallback: string, signal?: AbortSignal): Promise<{ name: string; data: ArrayBuffer }> {
+/**
+ * Read an input's name and bytes: fetches a URL, reads a Blob, encodes
+ * text. Parsed inputs aren't accepted. The bytes are a copy.
+ */
+export async function readSpreadsheetInput(input: Exclude<SpreadsheetInput, Workbook | Table>, fallback: string, signal?: AbortSignal): Promise<{ name: string; data: ArrayBuffer }> {
   const copy = (u: Uint8Array) => u.slice().buffer as ArrayBuffer; // its own buffer: the worker may take it
   if (input instanceof URL) {
     const res = await fetch(input, { signal });
@@ -186,11 +189,11 @@ export async function diffFiles(oldInput: SpreadsheetInput, newInput: Spreadshee
   const t0 = now();
   const toParsed = async (x: SpreadsheetInput, fallback: string): Promise<Workbook> => {
     if (parsed(x)) return toWorkbook(x);
-    const { name, data } = await readInput(x, fallback, options.signal);
+    const { name, data } = await readSpreadsheetInput(x, fallback, options.signal);
     return parseFile(name, data, { header: 'auto', ...options.parse });
   };
   if (options.worker && !parsed(oldInput) && !parsed(newInput)) {
-    const [a, b] = await Promise.all([readInput(oldInput, 'old', options.signal), readInput(newInput, 'new', options.signal)]);
+    const [a, b] = await Promise.all([readSpreadsheetInput(oldInput, 'old', options.signal), readSpreadsheetInput(newInput, 'new', options.signal)]);
     let client: DiffWorker;
     if (typeof options.worker === 'function') {
       const factory = options.worker;

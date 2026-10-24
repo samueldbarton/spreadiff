@@ -7,6 +7,7 @@ import { sheetLabels, type RowLabel, type SheetLabels } from '../core/labels.js'
 import type { CellRef, CellTrace, ChangeKind, TraceContext, WorkbookTrace } from '../core/trace.js';
 export type { TraceContext } from '../core/trace.js';
 import type { SheetView } from '../core/compare.js';
+import type { Decision, SheetDecisions } from '../core/review.js';
 import {
   ROW_STATUS,
   ROW_STATUS_NAMES,
@@ -87,6 +88,8 @@ export interface CellInfo {
   kind?: ChangeKind;
   /** The cell's trace (causes, impacts), when a `trace` is attached and the cell changed. */
   trace?: CellTrace;
+  /** The cell's review decision, when `decisions` has one for it (or its row or column). */
+  decision?: Decision;
 }
 
 /**
@@ -230,6 +233,11 @@ export interface DiffGridOptions<A = unknown> {
   /** Attach a workbook trace: tooltips list causes and impacts, and selection can focus them. */
   trace?: TraceContext;
   /**
+   * Review decisions to show (see `decideRange`): a rejected change is
+   * dimmed and marked ↺, an accepted one ✓. Undecided changes look as usual.
+   */
+  decisions?: SheetDecisions;
+  /**
    * When a traced cell is selected: outline its causes (solid), computed
    * parents (dotted) and impacts (dashed) on this sheet, and dim the rest.
    * Default true.
@@ -333,6 +341,7 @@ export class DiffGrid<A = unknown> {
   private a11y: HTMLElement | null = null;
   private a11yKey = '';
   private a11yDiff: TableDiff | null = null;
+  private a11yOptions: DiffGridOptions<A> | null = null;
   private a11ySel = '';
   private a11yScroll = '';
   private a11yTimer = 0;
@@ -493,6 +502,17 @@ export class DiffGrid<A = unknown> {
     return displayCell(table, row, col);
   }
 
+  /** A decision set for this cell, its row or its column; undefined when none was. */
+  private decisionAt(r: number, ci: number): Decision | undefined {
+    const dec = this.options.decisions;
+    const d = this.diff;
+    if (!dec || !d) return undefined;
+    const st = d.status[r];
+    if (st === ROW_STATUS.added || st === ROW_STATUS.removed) return dec.rows.get(r);
+    if (d.columns[ci].status !== 'equal' && dec.columns.has(ci)) return dec.columns.get(ci);
+    return st === ROW_STATUS.modified && d.changedCells.get(r)?.[ci] ? dec.cells.get(r * d.columns.length + ci) : undefined;
+  }
+
   /** The number format code of an aligned cell (its new side, else old), for formatting its change. */
   private codeOf(r: number, ci: number): string | undefined {
     const d = this.diff!;
@@ -605,14 +625,11 @@ export class DiffGrid<A = unknown> {
     const d = this.diff;
     if (!sel || !d) return null;
     const focus = this.extent ?? sel;
-    const da = this.rows.displayOf[sel.row];
-    const df = this.rows.displayOf[focus.row];
-    const va = this.cols.cols.indexOf(sel.col);
-    const vf = this.cols.cols.indexOf(focus.col);
+    const { da, df, va, vf } = this.rangeBounds(sel, focus);
     const rows: number[] = [];
     let columns: number[];
     if (da < 0 || df < 0 || va < 0 || vf < 0) {
-      // A corner scrolled into a collapsed region or a hidden column: just the active cell.
+      // Nothing of it shown (all collapsed or hidden): just the active cell.
       rows.push(sel.row);
       columns = [sel.col];
     } else {
@@ -634,6 +651,38 @@ export class DiffGrid<A = unknown> {
       return first === last ? first : `${first}:${last}`;
     };
     return { anchor: { ...sel }, focus: { ...focus }, rows, columns, a1: { old: a1('old'), new: a1('new') } };
+  }
+
+  /**
+   * Display rows and visible columns of a range's corners. A corner in a
+   * collapsed region, or a hidden or folded column (a label column the row
+   * headers show), counts from the nearest shown one toward the other corner.
+   * -1 when nothing between them is shown.
+   */
+  private rangeBounds(sel: { row: number; col: number }, focus: { row: number; col: number }): { da: number; df: number; va: number; vf: number } {
+    const shownFrom = (row: number, toward: number) => {
+      const step = toward >= row ? 1 : -1;
+      for (let r = row; step > 0 ? r <= toward : r >= toward; ) {
+        if (this.rows.displayOf[r] >= 0) return this.rows.displayOf[r];
+        // Jump over the collapsed region holding r, rather than row by row.
+        const g = this.rows.regions.find((x) => r >= x.start && r < x.end);
+        r = g ? (step > 0 ? g.end : g.start - 1) : r + step;
+      }
+      return -1;
+    };
+    const da = shownFrom(sel.row, focus.row);
+    const df = shownFrom(focus.row, sel.row);
+    const visibleFrom = (col: number, toward: number) => {
+      const step = toward >= col ? 1 : -1;
+      for (let c = col; step > 0 ? c <= toward : c >= toward; c += step) {
+        const v = this.cols.cols.indexOf(c);
+        if (v >= 0) return v;
+      }
+      return -1;
+    };
+    const va = visibleFrom(sel.col, focus.col);
+    const vf = visibleFrom(focus.col, sel.col);
+    return { da, df, va, vf };
   }
 
   /** Tell `onRangeChange` about a new range (once per distinct range). */
@@ -1307,9 +1356,11 @@ export class DiffGrid<A = unknown> {
     const sel = this.selected;
     const selKey = sel ? `${sel.row}:${sel.col}` : '';
     const key = `${first}:${last}:${visible.join(',')}:${selKey}:${rows.count}:${this.layout}`;
-    if (key === this.a11yKey && this.a11yDiff === diff) return;
+    if (key === this.a11yKey && this.a11yDiff === diff && this.a11yOptions === this.options) return;
     this.a11yKey = key;
     this.a11yDiff = diff;
+    // New options (decisions, number formats) can change what cells say.
+    this.a11yOptions = this.options;
     this.a11ySel = selKey;
     if (!this.a11y) {
       this.a11y = el('div', 'sd-a11y');
@@ -1403,7 +1454,8 @@ export class DiffGrid<A = unknown> {
     const delta = d && d.delta !== 0 ? `, ${d.delta > 0 ? 'up' : 'down'} ${displayMagnitude(Math.abs(d.delta), this.codeOf(r, ci))}${d.ratio === null ? '' : ` (${Math.abs(d.ratio * 100).toFixed(1)}%)`}` : '';
     const why = info.kind === 'computed' ? ', recalculated result' : info.kind === 'formula' ? ', formula edited' : ', edited';
     const formula = info.oldFormula !== info.newFormula && info.newFormula ? `, formula ${info.newFormula}` : '';
-    return `${v(nv)}, was ${v(ov)}${delta}${why}${formula}`;
+    const decided = info.decision ? `, ${info.decision === 'reject' ? 'rejected' : 'accepted'}` : '';
+    return `${v(nv)}, was ${v(ov)}${delta}${why}${formula}${decided}`;
   }
 
   private drawPane(p: PaneGeometry): void {
@@ -1491,10 +1543,7 @@ export class DiffGrid<A = unknown> {
 
     // A range: a tint over its cells and an outline around it.
     if (this.selected && this.extent) {
-      const da = rows.displayOf[this.selected.row];
-      const df = rows.displayOf[this.extent.row];
-      const va = cols.cols.indexOf(this.selected.col);
-      const vf = cols.cols.indexOf(this.extent.col);
+      const { da, df, va, vf } = this.rangeBounds(this.selected, this.extent);
       if (da >= 0 && df >= 0 && va >= 0 && vf >= 0) {
         const [d0, d1] = da < df ? [da, df] : [df, da];
         const [v0, v1] = va < vf ? [va, vf] : [vf, va];
@@ -1688,6 +1737,19 @@ export class DiffGrid<A = unknown> {
     if (this.focus && !(this.selected?.row === r && this.selected.col === ci) && !this.focus.has(`${r}:${ci}`)) {
       ctx.fillStyle = t.dim;
       ctx.fillRect(x, y, w, h);
+    }
+    const decision = this.options.decisions && this.decisionAt(r, ci);
+    if (decision) {
+      if (decision === 'reject') {
+        ctx.fillStyle = t.dim;
+        ctx.fillRect(x, y, w, h);
+      }
+      const mark = decision === 'reject' ? '↺' : '✓';
+      ctx.font = `600 ${t.fontSize - 2}px ${t.fontFamily}`;
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = decision === 'reject' ? t.removedFg : t.addedFg;
+      ctx.fillText(mark, x + w - 3, y + 2);
     }
 
     if (this.cellMarks.size && this.cellMarks.has(`${r}:${col.name}`)) {
@@ -2617,6 +2679,7 @@ export class DiffGrid<A = unknown> {
       newFormula: ni >= 0 && column.newIndex >= 0 ? diff.newTable.formulas?.[ni]?.[column.newIndex] : undefined,
       kind: diff.changedCells.get(row)?.[columnIndex] === 1 ? this.kindOf(row, columnIndex) : undefined,
       trace: this.tc?.trace.get({ sheet: this.tc.sheet, row, col: columnIndex }),
+      decision: this.decisionAt(row, columnIndex),
     };
   }
 

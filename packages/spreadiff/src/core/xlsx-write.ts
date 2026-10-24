@@ -8,6 +8,7 @@ import { columnLabel } from './csv.js';
 import { isoToSerial } from './serial.js';
 import { attr, decode, decodeRef, eachElement, resolvePath } from './xml.js';
 import { tokenizeFormula } from './formula.js';
+import { externalSource } from './external.js';
 import { parseXlsx } from './xlsx.js';
 import { diffWorkbooks } from './diff.js';
 import { traceWorkbook } from './trace.js';
@@ -130,6 +131,15 @@ export function applyDecisionsToXlsx(
       }
       const value = ot.rows[oi][col.oldIndex] ?? null;
       const oldFormula = ot.formulas?.[oi]?.[col.oldIndex] ?? null;
+      const newFormula = nt.formulas?.[ni]?.[col.newIndex] ?? null;
+      if (oldFormula && oldFormula === newFormula) {
+        // Same formula, new value: outside data keeps the old saved value; anything else is a downstream result.
+        if (externalSource(oldFormula)) {
+          xml = setResult(xml, p, ref, value);
+          applied++;
+        } else skipped.push({ sheet: sheet.name, target: ref, reason: 'a downstream result: it follows its inputs; reject the edits that moved it' });
+        continue;
+      }
       // The old formula's references, moved to where those cells are now.
       const formula = oldFormula ? translateFormula(oldFormula, sheet.name, diff) : null;
       if (oldFormula && formula === null) {

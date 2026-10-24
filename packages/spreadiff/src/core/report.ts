@@ -51,6 +51,8 @@ export interface CellChange {
   unexplained?: 'volatile' | 'dynamic' | 'unknown';
   /** The new file's saved value was stale: it was saved without recalculating. `after` is the recalculated value. */
   stale?: { saved: CellValue };
+  /** Where it is in the diff (sheet index, aligned row and column), to show it in a grid. Not enumerable, so JSON leaves it out. */
+  readonly ref: CellRef;
 }
 
 /** One cause of a downstream change. */
@@ -61,6 +63,8 @@ export interface Cause {
   label: string;
   /** How much of the change it accounts for: the result now minus the result without that edit. Null when not recalculated or not numeric. */
   contribution: number | null;
+  /** Where the edit is in the diff. Not enumerable. */
+  readonly ref: CellRef;
 }
 
 /** A change to a sheet's shape. */
@@ -178,7 +182,8 @@ export function reportOf(diff: WorkbookDiff, trace: WorkbookTrace, oldName = 'ol
     const fb = formulaOf(d, ref.row, ref.col, 'old');
     const fa = formulaOf(d, ref.row, ref.col, 'new');
     const kind: CellChange['kind'] = t.external ? 'external' : t.kind === 'computed' ? 'computed' : t.kind === 'formula' ? 'formula' : 'input';
-    const c: CellChange = { ...locate(ref), kind, before, after };
+    const c = { ...locate(ref), kind, before, after } as CellChange;
+    Object.defineProperty(c, 'ref', { value: ref });
     if (fb || fa) c.formula = { before: fb, after: fa };
     const nd = numericDelta(before, after);
     if (nd && typeof before === 'number' && typeof after === 'number') {
@@ -194,7 +199,7 @@ export function reportOf(diff: WorkbookDiff, trace: WorkbookTrace, oldName = 'ol
     c.causeCount = t.causeCount;
     if (t.method) c.method = t.method;
     if (t.unexplained) c.unexplained = t.unexplained;
-    const causes = t.causes.map((r, i) => ({ id: locate(r).id, label: locate(r).label, contribution: t.contributions?.[i] ?? null }));
+    const causes = t.causes.map((r, i) => Object.defineProperty({ id: locate(r).id, label: locate(r).label, contribution: t.contributions?.[i] ?? null }, 'ref', { value: r }) as Cause);
     causes.sort((x, y) => Math.abs(y.contribution ?? 0) - Math.abs(x.contribution ?? 0));
     c.causes = causes;
     return c;

@@ -5,6 +5,22 @@
  * merged .xlsx (`applyDecisionsToXlsx` in `spreadiff/xlsx`).
  */
 import { ROW_STATUS, type CellValue, type Table, type TableDiff } from './types.js';
+import { changeKind } from './kind.js';
+import { externalSource } from './external.js';
+
+/**
+ * Whether a changed cell is a decision to make: an edited value or
+ * formula, or a value from outside data (a Bloomberg refresh). A
+ * downstream result isn't: it follows its inputs, so to undo it, reject
+ * the edits that moved it.
+ */
+export function isDecidable(diff: TableDiff, row: number, col: number): boolean {
+  if (changeKind(diff, row, col) !== 'computed') return true;
+  const ni = diff.newRows[row];
+  const c = diff.columns[col];
+  const f = ni >= 0 && c.newIndex >= 0 ? diff.newTable.formulas?.[ni]?.[c.newIndex] : null;
+  return !!f && externalSource(f) !== null;
+}
 
 /** What to do with a change: keep the new version, or go back to the old. */
 export type Decision = 'accept' | 'reject';
@@ -26,8 +42,9 @@ export const noDecisions = (): SheetDecisions => ({ cells: new Map(), rows: new 
 
 /**
  * Decide every change in a block of aligned rows and columns at once (a
- * selected range): its changed cells, and its added or removed rows. Returns
- * new decisions; the input isn't changed. `decision: undefined` clears them.
+ * selected range): its edited cells (not downstream results; see
+ * {@link isDecidable}), and its added or removed rows. Returns new
+ * decisions; the input isn't changed. `decision: undefined` clears them.
  */
 export function decideRange(diff: TableDiff, decisions: SheetDecisions, rows: number[], columns: number[], decision: Decision | undefined): SheetDecisions {
   const next: SheetDecisions = { cells: new Map(decisions.cells), rows: new Map(decisions.rows), columns: new Map(decisions.columns) };
@@ -38,7 +55,7 @@ export function decideRange(diff: TableDiff, decisions: SheetDecisions, rows: nu
     if (st === ROW_STATUS.added || st === ROW_STATUS.removed) set(next.rows, r);
     else if (st === ROW_STATUS.modified) {
       const mask = diff.changedCells.get(r);
-      for (const c of columns) if (mask?.[c]) set(next.cells, r * w + c);
+      for (const c of columns) if (mask?.[c] && isDecidable(diff, r, c)) set(next.cells, r * w + c);
     }
   }
   // Every row of a column selected: decide the column too, if it was added, removed or renamed.
@@ -56,13 +73,13 @@ export function decisionOf(diff: TableDiff, decisions: SheetDecisions | undefine
   return decisions.cells.get(row * diff.columns.length + col) ?? 'accept';
 }
 
-/** Counts of decided and undecided changes. */
+/** Counts of decided changes, and of changes there are to decide (edits, rows, columns). */
 export function decisionStats(diff: TableDiff, decisions: SheetDecisions): { accepted: number; rejected: number; changes: number } {
   let changes = 0;
   for (let r = 0; r < diff.rowCount; r++) {
     const st = diff.status[r];
     if (st === ROW_STATUS.added || st === ROW_STATUS.removed) changes++;
-    else if (st === ROW_STATUS.modified) for (const v of diff.changedCells.get(r) ?? []) changes += v ? 1 : 0;
+    else if (st === ROW_STATUS.modified) diff.changedCells.get(r)?.forEach((v, c) => (changes += v && isDecidable(diff, r, c) ? 1 : 0));
   }
   for (const c of diff.columns) if (c.status === 'added' || c.status === 'removed' || c.status === 'renamed') changes++;
   let rejected = 0;
@@ -75,7 +92,9 @@ export function decisionStats(diff: TableDiff, decisions: SheetDecisions): { acc
  * The table with the decisions applied: the new table, with rejected cell
  * changes back to their old values (and formulas), rejected added rows
  * dropped, rejected removed rows restored where they were, and rejected
- * column changes undone.
+ * column changes undone. Formula results aren't recalculated: for a
+ * workbook, `applyDecisionsToXlsx` writes the merged file with its results
+ * recalculated.
  *
  * ```ts
  * import { applyDecisions, diffTables, noDecisions, parseCsv } from 'spreadiff';

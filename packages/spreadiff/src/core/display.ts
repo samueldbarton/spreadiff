@@ -48,6 +48,8 @@ export function displayCell(table: Table, row: number, col: number): string {
  * format to show.
  */
 export function displayMagnitude(abs: number, code: string | undefined): string {
+  // A difference of two doubles carries binary noise (56082.4700000002): show the 12 digits that mean something.
+  abs = Number(abs.toPrecision(12));
   if (code && !isDateFormat(code)) {
     const s = formatNumberCode(abs, code, false, formatCell);
     // A change too small for the format ("0" for 0.4 in a whole-number cell) shows as the plain number.

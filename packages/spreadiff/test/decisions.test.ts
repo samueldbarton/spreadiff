@@ -11,6 +11,7 @@ import {
   decisionOf,
   diffTables,
   diffWorkbooks,
+  isDecidable,
   noDecisions,
   parseCsv,
   parseXlsx,
@@ -114,6 +115,27 @@ describe('applyDecisionsToXlsx', () => {
     expect(applied).toBe(1);
     expect(skipped.map((x) => x.target)).toEqual(['row 4']); // the Discount row, which can't be deleted in place
     expect(parseXlsx(file).sheets[0].formulas?.[3]?.[1]).toBe('=B2*B3');
+  });
+
+  it('decides edits only: a downstream result follows its inputs', async () => {
+    const oldBytes = await model(10, 100);
+    const newBytes = await model(12, 100);
+    const wd = diffWorkbooks(parseXlsx(oldBytes), parseXlsx(newBytes));
+    const s = wd.sheets[0].diff;
+    const all = [...Array(s.rowCount).keys()];
+    const cols = s.columns.map((_, i) => i);
+    const price = all.find((r) => s.newTable.rows[s.newRows[r]][0] === 'Price')!;
+    const total = all.find((r) => s.newTable.rows[s.newRows[r]][0] === 'Revenue')!;
+    expect(isDecidable(s, price, 1)).toBe(true);
+    expect(isDecidable(s, total, 1)).toBe(false);
+    const dec = decideRange(s, noDecisions(), all, cols, 'reject');
+    expect([...dec.cells.keys()]).toEqual([price * s.columns.length + 1]);
+    // Rejecting the total directly is refused, with the reason.
+    const direct = noDecisions();
+    direct.cells.set(total * s.columns.length + 1, 'reject');
+    const out = applyDecisionsToXlsx(newBytes, wd, [direct]);
+    expect(out.applied).toBe(0);
+    expect(out.skipped.map((x) => x.reason)).toEqual(['a downstream result: it follows its inputs; reject the edits that moved it']);
   });
 
   it('skips a formula that reads a row the new file no longer has', () => {
