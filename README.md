@@ -101,8 +101,10 @@ report.
 
 ## Quick start
 
-spreadiff isn't on npm yet. [Getting started → Install](docs/getting-started.md#install)
-builds it from this repository.
+```bash
+npm install spreadiff        # the library and UI
+npm install spreadiff-lite   # the report and CLI, no UI
+```
 
 **Two files in, the whole review out** (tabs, the traced grid, the outputs panel):
 

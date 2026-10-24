@@ -1157,6 +1157,12 @@ const view = new SpreadsheetDiff({ layout: 'split', review: true });
 await view.render({ oldFile: new URL('/v1.xlsx', location.href), newFile: new URL('/v2.xlsx', location.href), container });
 ```
 
+URL inputs are fetched for you; `File`s and bytes are read directly. The component
+renders inside a shadow root, so page CSS doesn't reach its internals:
+theme it with the same CSS variables as the grid ([Theming](theming.md)),
+and in tests query through `view.host.shadowRoot` (Playwright's
+`getByText` and `getByRole` see into it).
+
 | Member | |
 | --- | --- |
 | `render(props)` | Mount and show two files, or a comparison; resolves when shown, rejects if reading fails (the error is shown too) |

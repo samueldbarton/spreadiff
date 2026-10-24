@@ -31,9 +31,8 @@ It uses the same engine as `spreadiff`, so the
 
 ## Quick start
 
-spreadiff-lite isn't on npm yet; [Getting started → Install](getting-started.md#install)
-builds it from this repository (`npm run build -w spreadiff-lite` after
-the library). Once installed:
+Install it with `npm install spreadiff-lite`, or run it without
+installing:
 
 ```bash
 npx spreadiff-lite model-v1.xlsx model-v2.xlsx            # Markdown to stdout

@@ -5,20 +5,22 @@ For how the comparison works, see [How diffing works](diffing.md).
 
 ## Install
 
-spreadiff isn't published to npm yet. Until it is, build it from this
-repository and install the package directory:
+```bash
+npm install spreadiff
+```
+
+For [spreadiff-lite](spreadiff-lite.md), the report and CLI with no UI:
+
+```bash
+npm install spreadiff-lite      # or run it once: npx spreadiff-lite old.xlsx new.xlsx
+```
+
+To try unreleased changes, build from the repository and install the
+package directories:
 
 ```bash
 git clone https://github.com/samueldbarton/spreadiff
-cd spreadiff && npm install && npm run build -w spreadiff
-cd /path/to/your/app && npm install /path/to/spreadiff/packages/spreadiff
-```
-
-For [spreadiff-lite](spreadiff-lite.md), build it too and install both
-packages (it depends on the library):
-
-```bash
-cd spreadiff && npm run build -w spreadiff-lite
+cd spreadiff && npm install && npm run build -w spreadiff && npm run build -w spreadiff-lite
 cd /path/to/your/app && npm install /path/to/spreadiff/packages/spreadiff /path/to/spreadiff/packages/spreadiff-lite
 ```
 
@@ -74,6 +76,10 @@ export const Review = ({ before, after }: { before: File; after: File }) => (
   <SpreadsheetDiff oldFile={before} newFile={after} style={{ height: 600 }} />
 );
 ```
+
+URLs are fetched for you; there's no need to `fetch` them first. The
+component draws inside a shadow root: style it through the
+[theme variables](theming.md), not selectors.
 
 Add `review: true` to accept and reject changes and download the result
 (see [Reviewing changes](review.md)). For large files, pass `worker` so the

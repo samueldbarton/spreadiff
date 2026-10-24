@@ -1,9 +1,9 @@
 # Changelog
 
-spreadiff isn't published yet; versions below are the package version in
-the repository.
+Versions from 0.2.0 are published to npm; 0.1.0 was the package version in
+the repository only.
 
-## Unreleased
+## 0.2.0
 
 ### Added
 

@@ -152,3 +152,10 @@ once, while the files load.
 
 Everything runs in the browser. Nothing calls a server, and LibreOffice
 was only used to produce the expected answers the tests check against.
+
+## A small extra chunk
+
+Code that imports `diffFiles` or `SpreadsheetDiff` gets a small extra chunk in
+its build even without the `worker` option: the worker client, which
+`diffFiles` imports only when given a worker. Without one it's never
+fetched.

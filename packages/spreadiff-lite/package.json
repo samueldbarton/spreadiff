@@ -1,6 +1,6 @@
 {
   "name": "spreadiff-lite",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "What changed between two spreadsheets, and what it moved downstream, as Markdown or JSON. No UI.",
   "license": "MIT",
   "repository": {
@@ -49,7 +49,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "spreadiff": "0.1.0"
+    "spreadiff": "0.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
