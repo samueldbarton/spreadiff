@@ -22,7 +22,8 @@
     "test:hosted": "node scripts/test-hosted.mjs",
     "test:cli": "node scripts/test-cli.mjs",
     "docs:site": "npm run build -w @spreadiff/docs",
-    "docs:dev": "npm run dev -w @spreadiff/docs"
+    "docs:dev": "npm run dev -w @spreadiff/docs",
+    "bench:engine": "node bench/engine-fuzz/run.mjs"
   },
   "devDependencies": {
     "axe-core": "^4.14.0",

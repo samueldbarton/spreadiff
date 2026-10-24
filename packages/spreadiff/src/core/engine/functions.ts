@@ -11,7 +11,7 @@ import type { Ctx } from './evaluate.js';
 import { lookupName } from '../formula.js';
 import { parseFormula, Unsupported, type Node } from './parse.js';
 import {
-  compare, ERR, isArray, isError, isRange, partsFromSerial, serialFromParts, textToNumber, toBool, toNumber, toText,
+  compare, dateTextToSerial, ERR, isArray, isError, isRange, partsFromSerial, serialFromParts, textToNumber, toBool, toNumber, toText,
   type RangeVal, type Scalar, type Value, XlError,
 } from './values.js';
 
@@ -120,6 +120,8 @@ function wildcard(pattern: string): RegExp {
   return new RegExp(`^${re}$`, 'i');
 }
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Equality as `=` tests it: text ignores case, numbers and logicals compare exactly. Cheaper than ordering. */
+const same = (a: Scalar, b: Scalar) => (typeof a === 'string' && typeof b === 'string' ? a === b || a.toLowerCase() === b.toLowerCase() : compare(a, b) === 0);
 
 export function criterion(c: Scalar): (v: Scalar) => boolean {
   if (typeof c === 'number') return (v) => (typeof v === 'number' ? v === c : typeof v === 'string' && textToNumber(v) === c);
@@ -129,7 +131,8 @@ export function criterion(c: Scalar): (v: Scalar) => boolean {
   const m = /^(<=|>=|<>|<|>|=)?([\s\S]*)$/.exec(c)!;
   const op = m[1] ?? '';
   const rhs = m[2];
-  const n = textToNumber(rhs);
+  // A number, or a date written as text (">2024-01-01"); slash dates are locale-dependent and throw Unsupported.
+  const n = textToNumber(rhs) ?? (/\d/.test(rhs) && !/[*?~]/.test(rhs) ? dateTextToSerial(rhs) : null);
   if (op === '' || op === '=') {
     if (rhs === '') return op === '=' ? (v) => v === null || v === '' : (v) => v === null || v === '';
     if (n !== null) return (v) => (typeof v === 'number' ? v === n : typeof v === 'string' && textToNumber(v) === n);
@@ -251,7 +254,7 @@ function exactIndex(vals: Scalar[], key: Scalar, wild: boolean, ctx?: Ctx): numb
   for (let i = 0; i < vals.length; i++) {
     const v = vals[i];
     if (v === null) continue;
-    if (typeof v === typeof key && compare(v, key) === 0) return i;
+    if (typeof v === typeof key && same(v, key)) return i;
   }
   return -1;
 }
@@ -382,7 +385,7 @@ function xlookup(args: Node[], ctx: Ctx): Value {
   let hit = -1;
   if (mode === 0 || mode === 2) {
     const re = mode === 2 && typeof key === 'string' ? wildcard(key) : null;
-    hit = order.find((i) => (re ? typeof vals[i] === 'string' && re.test(vals[i] as string) : vals[i] !== null && typeof vals[i] === typeof key && compare(vals[i], key) === 0)) ?? -1;
+    hit = order.find((i) => (re ? typeof vals[i] === 'string' && re.test(vals[i] as string) : vals[i] !== null && typeof vals[i] === typeof key && same(vals[i], key))) ?? -1;
   } else if (mode === -1 || mode === 1) {
     // Exact, else next smaller (-1) or next larger (1).
     let best = -1;
@@ -523,9 +526,18 @@ export function formatValue(v: number, format: string, d1904 = false): string {
     fmt = sections[1];
     value = -v;
   } else if (v === 0 && sections.length > 2) fmt = sections[2];
+  if (fmt === '') return ''; // an empty section hides the value
   const isDate = /[yd]|h|s|(?<![#0.,])m/i.test(fmt.replace(/"[^"]*"|\\./g, ''));
   if (isDate) return formatDate(value, fmt, d1904);
   return formatNumber(value, fmt, v < 0 && sections.length === 1);
+}
+
+/** Text through a format's text section: the fourth, or a lone section with @; otherwise unchanged. */
+function formatText(v: string, format: string): string {
+  const sections = splitSections(format);
+  const fmt = sections.length > 3 ? sections[3] : sections.length === 1 && /@/.test(format.replace(/"[^"]*"/g, '')) ? sections[0] : null;
+  if (fmt === null) return v;
+  return fmt.replace(/"([^"]*)"|\\(.)|_.|\*.|@/g, (t, q, e) => (q !== undefined ? q : e !== undefined ? e : t[0] === '_' ? ' ' : t[0] === '*' ? '' : v));
 }
 
 function splitSections(f: string): string[] {
@@ -568,13 +580,19 @@ function formatNumber(v: number, fmt: string, negative: boolean): string {
 
 function formatDate(v: number, fmt: string, d1904: boolean): string {
   const p = partsFromSerial(v, d1904);
-  let secs = Math.round((v - Math.floor(v)) * 86400);
-  if (secs >= 86400) secs = 86399;
+  // "ss.000" shows fractions of a second: round to that many decimals instead of whole seconds.
+  const fd = Math.min(3, Math.max(0, ...[...fmt.matchAll(/s+\.(0+)/gi)].map((m) => m[1].length)));
+  const scale = 10 ** fd;
+  let units = Math.round((v - Math.floor(v)) * 86400 * scale);
+  if (units >= 86400 * scale) units = 86400 * scale - 1;
+  const secs = Math.floor(units / scale);
+  const frac = fd ? String(units % scale).padStart(fd, '0') : '';
   const hh = Math.floor(secs / 3600);
   const mm = Math.floor((secs % 3600) / 60);
   const ss = secs % 60;
   const ampm = /AM\/PM|A\/P/i.test(fmt);
-  const tokens = fmt.match(/"[^"]*"|\\.|AM\/PM|A\/P|y+|m+|d+|h+|s+|[^ymdhs"\\]+/gi) ?? [];
+  // AM/PM and A/P before the literal-run rule, which mustn't swallow them ("ss AM/PM"): "a" is its own literal.
+  const tokens = fmt.match(/"[^"]*"|\\.|AM\/PM|A\/P|y+|m+|d+|h+|s+|[aA]|[^ymdhsaA"\\]+/gi) ?? [];
   let out = '';
   for (let k = 0; k < tokens.length; k++) {
     const t = tokens[k];
@@ -583,14 +601,18 @@ function formatDate(v: number, fmt: string, d1904: boolean): string {
     const nextTok = tokens.slice(k + 1).find((x) => /^[ymdhs]/i.test(x))?.toLowerCase() ?? '';
     if (t.startsWith('"')) out += t.slice(1, -1);
     else if (t.startsWith('\\')) out += t.slice(1);
-    else if (/^am\/pm$/i.test(t)) out += hh < 12 ? 'AM' : 'PM';
-    else if (/^a\/p$/i.test(t)) out += hh < 12 ? 'A' : 'P';
+    else if (/^am\/pm$/i.test(t)) out += hh < 12 ? 'AM' : 'PM'; // always upper case, as Excel writes it
+    else if (/^a\/p$/i.test(t)) out += hh < 12 ? t[0] : t[2]; // the format's own case: a/p → "p", A/P → "P"
     else if (l[0] === 'y') out += l.length <= 2 ? String(p.y % 100).padStart(2, '0') : String(p.y);
     else if (l[0] === 'd') out += l.length === 1 ? p.d : l.length === 2 ? String(p.d).padStart(2, '0') : l.length === 3 ? DAYS[p.dow].slice(0, 3) : DAYS[p.dow];
     else if (l[0] === 'h') {
       const h = ampm ? hh % 12 || 12 : hh;
       out += l.length === 1 ? h : String(h).padStart(2, '0');
     } else if (l[0] === 's') out += l.length === 1 ? ss : String(ss).padStart(2, '0');
+    else if (fd && /^\.0+/.test(t) && tokens[k - 1]?.toLowerCase().startsWith('s')) {
+      const zeros = /^\.(0+)/.exec(t)![1].length;
+      out += '.' + frac.slice(0, zeros).padEnd(zeros, '0') + t.slice(1 + zeros);
+    }
     else if (l[0] === 'm') {
       // m after h or before s is minutes.
       if (prev.startsWith('h') || nextTok.startsWith('s')) out += l.length === 1 ? mm : String(mm).padStart(2, '0');
@@ -709,7 +731,7 @@ export const FUNCTIONS: Record<string, Fn> = {
     let i = 1;
     for (; i + 1 < args.length; i += 2) {
       const c = sc(ctx, args[i]);
-      if (!isError(c) && compare(v, c) === 0 && typeof v === typeof c) return ctx.ev(args[i + 1]);
+      if (!isError(c) && typeof v === typeof c && same(v, c)) return ctx.ev(args[i + 1]);
     }
     return i < args.length ? ctx.ev(args[i]) : ERR.na;
   },
@@ -903,10 +925,10 @@ export const FUNCTIONS: Record<string, Fn> = {
     if (Math.sign(x as number) * Math.sign(m as number) < 0) return ERR.num;
     return roundHalfAway((x as number) / (m as number), 0) * (m as number);
   },
-  CEILING: (args, ctx) => ceilFloor(args, ctx, Math.ceil),
-  'CEILING.MATH': (args, ctx) => ceilFloor(args, ctx, Math.ceil),
-  FLOOR: (args, ctx) => ceilFloor(args, ctx, Math.floor),
-  'FLOOR.MATH': (args, ctx) => ceilFloor(args, ctx, Math.floor),
+  CEILING: (args, ctx) => ceilFloor(args, ctx, true, false),
+  'CEILING.MATH': (args, ctx) => ceilFloor(args, ctx, true, true),
+  FLOOR: (args, ctx) => ceilFloor(args, ctx, false, false),
+  'FLOOR.MATH': (args, ctx) => ceilFloor(args, ctx, false, true),
   EVEN: math1((x) => Math.sign(x) * Math.ceil(Math.abs(x) / 2) * 2),
   ODD: math1((x) => {
     const n = Math.ceil(Math.abs(x));
@@ -1150,8 +1172,12 @@ export const FUNCTIONS: Record<string, Fn> = {
     const v = sc(ctx, args[0]);
     if (typeof v === 'number') return v;
     if (isError(v)) return v;
-    const n = textToNumber(String(v ?? ''));
-    return n === null ? ERR.value : n;
+    const t = String(v ?? '');
+    const n = textToNumber(t);
+    if (n !== null) return n;
+    const d = dateTextToSerial(t);
+    if (d === null) return ERR.value;
+    return date1904(ctx) && d >= 1 ? d - 1462 : d;
   },
   TEXT: (args, ctx) => {
     arity(args, 2);
@@ -1159,9 +1185,10 @@ export const FUNCTIONS: Record<string, Fn> = {
     const f = text(ctx, args[1]);
     if (isError(v)) return v;
     if (isError(f)) return f;
+    if (typeof v === 'boolean') return formatText(v ? 'TRUE' : 'FALSE', f); // Excel formats a logical as text
     if (typeof v === 'string') {
       const n = textToNumber(v);
-      if (n === null) return v;
+      if (n === null) return formatText(v, f);
       return formatValue(n, f, ctx.host.date1904);
     }
     const n = toNumber(v);
@@ -1227,9 +1254,9 @@ export const FUNCTIONS: Record<string, Fn> = {
     arity(args, 1);
     const t = text(ctx, args[0]);
     if (isError(t)) return t;
-    const m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(t.trim());
-    if (!m) throw new Unsupported('DATEVALUE format');
-    return serialFromParts(Number(m[1]), Number(m[2]), Number(m[3]), date1904(ctx));
+    const n = dateTextToSerial(t);
+    if (n === null || n < 1) return ERR.value; // not a date (a time alone has no date part)
+    return Math.floor(n) - (date1904(ctx) ? 1462 : 0);
   },
 
   // Financial
@@ -1304,15 +1331,33 @@ function round(f: (x: number, d: number) => number): Fn {
   };
 }
 
-function ceilFloor(args: Node[], ctx: Ctx, f: (x: number) => number): Value {
-  arity(args, 1, 3);
+/**
+ * CEILING / FLOOR and their .MATH forms, with Excel's sign rules:
+ * - CEILING(x, s): up for s > 0; for x < 0 and s < 0, away from zero
+ *   (CEILING(-2.1, -1) = -3); x > 0 with s < 0 is #NUM!.
+ * - FLOOR(x, s): down for s > 0 (FLOOR(-2.1, 1) = -3); for x < 0 and
+ *   s < 0, toward zero (-2); x > 0 with s < 0 is #NUM!; s = 0 is #DIV/0!.
+ * - .MATH: the sign of s is ignored; negative x rounds toward zero
+ *   (CEILING.MATH) or away from it (FLOOR.MATH), reversed by a non-zero mode.
+ */
+function ceilFloor(args: Node[], ctx: Ctx, up: boolean, math: boolean): Value {
+  arity(args, 1, math ? 3 : 2);
   const x = num(ctx, args[0]);
   const s = num(ctx, args[1], 1);
-  const e = firstError(x, s);
+  const mode = math ? num(ctx, args[2], 0) : 0;
+  const e = firstError(x, s, mode);
   if (e) return e;
-  if (s === 0) return 0;
-  const step = Math.abs(s as number);
-  return f(Number(((x as number) / step).toPrecision(15))) * step;
+  const xv = x as number;
+  const sv = s as number;
+  if (sv === 0) return !math && !up ? ERR.div0 : 0;
+  if (!math && xv > 0 && sv < 0) return ERR.num;
+  const step = Math.abs(sv);
+  const q = Number((xv / step).toPrecision(15));
+  let toCeil: boolean;
+  if (math) toCeil = xv >= 0 ? up : up === (mode === 0);
+  else toCeil = sv > 0 ? up : !up; // both negative: CEILING goes away from zero (floor), FLOOR toward it (ceil)
+  const r = (toCeil ? Math.ceil(q) : Math.floor(q)) * step;
+  return r === 0 ? 0 : r; // no -0
 }
 
 function nth(args: Node[], ctx: Ctx, largest: boolean): Value {
