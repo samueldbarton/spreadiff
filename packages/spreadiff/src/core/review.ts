@@ -175,11 +175,15 @@ export function applyDecisions(diff: TableDiff, decisions: SheetDecisions): Tabl
   return t;
 }
 
-/** A table as CSV (RFC 4180): quoted where needed, `\r\n` between rows. Formulas are written as their values. */
-export function tableToCsv(table: Table): string {
+/**
+ * A table as CSV (RFC 4180): quoted where needed, `\r\n` between rows.
+ * Formulas are written as their values. `delimiter` `'\t'` writes TSV.
+ */
+export function tableToCsv(table: Table, delimiter = ','): string {
+  const needs = new RegExp(`["\r\n${delimiter === '\t' ? '\t' : delimiter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}]`);
   const esc = (v: CellValue) => {
     const s = v === null ? '' : typeof v === 'boolean' ? (v ? 'TRUE' : 'FALSE') : String(v);
-    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    return needs.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
-  return [table.columns, ...table.rows].map((r) => r.map(esc).join(',')).join('\r\n') + '\r\n';
+  return [table.columns, ...table.rows].map((r) => r.map(esc).join(delimiter)).join('\r\n') + '\r\n';
 }
