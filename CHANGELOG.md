@@ -187,7 +187,7 @@ the repository only.
 - **`parseFile` picks the reader from the contents**, and reads `.xls`
   instead of rejecting it. Sizes (gzip, whole entries): `spreadiff/html`
   16.0 → 19.9 KB (number formats), `spreadiff/core` 42.1 → 74.0 KB (the new
-  readers, review, merge and the .xlsx writer), `spreadiff` 62.6 → 101.1 KB.
+  readers, review, merge and the .xlsx writer), `spreadiff` 62.6 → 101.2 KB.
   Bundlers keep only what you import: `parseXlsx` alone is 29.5 KB,
   `parseFile` 42.8 KB.
 - **`spreadiff/lite` is now `spreadiff/html`**, and `LITE_CSS`,
