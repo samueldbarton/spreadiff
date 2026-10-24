@@ -20,8 +20,29 @@ export interface ParseOdsOptions {
 /** LibreOffice error codes → Excel errors (as LibreOffice's .xlsx export maps them; others are #VALUE!). */
 const LO_ERRORS: Record<number, string> = { 503: '#NUM!', 519: '#VALUE!', 521: '#NULL!', 524: '#REF!', 525: '#NAME?', 532: '#DIV/0!', 32767: '#N/A' };
 
-// Repeats beyond this (trailing empty rows and columns run to the sheet's end) aren't expanded.
-const MAX_REPEAT = 10_000;
+// A repeated run of empty cells or rows (trailing ones run to the sheet's end) only moves the
+// position; a run with content is expanded, up to the sheet's size.
+const MAX_ROWS = 1_048_576;
+const MAX_COLS = 16_384;
+const count = (v: string | undefined, max: number) => Math.max(1, Math.min(Number(v ?? 1) || 1, max));
+
+/** A reference into another file, `'file:///dir/Book.xlsx'#$Sheet.A1`, as Excel writes it: `'[Book.xlsx]Sheet'!A1`. */
+function externalRef(inner: string): string | null {
+  const m = /^'((?:[^']|'')*)'#(.*)$/.exec(inner);
+  if (!m) return null;
+  let file = m[1].replace(/''/g, "'");
+  try {
+    file = decodeURIComponent(file);
+  } catch {
+    // keep it as written
+  }
+  file = file.replace(/^.*[\\/]/, '');
+  const ref = refToExcel(m[2]);
+  const bang = ref.lastIndexOf('!');
+  if (bang < 0) return `[${file}]${ref}`;
+  const sheet = ref.slice(0, bang).replace(/^'(.*)'$/, '$1').replace(/''/g, "'");
+  return `'${`[${file}]${sheet}`.replace(/'/g, "''")}'${ref.slice(bang)}`;
+}
 
 /**
  * An OpenFormula expression in Excel's syntax: `of:=[.A1]+['Data'.B2:.C3]`
@@ -41,8 +62,11 @@ export function openFormulaToExcel(f: string): string {
       i = j;
     } else if (ch === '[') {
       const end = s.indexOf(']', i);
-      out += refToExcel(s.slice(i + 1, end < 0 ? s.length : end));
+      const inner = s.slice(i + 1, end < 0 ? s.length : end);
       i = end < 0 ? s.length : end;
+      // [1]Sheet!A1: Excel's own external-link syntax, which LibreOffice keeps as written.
+      if (/^\d+$/.test(inner)) out += `[${inner}]`;
+      else out += externalRef(inner) ?? refToExcel(inner);
     } else if (ch === ';') out += ',';
     else if (ch === '|' && braces > 0) out += ';'; // array constant rows: {1;2|3;4} → {1,2;3,4}
     else {
@@ -142,7 +166,7 @@ export function parseOds(data: ArrayBuffer | Uint8Array, options: ParseOdsOption
     for (const m of (body ?? '').matchAll(rowRe)) {
       const rowAttrs = m[1];
       const rowBody = m[3] ?? '';
-      const repeat = Math.min(Number(attr(rowAttrs, 'table:number-rows-repeated') ?? 1), MAX_REPEAT);
+      const repeat = count(attr(rowAttrs, 'table:number-rows-repeated'), MAX_ROWS);
       const visibility = attr(rowAttrs, 'table:visibility') ?? '';
       const isHidden = visibility === 'collapse' || visibility === 'filter';
       const row: CellValue[] = [];
@@ -153,7 +177,7 @@ export function parseOds(data: ArrayBuffer | Uint8Array, options: ParseOdsOption
       for (const cm of rowBody.matchAll(cellRe)) {
         const a = cm[2];
         const cb = cm[4] ?? '';
-        const reps = Math.min(Number(attr(a, 'table:number-columns-repeated') ?? 1), MAX_REPEAT);
+        const reps = count(attr(a, 'table:number-columns-repeated'), MAX_COLS);
         let value: CellValue = null;
         const type = attr(a, 'office:value-type') ?? attr(a, 'calcext:value-type');
         if (cm[1] === 'table-cell') {
@@ -193,6 +217,8 @@ export function parseOds(data: ArrayBuffer | Uint8Array, options: ParseOdsOption
           value = formula.slice(1);
           formula = null;
         }
+        // LibreOffice stores a typed TRUE or FALSE as the formula =TRUE() / =FALSE(): it's a value, as in Excel.
+        if (formula && /^=(TRUE|FALSE)\(\)$/i.test(formula) && typeof value === 'boolean') formula = null;
         // An array formula sits on its top-left cell; every cell of the block holds it (as in .xlsx).
         const mc = Number(attr(a, 'table:number-matrix-columns-spanned') ?? 0);
         const mr = Number(attr(a, 'table:number-matrix-rows-spanned') ?? 0);
@@ -200,24 +226,25 @@ export function parseOds(data: ArrayBuffer | Uint8Array, options: ParseOdsOption
         const cs = Number(attr(a, 'table:number-columns-spanned') ?? 1);
         const rs = Number(attr(a, 'table:number-rows-spanned') ?? 1);
         if (cs > 1 || rs > 1) merges.push({ r0: r, c0: c, r1: r + rs - 1, c1: c + cs - 1 });
-        for (let k = 0; k < reps; k++) {
-          if (value !== null || formula) {
+        if (value === null && !formula) c += reps;
+        else
+          for (let k = 0; k < reps && c < MAX_COLS; k++) {
             row[c] = value;
             frow[c] = formula;
             any = true;
+            c++;
           }
-          c++;
-        }
       }
-      for (let k = 0; k < repeat; k++) {
-        if (isHidden) hidden.push(r);
-        if (visibility === 'filter') filters.push({ r0: r, r1: r });
-        if (any) {
+      // Empty rows only move the position: hiding one changes no total, so it isn't recorded.
+      if (!any) r += repeat;
+      else
+        for (let k = 0; k < repeat && r < MAX_ROWS; k++) {
+          if (isHidden) hidden.push(r);
+          if (visibility === 'filter') filters.push({ r0: r, r1: r });
           grid[r] = row.slice();
           formulas[r] = frow.slice();
+          r++;
         }
-        r++;
-      }
     }
     for (const b of arrays) {
       for (let rr = b.r0; rr <= b.r1; rr++) {
