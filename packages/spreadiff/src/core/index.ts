@@ -20,3 +20,4 @@ export { BUILTIN_FORMATS, formatNumberCode, formatTextCode, isDateFormat } from 
 export { displayCell, displayMagnitude, displayValue, formatCodeAt } from './display.js';
 export { applyDecisions, decideRange, decisionOf, decisionStats, isDecidable, noDecisions, tableToCsv, type Decision, type SheetDecisions } from './review.js';
 export { applyDecisionsToXlsx, translateFormula, type SkippedDecision } from './xlsx-write.js';
+export { conflictAnnotations, mergeTables, type MergeConflict, type MergeOptions, type MergeResult } from './merge.js';
