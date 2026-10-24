@@ -13,6 +13,8 @@ import { computeMissingValues } from './recalc.js';
 import { BUILTIN_FORMATS } from './numfmt.js';
 import { attr, decode, decodeRef, eachElement, removeElements, resolvePath, textRuns } from './xml.js';
 import { parseObjects } from './objects.js';
+
+export { applyDecisionsToXlsx, type SkippedDecision } from './xlsx-write.js';
 import type { CellValue, Table, TableDefinition, Workbook } from './types.js';
 
 /** Options for {@link parseXlsx}. */

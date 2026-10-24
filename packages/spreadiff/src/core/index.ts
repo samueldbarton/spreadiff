@@ -18,3 +18,5 @@ export { reportOf, type ChangeReport, type CellChange, type Cause, type Structur
 export { diffWorkbookObjects, type ChartInfo, type ObjectChange, type PivotInfo } from './objects.js';
 export { BUILTIN_FORMATS, formatNumberCode, formatTextCode, isDateFormat } from './numfmt.js';
 export { displayCell, displayMagnitude, displayValue, formatCodeAt } from './display.js';
+export { applyDecisions, decideRange, decisionOf, decisionStats, noDecisions, tableToCsv, type Decision, type SheetDecisions } from './review.js';
+export { applyDecisionsToXlsx, translateFormula, type SkippedDecision } from './xlsx-write.js';
