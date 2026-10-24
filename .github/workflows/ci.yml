@@ -1,0 +1,74 @@
+# Tests on every push and pull request.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests, types, build, docs, CLI, action
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run docs:check
+      - run: npm run test:cli
+      - run: npm run test:action
+
+  browser:
+    name: Browser (grid, render fuzz, bundlers, hosted)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Point the scripts at Playwright's Chromium
+        run: echo "CHROMIUM=$(node -p "require('playwright').chromium.executablePath()")" >> "$GITHUB_ENV"
+      - run: npm run build
+      - name: Start the viewer
+        run: |
+          (cd apps/viewer && npx vite --port 5199 --strictPort > /tmp/vite.log 2>&1 &)
+          for i in $(seq 1 60); do curl -sf http://localhost:5199/test.html > /dev/null && exit 0; sleep 1; done
+          cat /tmp/vite.log; exit 1
+      - run: npm run test:browser
+      - run: npm run fuzz:render
+      - run: npm run test:bundle
+      - run: npm run test:hosted
+
+  engine:
+    name: Formula engine vs LibreOffice
+    # Ubuntu 24.04's LibreOffice (24.2) is the version expected.json was recorded with.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice-calc-nogui python3-uno python3-openpyxl
+      - run: soffice --version
+      - run: npm ci
+      - run: npm run build
+      - name: Every difference from LibreOffice is a known one
+        run: npm run bench:engine -- 1500 7 --check "$PWD/bench/engine-fuzz/expected.json"

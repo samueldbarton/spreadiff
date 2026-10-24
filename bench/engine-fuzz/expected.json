@@ -1,0 +1,430 @@
+{
+ "=_xlfn.TEXTJOIN(\",\",TRUE(),In!C1:C6)": {
+  "engine": "\"TRUE,FALSE,5,5\"",
+  "libreoffice": "\"1,0,5,5\""
+ },
+ "=_xlfn.xlookup(\"c\",In!F1:F10,In!E1:E10)": {
+  "engine": "30",
+  "libreoffice": "#NAME?"
+ },
+ "=_xlfn.xlookup(\"D*\",In!F1:F10,In!E1:E10,,2)": {
+  "engine": "40",
+  "libreoffice": "#NAME?"
+ },
+ "=_xlfn.xlookup(40,In!E1:E10,In!F1:F10,,0,-1)": {
+  "engine": "\"d\"",
+  "libreoffice": "#NAME?"
+ },
+ "=_xlfn.xlookup(65,In!E1:E10,In!F1:F10,,-1)": {
+  "engine": "\"f\"",
+  "libreoffice": "#NAME?"
+ },
+ "=_xlfn.xlookup(65,In!E1:E10,In!F1:F10,,1)": {
+  "engine": "\"g\"",
+  "libreoffice": "#NAME?"
+ },
+ "=_xlfn.xlookup(65,In!E1:E10,In!F1:F10,\"none\")": {
+  "engine": "\"none\"",
+  "libreoffice": "#NAME?"
+ },
+ "=_xlfn.xlookup(70,In!G1:G10,In!F1:F10)": {
+  "engine": "\"e\"",
+  "libreoffice": "#NAME?"
+ },
+ "=_xlfn.xlookup(95,In!E1:E10,In!F1:F10,\"-\",1)": {
+  "engine": "\"j\"",
+  "libreoffice": "#NAME?"
+ },
+ "=_xlfn.xlookup(99,In!E1:E10,In!F1:F10)": {
+  "engine": "#N/A",
+  "libreoffice": "#NAME?"
+ },
+ "=-1E+016&\"\"": {
+  "engine": "\"-1E+16\"",
+  "libreoffice": "\"-1E+016\""
+ },
+ "=\"15 January 2024\"+0": {
+  "engine": "45306",
+  "libreoffice": "#VALUE!"
+ },
+ "=\"1900-02-29\"+0": {
+  "engine": "60",
+  "libreoffice": "#VALUE!"
+ },
+ "=\"a\"&TRUE()": {
+  "engine": "\"aTRUE\"",
+  "libreoffice": "\"a1\""
+ },
+ "=(COUNTIF(In!C1:C15,\"<=0.1\")^3)": {
+  "engine": "8",
+  "libreoffice": "27"
+ },
+ "=(IF((2.5<In!A6),In!C5,ROUND(In!C10,-1))^-1)": {
+  "engine": "#DIV/0!",
+  "libreoffice": "#NUM!"
+ },
+ "=(In!C10&SUBSTITUTE((In!C1&\"\"),\"a\",\"Z\"))": {
+  "engine": "\"-3TRUE\"",
+  "libreoffice": "\"-31\""
+ },
+ "=(In!C7>=IFERROR(N(In!A11),7))": {
+  "engine": "true",
+  "libreoffice": "false"
+ },
+ "=(LEFT(MID(\"A b\",2,2),5)&SUBSTITUTE(MID(In!C7,3,1),\"a\",\"Z\"))": {
+  "engine": "\" bU\"",
+  "libreoffice": "\" b\""
+ },
+ "=(MOD((In!C13+In!A1),2)=EVEN(IF(FALSE(),In!A10,In!C2)))": {
+  "engine": "#VALUE!",
+  "libreoffice": "false"
+ },
+ "=(REPT(LEFT(In!C2,1),2)&LEFT(In!C14,1))": {
+  "engine": "\"FF1\"",
+  "libreoffice": "\"001\""
+ },
+ "=0.00000000015&\"\"": {
+  "engine": "\"1.5E-10\"",
+  "libreoffice": "\"0.00000000015\""
+ },
+ "=0.0000001&\"\"": {
+  "engine": "\"1E-07\"",
+  "libreoffice": "\"0.0000001\""
+ },
+ "=1.23456789012346E+017&\"\"": {
+  "engine": "\"1.23456789012346E+17\"",
+  "libreoffice": "\"1.23456789012346E+017\""
+ },
+ "=1000000000000000&\"\"": {
+  "engine": "\"1E+15\"",
+  "libreoffice": "\"1000000000000000\""
+ },
+ "=1E+020&\"\"": {
+  "engine": "\"1E+20\"",
+  "libreoffice": "\"1E+020\""
+ },
+ "=2^60&\"\"": {
+  "engine": "\"1.15292150460685E+18\"",
+  "libreoffice": "\"1.15292150460685E+018\""
+ },
+ "=AVERAGE(In!C1:C15)": {
+  "engine": "1.5",
+  "libreoffice": "1.22222222222222"
+ },
+ "=CEILING(2.5,-1)": {
+  "engine": "#NUM!",
+  "libreoffice": "#VALUE!"
+ },
+ "=CODE(\"\")": {
+  "engine": "#VALUE!",
+  "libreoffice": "0"
+ },
+ "=CONCATENATE(\"a\",1,TRUE())": {
+  "engine": "\"a1TRUE\"",
+  "libreoffice": "\"a11\""
+ },
+ "=COUNT(In!C1:C15)": {
+  "engine": "6",
+  "libreoffice": "9"
+ },
+ "=COUNTIF(In!B1:B15,10)": {
+  "engine": "1",
+  "libreoffice": "0"
+ },
+ "=COUNTIF(In!C1:C15,\">=0\")": {
+  "engine": "5",
+  "libreoffice": "8"
+ },
+ "=COUNTIF(In!C1:C15,\"TRUE\")": {
+  "engine": "2",
+  "libreoffice": "4"
+ },
+ "=COUNTIF(In!C1:C15,TRUE())": {
+  "engine": "2",
+  "libreoffice": "3"
+ },
+ "=DATE(1900,3,1)-DATE(1900,2,28)": {
+  "engine": "2",
+  "libreoffice": "1"
+ },
+ "=DAY(59)": {
+  "engine": "28",
+  "libreoffice": "27"
+ },
+ "=FIND(\"\",\"abc\")": {
+  "engine": "1",
+  "libreoffice": "#VALUE!"
+ },
+ "=FLOOR(2.5,0)": {
+  "engine": "#DIV/0!",
+  "libreoffice": "#VALUE!"
+ },
+ "=IF((\"\">\"\"),ROUNDDOWN(In!A12,0),MATCH(IFERROR(In!C1,7),In!E1:E10,-1))": {
+  "engine": "#N/A",
+  "libreoffice": "10"
+ },
+ "=IF((In!B14=In!C13),(3^-1),N(COUNT(In!C1:C15)))": {
+  "engine": "6",
+  "libreoffice": "9"
+ },
+ "=IF((In!C2>N(In!A2)),LEFT((In!B7&\"\"),0),\"A b\")": {
+  "engine": "\"\"",
+  "libreoffice": "\"A b\""
+ },
+ "=IF((MID(In!B10,2,2)<>TRIM(In!B2)),SUBSTITUTE(In!C1,\"a\",\"Z\"),\"\")": {
+  "engine": "\"TRUE\"",
+  "libreoffice": "\"1\""
+ },
+ "=IF(In!C11,MID(IF(FALSE(),In!B10,In!C2),1,1),\"A b\")": {
+  "engine": "\"F\"",
+  "libreoffice": "\"0\""
+ },
+ "=IF(In!C5,((In!C14*In!C1)/ROUND(In!C5,1)),INDEX(In!E1:E10,10))": {
+  "engine": "#VALUE!",
+  "libreoffice": "0.2"
+ },
+ "=IF(ISNUMBER(In!B12),SIGN(MATCH(In!C9,In!E1:E10,-1)),MOD((In!C12^-1),3))": {
+  "engine": "#DIV/0!",
+  "libreoffice": "#NUM!"
+ },
+ "=IFERROR((COUNTIF(In!C1:C15,\"<=1\")^3),1)": {
+  "engine": "27",
+  "libreoffice": "216"
+ },
+ "=IFERROR(MEDIAN(In!C1:C15),10)": {
+  "engine": "1.5",
+  "libreoffice": "1"
+ },
+ "=INT(ROUNDDOWN(COUNT(In!C1:C15),1))": {
+  "engine": "6",
+  "libreoffice": "9"
+ },
+ "=ISNUMBER(In!C7)": {
+  "engine": "false",
+  "libreoffice": "true"
+ },
+ "=LEN(IF(FALSE(),(10&\"\"),In!C2))": {
+  "engine": "5",
+  "libreoffice": "1"
+ },
+ "=LEN(IF(In!C5,(In!B14&\"A b\"),SUBSTITUTE(\"A b\",\"a\",\"Z\")))": {
+  "engine": "#VALUE!",
+  "libreoffice": "6"
+ },
+ "=LEN(UPPER((In!C7&\"\")))": {
+  "engine": "4",
+  "libreoffice": "1"
+ },
+ "=MATCH((IFERROR(In!C13,1)^-1),In!E1:E10,1)": {
+  "engine": "#VALUE!",
+  "libreoffice": "#N/A"
+ },
+ "=MATCH(45,In!E1:E10,-1)": {
+  "engine": "10",
+  "libreoffice": "#N/A"
+ },
+ "=MATCH(MATCH(SUMIF(In!A1:A15,\">0.1\"),In!E1:E10,1),In!E1:E10,-1)": {
+  "engine": "10",
+  "libreoffice": "1"
+ },
+ "=MATCH(MOD((0+In!C13),3),In!E1:E10,1)": {
+  "engine": "#VALUE!",
+  "libreoffice": "#N/A"
+ },
+ "=MAX()": {
+  "engine": "0",
+  "libreoffice": "#VALUE!"
+ },
+ "=MEDIAN(In!C1:C15)": {
+  "engine": "1.5",
+  "libreoffice": "1"
+ },
+ "=REPT(In!C1,2)": {
+  "engine": "\"TRUETRUE\"",
+  "libreoffice": "\"11\""
+ },
+ "=REPT(In!C2,2)": {
+  "engine": "\"FALSEFALSE\"",
+  "libreoffice": "\"00\""
+ },
+ "=SQRT(-1)": {
+  "engine": "#NUM!",
+  "libreoffice": "#VALUE!"
+ },
+ "=SUM(\"3\",1)": {
+  "engine": "4",
+  "libreoffice": "#VALUE!"
+ },
+ "=SUM((In!E1:E10>50)+0)": {
+  "engine": "5",
+  "libreoffice": "#VALUE!"
+ },
+ "=SUM(In!C1:C15)": {
+  "engine": "9",
+  "libreoffice": "11"
+ },
+ "=SUM(In!E1:E3*In!G1:G3)": {
+  "engine": "3400",
+  "libreoffice": "#VALUE!"
+ },
+ "=TEXT(-0.004,\"?/8\")": {
+  "engine": "\"-0/8\"",
+  "libreoffice": "\"0/8\""
+ },
+ "=TEXT(-0.004,\"[$€-407] #,##0.00\")": {
+  "engine": "\"-€ 0.00\"",
+  "libreoffice": "\"€ 0.00\""
+ },
+ "=TEXT(-0.004,\"# ??/??\")": {
+  "engine": "\"-0      \"",
+  "libreoffice": "\"0      \""
+ },
+ "=TEXT(-0.004,\"# ?/?\")": {
+  "engine": "\"-0    \"",
+  "libreoffice": "\"0    \""
+ },
+ "=TEXT(-0.004,\"#,##0,\"\"k\"\"\")": {
+  "engine": "\"-0k\"",
+  "libreoffice": "\"0k\""
+ },
+ "=TEXT(-0.004,\"#,##0.0,,\"\"m\"\"\")": {
+  "engine": "\"-0.0m\"",
+  "libreoffice": "\"0.0m\""
+ },
+ "=TEXT(-0.004,\"#,##0.00\")": {
+  "engine": "\"-0.00\"",
+  "libreoffice": "\"0.00\""
+ },
+ "=TEXT(-0.004,\"#,##0\")": {
+  "engine": "\"-0\"",
+  "libreoffice": "\"0\""
+ },
+ "=TEXT(-0.004,\"#.##\")": {
+  "engine": "\"-.\"",
+  "libreoffice": "\"\""
+ },
+ "=TEXT(-0.004,\"0.0\"\"x\"\"\")": {
+  "engine": "\"-0.0x\"",
+  "libreoffice": "\"0.0x\""
+ },
+ "=TEXT(-0.004,\"0.0#\")": {
+  "engine": "\"-0.0\"",
+  "libreoffice": "\"0.0\""
+ },
+ "=TEXT(-0.004,\"0.00\")": {
+  "engine": "\"-0.00\"",
+  "libreoffice": "\"0.00\""
+ },
+ "=TEXT(-0.004,\"0\")": {
+  "engine": "\"-0\"",
+  "libreoffice": "\"0\""
+ },
+ "=TEXT(-0.004,\"0%\")": {
+  "engine": "\"-0%\"",
+  "libreoffice": "\"0%\""
+ },
+ "=TEXT(-0.004,\"000-0000\")": {
+  "engine": "\"-000-0000\"",
+  "libreoffice": "\"000-0000\""
+ },
+ "=TEXT(-1234.5678,\"#,##0.0,,\"\"m\"\"\")": {
+  "engine": "\"-0.0m\"",
+  "libreoffice": "\"0.0m\""
+ },
+ "=TEXT(0,\"[$-409]mmm-yy\")": {
+  "engine": "\"Jan-00\"",
+  "libreoffice": "\"Dec-99\""
+ },
+ "=TEXT(0,\"#.##\")": {
+  "engine": "\".\"",
+  "libreoffice": "\"\""
+ },
+ "=TEXT(0,\"d-mmm-yy\")": {
+  "engine": "\"0-Jan-00\"",
+  "libreoffice": "\"30-Dec-99\""
+ },
+ "=TEXT(0,\"mmmm d, yyyy\")": {
+  "engine": "\"January 0, 1900\"",
+  "libreoffice": "\"December 30, 1899\""
+ },
+ "=TEXT(0,\"yyyy-mm-dd hh:mm\")": {
+  "engine": "\"1900-01-00 00:00\"",
+  "libreoffice": "\"1899-12-30 00:00\""
+ },
+ "=TEXT(0.0789,\"[$-409]mmm-yy\")": {
+  "engine": "\"Jan-00\"",
+  "libreoffice": "\"Dec-99\""
+ },
+ "=TEXT(0.0789,\"d-mmm-yy\")": {
+  "engine": "\"0-Jan-00\"",
+  "libreoffice": "\"30-Dec-99\""
+ },
+ "=TEXT(0.0789,\"mm:ss.0\")": {
+  "engine": "\"53:37.0\"",
+  "libreoffice": "\"53:36.9\""
+ },
+ "=TEXT(0.0789,\"mmmm d, yyyy\")": {
+  "engine": "\"January 0, 1900\"",
+  "libreoffice": "\"December 30, 1899\""
+ },
+ "=TEXT(0.0789,\"yyyy-mm-dd hh:mm\")": {
+  "engine": "\"1900-01-00 01:53\"",
+  "libreoffice": "\"1899-12-30 01:53\""
+ },
+ "=TEXT(0.5,\"[$-409]mmm-yy\")": {
+  "engine": "\"Jan-00\"",
+  "libreoffice": "\"Dec-99\""
+ },
+ "=TEXT(0.5,\"d-mmm-yy\")": {
+  "engine": "\"0-Jan-00\"",
+  "libreoffice": "\"30-Dec-99\""
+ },
+ "=TEXT(0.5,\"mmmm d, yyyy\")": {
+  "engine": "\"January 0, 1900\"",
+  "libreoffice": "\"December 30, 1899\""
+ },
+ "=TEXT(0.5,\"yyyy-mm-dd hh:mm\")": {
+  "engine": "\"1900-01-00 12:00\"",
+  "libreoffice": "\"1899-12-30 12:00\""
+ },
+ "=TEXT(1.5,\"[$-409]mmm-yy\")": {
+  "engine": "\"Jan-00\"",
+  "libreoffice": "\"Dec-99\""
+ },
+ "=TEXT(1.5,\"d-mmm-yy\")": {
+  "engine": "\"1-Jan-00\"",
+  "libreoffice": "\"31-Dec-99\""
+ },
+ "=TEXT(1.5,\"mmmm d, yyyy\")": {
+  "engine": "\"January 1, 1900\"",
+  "libreoffice": "\"December 31, 1899\""
+ },
+ "=TEXT(1.5,\"yyyy-mm-dd hh:mm\")": {
+  "engine": "\"1900-01-01 12:00\"",
+  "libreoffice": "\"1899-12-31 12:00\""
+ },
+ "=TEXT(12345678,\"#.##\")": {
+  "engine": "\"12345678.\"",
+  "libreoffice": "\"12345678\""
+ },
+ "=TEXT(999.995,\"#.##\")": {
+  "engine": "\"1000.\"",
+  "libreoffice": "\"1000\""
+ },
+ "=TRIM(TRIM((In!C2&\"\")))": {
+  "engine": "\"FALSE\"",
+  "libreoffice": "\"0\""
+ },
+ "=TRUE()>1": {
+  "engine": "true",
+  "libreoffice": "false"
+ },
+ "=UPPER(In!C1)": {
+  "engine": "\"TRUE\"",
+  "libreoffice": "\"1\""
+ },
+ "=VLOOKUP(30,In!E1:F10,3,FALSE())": {
+  "engine": "#REF!",
+  "libreoffice": "#VALUE!"
+ }
+}

@@ -11,6 +11,14 @@ LibreOffice, which really recalculates:
 
 `npm run bench:engine -- 3000 11` runs 3,000 random probes with seed 11.
 
+CI runs `npm run bench:engine -- 1500 7 --check bench/engine-fuzz/expected.json`
+(see `.github/workflows/ci.yml`, on Ubuntu 24.04's LibreOffice 24.2). It
+fails on any difference that isn't in `expected.json`, the 107 known ones
+listed below by kind. When a change fixes some, the run lists them as
+gone; when LibreOffice, not the engine, is wrong about a new one, record
+it with `--write-baseline` (same count and seed) and add its kind to the
+table below.
+
 ## Reading the differences
 
 spreadiff follows **Excel**. LibreOffice is the oracle, but it differs
