@@ -97,41 +97,55 @@ function decode(rgce: Uint8Array, ctx: PtgContext): string {
     }
     return [s, p];
   };
+  /** An array constant from the extra data: BIFF8 and BIFF12 lay out sizes and values differently. */
   const arrayConstant = (): string => {
     const x = ctx.extra;
-    if (!x || b12) throw new Undecodable('array constant');
+    if (!x) throw new Undecodable('array constant');
     const xv = new DataView(x.buffer, x.byteOffset, x.byteLength);
-    const cols = x[extraPos] + 1;
-    const rows = xv.getUint16(extraPos + 1, true) + 1;
-    let p = extraPos + 3;
+    let p = extraPos;
+    let rows: number;
+    let cols: number;
+    if (b12) {
+      rows = xv.getUint32(p, true);
+      cols = xv.getUint32(p + 4, true);
+      p += 8;
+    } else {
+      cols = x[p] + 1;
+      rows = xv.getUint16(p + 1, true) + 1;
+      p += 3;
+    }
+    if (rows * cols > x.length) throw new Undecodable('array constant size');
     const out: string[] = [];
     for (let r = 0; r < rows; r++) {
       const row: string[] = [];
       for (let c = 0; c < cols; c++) {
+        // Value types: BIFF8 1 number, 2 string, 4 boolean, 16 error (each 8 bytes but strings);
+        // BIFF12 0 number, 1 string, 2 boolean (1 byte), 4 error (4 bytes).
         const t = x[p++];
-        if (t === 0x01) {
+        const kind = b12 ? ['num', 'str', 'bool', '', 'err'][t] : { 0x01: 'num', 0x02: 'str', 0x04: 'bool', 0x10: 'err' }[t];
+        if (kind === 'num') {
           row.push(num(xv.getFloat64(p, true)));
           p += 8;
-        } else if (t === 0x02) {
+        } else if (kind === 'str') {
           const cch = xv.getUint16(p, true);
-          const high = x[p + 2] & 1;
-          p += 3;
+          const high = b12 ? 1 : x[p + 2] & 1;
+          p += b12 ? 2 : 3;
           let s = '';
           for (let i = 0; i < cch; i++) {
             s += String.fromCharCode(high ? xv.getUint16(p, true) : x[p]);
             p += high ? 2 : 1;
           }
           row.push(`"${s.replace(/"/g, '""')}"`);
-        } else if (t === 0x04) {
+        } else if (kind === 'bool') {
           row.push(x[p] ? 'TRUE' : 'FALSE');
-          p += 8;
-        } else if (t === 0x10) {
+          p += b12 ? 1 : 8;
+        } else if (kind === 'err') {
           row.push(ERRORS[x[p]] ?? '#N/A');
-          p += 8;
-        } else {
+          p += b12 ? 4 : 8;
+        } else if (!b12 && t === 0x00) {
           row.push('');
           p += 8;
-        }
+        } else throw new Undecodable('array value');
       }
       out.push(row.join(','));
     }
@@ -257,9 +271,16 @@ function decode(rgce: Uint8Array, ctx: PtgContext): string {
         break;
       }
       case 0x26:
+        // A precomputed area: its cached ranges sit in the extra data, before any later array constant's.
+        if (ctx.extra && extraPos < ctx.extra.length) {
+          const xv = new DataView(ctx.extra.buffer, ctx.extra.byteOffset, ctx.extra.byteLength);
+          extraPos += b12 ? 4 + 16 * xv.getUint32(extraPos, true) : 2 + 8 * xv.getUint16(extraPos, true);
+        }
+        i += 6; // the subexpression's tokens follow and evaluate as usual
+        break;
       case 0x27:
       case 0x28:
-        i += 6; // the subexpression's tokens follow and evaluate as usual
+        i += 6;
         break;
       case 0x29:
         i += 2;

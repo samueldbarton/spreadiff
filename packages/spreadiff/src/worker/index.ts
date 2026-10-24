@@ -28,7 +28,7 @@ export interface WorkerSettings {
 
 /** A file's name (used to pick the parser) and bytes. */
 export interface FileData {
-  /** File name; `.xlsx`/`.xlsm` or zip content → XLSX, `.tsv` → tab-delimited, else CSV. */
+  /** File name; the format comes from the contents (see `parseFile`), and `.tsv` text is tab-delimited. */
   name: string;
   /** File contents. Transferred to the worker: unusable afterwards on this side. */
   data: ArrayBuffer;

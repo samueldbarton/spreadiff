@@ -12,3 +12,9 @@ And two small .xls (BIFF8) files, for `test/xls.test.ts`:
 
 - `3dFormulas.xls`: formulas with references to other sheets, one named like a cell (`S2`);
 - `1904DateWindowing.xls`: dates in the 1904 date system.
+
+And two Excel binary (.xlsb) files, for `test/xlsb.test.ts`:
+
+- `bug66682.xlsb`: a column of shared formulas over booleans, numbers and text;
+- `date.xlsb`: a date cell.
+- `protected_passtika.xlsb`: a password-protected (encrypted) workbook.

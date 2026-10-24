@@ -111,7 +111,7 @@ async function run(): Promise<void> {
   const pct = input('min-change');
   const minChange = pct ? (pct.endsWith('%') ? Number(pct.slice(0, -1)) / 100 : Number(pct)) : undefined;
   const { markdown, files, changed } = reportBetween(base, head, {
-    paths: globs(input('paths', '**/*.{xlsx,xlsm,csv,tsv}')),
+    paths: globs(input('paths', '**/*.{xlsx,xlsm,xlsb,xls,ods,csv,tsv}')),
     minChange,
     maxRows: Number(input('max-rows', '25')),
   });

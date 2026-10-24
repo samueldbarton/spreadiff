@@ -147,6 +147,8 @@ function rk(v: number): number {
 export function parseXls(data: ArrayBuffer | Uint8Array, options: ParseXlsOptions = {}): Workbook {
   const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
   const streams = readCfb(bytes);
+  // Office's encryption wraps the real file (.xlsx, .xlsb) in a compound file; it can't be read without the password.
+  if (streams.has('EncryptedPackage') || streams.has('EncryptionInfo')) throw new Error('This workbook is password-protected. Save a copy without a password to compare it');
   const wbs = streams.get('Workbook') ?? streams.get('Book');
   if (!wbs) throw new Error('Not an Excel workbook (no Workbook stream)');
   if (!streams.has('Workbook')) throw new Error("Excel 5 and older (.xls before Excel 97) isn't supported. Save as .xlsx");

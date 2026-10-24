@@ -18,7 +18,7 @@ const HELP = `Usage: spreadiff-lite OLD NEW [options]
        spreadiff-lite --git PATH OLD-FILE OLD-HEX OLD-MODE NEW-FILE NEW-HEX NEW-MODE
        spreadiff-lite merge BASE OURS THEIRS [-o OUT] [--name PATH] [--prefer ours|theirs] [--keys COL,…]
 
-Compare two spreadsheets (.xlsx, .xlsm, .csv, .tsv): what was edited, what
+Compare two spreadsheets (.xlsx, .xlsm, .xlsb, .xls, .ods, .csv, .tsv): what was edited, what
 moved downstream because of it, and what changed shape.
 
 Options:

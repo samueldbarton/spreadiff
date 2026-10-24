@@ -31,6 +31,8 @@ jobs:
       - run: npm run docs:check
       - run: npm run test:cli
       - run: npm run test:action
+      - name: The committed action bundle matches its source
+        run: npm run build:action && git diff --exit-code -- action/dist
 
   browser:
     name: Browser (grid, render fuzz, bundlers, hosted)

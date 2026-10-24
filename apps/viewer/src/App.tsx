@@ -579,7 +579,7 @@ function DropZone({ side, file, onFile }: { side: 'old' | 'new'; file: File | nu
         <span className="drop-name">{file ? file.name : 'Drop a file, or click to choose'}</span>
         <span className="drop-hint">CSV, TSV or XLSX</span>
       </span>
-      <input ref={input} type="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm" hidden onChange={(e) => {
+      <input ref={input} type="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xlsb,.xls,.ods" hidden onChange={(e) => {
         const f = e.target.files?.[0];
         e.target.value = ''; // so choosing the same file again still fires
         if (f) onFile(f);
@@ -603,7 +603,7 @@ function FileChip({ side, name, onPick }: { side: 'old' | 'new'; name: string; o
     <button className={`file-chip ${side}`} onClick={() => input.current?.click()} title="Replace file">
       <span className="dot" />
       {name}
-      <input ref={input} type="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm" hidden onChange={(e) => {
+      <input ref={input} type="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xlsb,.xls,.ods" hidden onChange={(e) => {
         const f = e.target.files?.[0];
         e.target.value = '';
         if (f) onPick(f);
