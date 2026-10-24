@@ -43,8 +43,10 @@ export interface ParseXlsxOptions {
  * `computeMissing`), formula text (shared
  * formulas are expanded per cell), dates (from the cell's number format),
  * booleans, errors (as `#DIV/0!` strings), rich text and workbook-scoped
- * defined names. Each sheet is trimmed to its used range; `origin` records
- * where it starts. Styles, merged cells and charts are ignored.
+ * defined names (workbook- and sheet-scoped), merged ranges, and the indent
+ * and bold of text cells. Each sheet is trimmed to its used range; `origin`
+ * records where it starts. Other styles, number formats and charts are
+ * ignored.
  *
  * Throws if the data isn't a zip with `xl/workbook.xml`.
  */
@@ -75,7 +77,9 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
     if (id && target) rels.set(id, target.startsWith('/') ? target.slice(1) : `xl/${target}`);
   });
   const strings = parseSharedStrings(text('xl/sharedStrings.xml'));
-  const dateStyles = parseDateStyles(text('xl/styles.xml'));
+  const stylesXml = text('xl/styles.xml');
+  const dateStyles = parseDateStyles(stylesXml);
+  const labelStyles = parseLabelStyles(stylesXml);
 
   const raws: RawSheet[] = [];
   const tables: TableDefinition[] = [];
@@ -88,7 +92,7 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
     const rid = attr(a, 'r:id') ?? /\s[\w.-]+:id\s*=\s*["']([^"']*)/.exec(a)?.[1];
     const path = rid ? rels.get(rid) : undefined;
     if (!path || !files[path]) return;
-    raws.push(parseCells(name, text(path), strings, dateStyles, date1904));
+    raws.push(parseCells(name, text(path), strings, dateStyles, date1904, labelStyles));
     // Excel tables on this sheet, for structured references (Sales[Amount]).
     const relsPath = path.replace(/([^/]+)$/, '_rels/$1.rels');
     eachElement(text(relsPath), 'Relationship', (ra) => {
@@ -384,6 +388,28 @@ function parseDateStyles(xml: string): Set<number> {
   return out;
 }
 
+/** cellXfs index → indent and bold, for the styles that have either. */
+function parseLabelStyles(xml: string): Map<number, { indent?: number; bold?: boolean }> {
+  const bold: boolean[] = [];
+  eachElement(xml, 'fonts', (_, body) => {
+    eachElement(body ?? '', 'font', (_a, fb) => {
+      const b = /<b(?:\s+val\s*=\s*["']([^"']*)["'])?\s*\/?>/.exec(fb ?? '');
+      bold.push(!!b && b[1] !== '0' && b[1] !== 'false');
+    });
+  });
+  const out = new Map<number, { indent?: number; bold?: boolean }>();
+  eachElement(xml, 'cellXfs', (_, body) => {
+    let i = 0;
+    eachElement(body ?? '', 'xf', (a, xb) => {
+      const indent = Number(/<alignment\b[^>]*\sindent\s*=\s*["'](\d+)["']/.exec(xb ?? '')?.[1] ?? 0);
+      const b = bold[Number(attr(a, 'fontId') ?? 0)] ?? false;
+      if (indent > 0 || b) out.set(i, { ...(indent > 0 ? { indent } : {}), ...(b ? { bold: true } : {}) });
+      i++;
+    });
+  });
+  return out;
+}
+
 /** Excel serial → ISO date/time, or null when it isn't a representable date. */
 function serialToIso(serial: number, date1904: boolean): string | null {
   if (!Number.isFinite(serial) || serial < 0 || serial > 2958465) return null; // > 9999-12-31
@@ -459,9 +485,12 @@ interface RawSheet {
   arrays: { r0: number; c0: number; r1: number; c1: number }[];
   /** Merged ranges (sheet coordinates). */
   merges: { r0: number; c0: number; r1: number; c1: number }[];
+  /** Indented or bold text cells (sheet coordinates). */
+  labelStyles: NonNullable<Table['labelStyles']>;
 }
 
-function parseCells(name: string, xml: string, strings: string[], dateStyles: Set<number>, date1904: boolean): RawSheet {
+function parseCells(name: string, xml: string, strings: string[], dateStyles: Set<number>, date1904: boolean, labelStyles: Map<number, { indent?: number; bold?: boolean }>): RawSheet {
+  const styled: NonNullable<Table['labelStyles']> = [];
   const grid: CellValue[][] = [];
   const formulaGrid: (string | null)[][] = [];
   const shared = new Map<string, { formula: string; row: number; col: number }>();
@@ -541,6 +570,10 @@ function parseCells(name: string, xml: string, strings: string[], dateStyles: Se
       // LibreOffice writes a typed error constant as the formula `=#VALUE!`.
       if (formula !== null && /^#(?:VALUE!|N\/A|REF!|DIV\/0!|NUM!|NAME\?|NULL!)$/.test(formula) && value === formula) formula = null;
       if (value === null && formula === null) return;
+      if (typeof value === 'string' && labelStyles.size) {
+        const ls = labelStyles.get(Number(attr(attrs, 's') ?? 0));
+        if (ls) styled.push({ r, c, ...ls });
+      }
       (grid[r] ??= [])[c] = value;
       if (formula !== null) (formulaGrid[r] ??= [])[c] = '=' + formula;
       if (c < minCol) minCol = c;
@@ -576,7 +609,7 @@ function parseCells(name: string, xml: string, strings: string[], dateStyles: Se
   });
   let first = 0;
   while (first < grid.length && !grid[first]) first++;
-  return { name, grid, formulaGrid, minCol, maxCol, first, arrays, merges };
+  return { name, grid, formulaGrid, minCol, maxCol, first, arrays, merges, labelStyles: styled };
 }
 
 /**
@@ -597,7 +630,7 @@ function labelRow(r: RawSheet): boolean {
 }
 
 function buildTable(raw: RawSheet, header: boolean, auto = false): Table {
-  const { name, grid, formulaGrid, minCol, maxCol, first, arrays, merges } = raw;
+  const { name, grid, formulaGrid, minCol, maxCol, first, arrays, merges, labelStyles } = raw;
   if (maxCol < 0) return { name, columns: [], rows: [], formulas: [], origin: { row: 0, col: 0 }, ...(merges.length ? { merges } : {}) };
   const width = maxCol - minCol + 1;
   const dense = <T,>(src: (T | null)[] | undefined): (T | null)[] => {
@@ -633,5 +666,6 @@ function buildTable(raw: RawSheet, header: boolean, auto = false): Table {
     ...(header ? { header: dense(grid[first]) } : {}),
     ...(arrays.length ? { arrays } : {}),
     ...(merges.length ? { merges } : {}),
+    ...(labelStyles.length ? { labelStyles } : {}),
   };
 }

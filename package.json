@@ -7,9 +7,9 @@
     "apps/*"
   ],
   "scripts": {
-    "build": "npm run build -w spreadiff && npm run build -w @spreadiff/viewer",
+    "build": "npm run build -w spreadiff && npm run build -w spreadiff-lite && npm run build -w @spreadiff/viewer",
     "dev": "npm run dev -w @spreadiff/viewer",
-    "test": "npm test -w spreadiff",
+    "test": "npm test -w spreadiff && npm test -w spreadiff-lite",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "bench": "node bench/run.mjs",
     "size": "node bench/size.mjs",
@@ -19,7 +19,10 @@
     "docs:screenshots": "node scripts/screenshots.mjs",
     "test:bundle": "node scripts/test-bundling.mjs",
     "bench:trace": "node bench/trace-eval/run.mjs",
-    "test:hosted": "node scripts/test-hosted.mjs"
+    "test:hosted": "node scripts/test-hosted.mjs",
+    "test:cli": "node scripts/test-cli.mjs",
+    "docs:site": "npm run build -w @spreadiff/docs",
+    "docs:dev": "npm run dev -w @spreadiff/docs"
   },
   "devDependencies": {
     "axe-core": "^4.14.0",

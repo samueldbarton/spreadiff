@@ -21,13 +21,13 @@ new DiffGrid({ layout: 'split', cellDisplay: 'delta' }).render({ diff, container
 
 | Import | Contents | min + gzip |
 | --- | --- | --- |
-| `spreadiff/lite` | Diff engine, CSV parser, HTML and text renderers. No DOM APIs | 13.1 KB |
-| `spreadiff/core` | + XLSX reader, formula engine and tracing | 38.9 KB |
-| `spreadiff` | + canvas `DiffGrid` | 57.1 KB |
+| `spreadiff/html` | Diff engine, CSV parser, HTML and text renderers. No DOM APIs | 13.1 KB |
+| `spreadiff/core` | + XLSX reader, formula engine and tracing | 41.6 KB |
+| `spreadiff` | + canvas `DiffGrid` | 59.7 KB |
 | `spreadiff/react` | React component for `DiffGrid` (React 18+) | + React |
 | `spreadiff/worker` | Parse, diff and trace in a Web Worker | |
 
-- **Runs anywhere.** `lite` and `core` run in Node and edge runtimes. The
+- **Runs anywhere.** `spreadiff/html` and `spreadiff/core` run in Node and edge runtimes. The
   grid needs Chrome / Edge 111, Firefox 113 or Safari 16.2. Nothing is sent
   anywhere, and it works under a strict CSP.
 - **Accessible.** Screen readers get an ARIA grid of the visible cells,

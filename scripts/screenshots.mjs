@@ -86,11 +86,11 @@ try {
   const emea = await cellPoint(page, 'EMEA', 'revenue');
   await page.evaluate(({ row, col }) => window.grid.select(row, col), emea);
   await shot(page, 'trace-focus');
-  // ---- Lite scenes
-  await scene(page, { sample: 'model', sheet: 'Revenue', renderer: 'lite', layout: 'split', trace: true });
-  await shot(page, 'lite-split');
-  await scene(page, { sample: 'model', sheet: 'Revenue', renderer: 'lite', layout: 'unified', trace: true });
-  await shot(page, 'lite-unified');
+  // ---- HTML renderer scenes
+  await scene(page, { sample: 'model', sheet: 'Revenue', renderer: 'html', layout: 'split', trace: true });
+  await shot(page, 'html-split');
+  await scene(page, { sample: 'model', sheet: 'Revenue', renderer: 'html', layout: 'unified', trace: true });
+  await shot(page, 'html-unified');
   await page.close();
   // ---- Dark
   page = await stagePage('dark');

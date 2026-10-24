@@ -1,9 +1,9 @@
 import { useMemo } from 'react';
-import { LITE_CSS, renderHTML, type LiteDisplay, type LiteLayout } from 'spreadiff/lite';
+import { HTML_CSS, renderHTML, type HtmlDisplay, type HtmlLayout } from 'spreadiff/html';
 import type { TableDiff, WorkbookTrace } from 'spreadiff';
 
-/** The diff rendered by `spreadiff/lite`: plain HTML, code-review style. */
-export function CodeView(props: { diff: TableDiff; layout: LiteLayout; display: LiteDisplay; changedOnly: boolean; trace?: WorkbookTrace; sheet: number }) {
+/** The diff rendered by `spreadiff/html`: plain HTML, code-review style. */
+export function CodeView(props: { diff: TableDiff; layout: HtmlLayout; display: HtmlDisplay; changedOnly: boolean; trace?: WorkbookTrace; sheet: number }) {
   const html = useMemo(
     () =>
       renderHTML(props.diff, {
@@ -16,7 +16,7 @@ export function CodeView(props: { diff: TableDiff; layout: LiteLayout; display: 
   );
   return (
     <div className="code-view">
-      <style>{LITE_CSS}</style>
+      <style>{HTML_CSS}</style>
       <div dangerouslySetInnerHTML={{ __html: html }} />
     </div>
   );

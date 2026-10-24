@@ -2,7 +2,7 @@
 
 spreadiff aims for WCAG 2.1 AA in all three ways of showing a diff:
 - the canvas `DiffGrid`;
-- the HTML from `spreadiff/lite`;
+- the HTML from `spreadiff/html`;
 - the viewer app.
 
 This page says what each one provides, how that is tested, and what
@@ -48,7 +48,7 @@ signs and text rather than carry meaning alone. If you override the
 theme, the `--sd-*-fg` variables set the text versions
 ([Theming](theming.md)).
 
-## spreadiff/lite
+## spreadiff/html
 
 `renderHTML` produces a real `<table>`, with `<th>` headers, row numbers
 in cells and the sign column labelled for screen readers. Changes are
@@ -74,7 +74,7 @@ These run with the rest of the suite (`npm run test:browser`,
   - that cell reads exactly "12.5, was 10, up 2.5 (25.0%), edited".
 - **axe-core** with no violations, run on:
   - the grid (split layout, with a selection);
-  - `spreadiff/lite` HTML, unified and split, in light and dark;
+  - `spreadiff/html` HTML, unified and split, in light and dark;
   - the whole viewer with a model loaded (serious and critical findings fail the run).
 - **Canvas contrast.** axe can't see inside a canvas. So a test resolves
   the grid's theme in light and dark and composites each text colour over
@@ -87,7 +87,7 @@ The first run of these checks found real problems, all fixed since:
 - row numbers were 2.0–2.6:1;
 - green and red deltas were 2.5:1 and 3.7:1 on white;
 - the viewer had no heading or landmarks;
-- some lite header cells were empty.
+- some HTML-renderer header cells were empty.
 
 ## Not covered yet
 

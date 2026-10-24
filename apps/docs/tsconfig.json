@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "paths": {
+      "spreadiff": ["../../packages/spreadiff/src/index.ts"],
+      "spreadiff/core": ["../../packages/spreadiff/src/core/index.ts"],
+      "spreadiff/html": ["../../packages/spreadiff/src/html/index.ts"],
+      "spreadiff-lite": ["../../packages/spreadiff-lite/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}

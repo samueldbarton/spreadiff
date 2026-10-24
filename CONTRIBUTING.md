@@ -17,13 +17,15 @@ path, or run `npx playwright install chromium`.
 
 | Command | What it checks | Needs | When to run it |
 | --- | --- | --- | --- |
-| `npm test` | Unit tests for the engine, parsers, tracing, lite and worker client (vitest) | | Every change |
+| `npm test` | Unit tests for the engine, parsers, tracing, labels, the HTML renderer, the worker client, and spreadiff-lite's report and Markdown (vitest) | | Every change |
 | `npm run typecheck` | All workspaces | | Every change |
 | `npm run docs:check` | Doc code blocks typecheck, examples print their shown output, every export is documented, links resolve, bundle sizes are current | | Every change to the API, the docs or the bundle |
-| `npm run test:browser` | The canvas renderer in Chromium: regressions; merges and moved rows; annotation identity and minimap density; the ARIA mirror, with axe-core on the grid and lite HTML; canvas colour contrast (WCAG AA, light and dark); the adopted stylesheet and the `light-dark()` fallback | Dev server on port 5199 (below); restart it if results look stale | Renderer, theme or lite changes |
+| `npm run test:browser` | The canvas renderer in Chromium: regressions; merges and moved rows; annotation identity and minimap density; the ARIA mirror, with axe-core on the grid and the HTML renderer; canvas colour contrast (WCAG AA, light and dark); the adopted stylesheet and the `light-dark()` fallback | Dev server on port 5199 (below); restart it if results look stale | Renderer, theme or HTML-renderer changes |
 | `npm run fuzz:render` | A seeded sequence of 3,000 random operations against `DiffGrid`, checking invariants after each | Dev server on port 5199 | Renderer changes |
 | `npm run test:bundle` | Packs the library, installs it into a fresh Vite app, builds it and runs it in Chromium: `exports`, both worker setups, `sideEffects` | Network access the first time (it runs `npm install`) | Changes to `package.json`, entry points or the worker |
-| `npm run build` | Library (tsc) and viewer (Vite) | | Before a PR |
+| `npm run test:cli` | Builds both packages and runs the `spreadiff-lite` CLI on two real `.xlsx` files: output, `--json`, exit codes. Then packs both packages, installs the tarballs into an empty project, and runs the installed bin and API | Network access the first time (it runs `npm install`) | Changes to spreadiff-lite, `package.json` or entry points |
+| `npm run docs:site` | Builds the documentation site into `apps/docs/dist` and fails on a broken link or `#anchor` between its pages. `npm run docs:dev` serves it on port 4321 and rebuilds on change | | Changes to the docs or the site |
+| `npm run build` | Library and spreadiff-lite (tsc), viewer (Vite) | | Before a PR |
 | `npm run size` | Bundle size per entry point | | Changes that add code to an entry |
 | `npm run bench` | Scroll smoothness and pipeline timings vs. Glide Data Grid | `vite preview` on port 4173 (below) | Performance work |
 | `npm run test:hosted` | Tracing in a browser, hosted: the packed library in a fresh Vite app and the viewer's production build, both served as static files under a strict CSP with outside requests blocked. Every changed cell of 19 real `.xlsx` fixtures is checked against LibreOffice's answers (causes, contributions, stale and missing values), axe-core runs over the viewer, and main-thread stalls are measured. If `bench:trace` has built the large models, those are timed too | Network access the first time (it runs `npm install`) | Changes to tracing, the engine, the XLSX reader, the worker or the viewer's trace UI |

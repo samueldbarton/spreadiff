@@ -20,6 +20,8 @@ from a few base colors with `color-mix()`, so changing `--sd-bg` and
 `--sd-fg` re-tints borders, headers and gutters consistently. Changing
 `--sd-added` re-tints added rows, new values and their highlights.
 
+<!-- demo: theme -->
+
 ## Light and dark
 
 The defaults use `light-dark()`, so the grid follows the page's color
@@ -91,7 +93,7 @@ If you set `--sd-added`, `--sd-removed`, `--sd-modified` or
 contrast yourself, though: a pale base color can still give a pale `-fg`.
 See [Accessibility](accessibility.md).
 
-[`spreadiff/lite`](lite.md#styling) reads the base colors and fonts too:
+[`spreadiff/html`](html.md#styling) reads the base colors and fonts too:
 `--sd-bg`, `--sd-fg`, `--sd-added`, `--sd-removed`, `--sd-modified`,
 `--sd-computed`, `--sd-formula`, `--sd-added-fg`, `--sd-removed-fg`,
 `--sd-modified-fg`, `--sd-font-family` and `--sd-mono-font-family`.

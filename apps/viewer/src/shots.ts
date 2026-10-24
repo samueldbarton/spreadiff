@@ -1,6 +1,6 @@
 // Scenes for scripts/screenshots.mjs: the library's components alone, no app chrome.
 import { DiffGrid, diffWorkbooks, traceWorkbook, type CellDisplay, type DiffLayout } from 'spreadiff';
-import { LITE_CSS, renderHTML, type LiteDisplay } from 'spreadiff/lite';
+import { HTML_CSS, renderHTML, type HtmlDisplay } from 'spreadiff/html';
 import { sampleModel, sampleWorkbooks } from './samples';
 
 const stage = document.getElementById('stage')!;
@@ -11,7 +11,7 @@ const books = { model: sampleModel(), inventory: sampleWorkbooks() };
 export interface Scene {
   sample: 'model' | 'inventory' | 'cities';
   sheet?: string;
-  renderer?: 'grid' | 'lite';
+  renderer?: 'grid' | 'html';
   layout?: DiffLayout;
   display?: CellDisplay;
   trace?: boolean;
@@ -37,17 +37,17 @@ function workbook(sample: Scene['sample']) {
   grid?.cleanUp();
   grid = null;
   stage.innerHTML = '';
-  stage.className = s.renderer === 'lite' ? 'auto' : '';
+  stage.className = s.renderer === 'html' ? 'auto' : '';
   stage.style.width = `${s.width ?? 1120}px`;
-  stage.style.height = s.renderer === 'lite' ? '' : `${s.height ?? 520}px`;
+  stage.style.height = s.renderer === 'html' ? '' : `${s.height ?? 520}px`;
   const wb = workbook(s.sample);
   const sheet = Math.max(0, wb.sheets.findIndex((x) => x.name === s.sheet));
   const diff = wb.sheets[sheet].diff;
   const trace = s.trace ? traceWorkbook(wb) : undefined;
-  if (s.renderer === 'lite') {
-    stage.innerHTML = `<style>${LITE_CSS}</style>` + renderHTML(diff, {
+  if (s.renderer === 'html') {
+    stage.innerHTML = `<style>${HTML_CSS}</style>` + renderHTML(diff, {
       layout: s.layout ?? 'split',
-      display: (s.display ?? 'stacked') as LiteDisplay,
+      display: (s.display ?? 'stacked') as HtmlDisplay,
       kindOf: trace ? (row, col) => trace.get({ sheet, row, col })?.kind : undefined,
     });
     return;

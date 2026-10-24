@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '../packages/spreadiff/src');
 const entries = {
-  'spreadiff/lite (diff + CSV + HTML/text renderer)': 'lite/index.ts',
+  'spreadiff/html (diff + CSV + HTML/text renderer)': 'html/index.ts',
   'spreadiff/core (diff + CSV + XLSX + trace)': 'core/index.ts',
   'spreadiff (core + canvas DiffGrid)': 'index.ts',
 };

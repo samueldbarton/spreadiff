@@ -11,6 +11,8 @@ caused it, and says how much each edit contributed.
 
 ![A financial model: edited inputs in green and red, downstream results in amber](images/display-stacked.png)
 
+<!-- demo: trace -->
+
 ## Four kinds of change
 
 Every changed cell gets a [`ChangeKind`](api.md#changekind):
@@ -21,6 +23,16 @@ Every changed cell gets a [`ChangeKind`](api.md#changekind):
 | `formula` | A formula was edited (compared by meaning; see [Formulas](diffing.md#formulas)) | green / red, with `ƒ` |
 | `computed` | **Same formula, new result**: a downstream change | amber |
 | `added` / `removed` | A cell of an added or removed row/column that feeds a formula | row tint |
+
+An `input` can also hold a formula, when that formula reads **outside
+data**: Bloomberg's `BDP`, Capital IQ, FactSet, `RTD`, `WEBSERVICE`, a
+link to another workbook. Such a value can't be recalculated without the
+connection, and it can change when nothing in the file did. So the trace
+takes its saved value as given, and treats a change to it as an edit:
+`trace.get(ref).external` says where it came from (`{ provider:
+'Bloomberg', function: 'BDP' }`). The results it feeds are traced to it.
+[spreadiff-lite → Outside data](spreadiff-lite.md#outside-data) lists the
+functions recognised, and `TraceOptions.liveFunctions` adds your own.
 
 Telling `input` from `computed` needs only the two files, not a full
 trace. So the grid colours downstream changes amber by default
@@ -342,4 +354,5 @@ falls back to references and sets `truncated`.
 - **One engine's opinion.** A recalculated value is what spreadiff's
   engine computes. It reproduces 99.6% of the formulas in the test corpus
   exactly, and calibration samples each formula shape, but it isn't Excel.
-- **One workbook.** References to other workbooks are flagged, not followed.
+- **One workbook.** References to other workbooks aren't followed: a cell
+  reading one is outside data, taken as saved (above).

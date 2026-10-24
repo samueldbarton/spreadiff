@@ -114,7 +114,7 @@ moved: 4,D
 ```
 
 The grid marks a moved row with `↕` in the gutter and says where it came
-from in its tooltip. `spreadiff/lite` marks it the same way, the text
+from in its tooltip. `spreadiff/html` marks it the same way, the text
 renderer with `~` and "(moved from row N)", and `toUnifiedCsv` with daff's
 `:`. Rows matched **by order** can't move: sequence alignment keeps order
 by construction, so a reordered row there reads as removed + added.

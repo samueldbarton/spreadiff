@@ -8,6 +8,8 @@ Shadow DOM.
 
 ![Unified layout with a hover popover](images/grid-unified.png)
 
+<!-- demo: grid -->
+
 ## Mounting
 
 ```ts
@@ -57,7 +59,7 @@ Props are the [options](#options) plus `diff`, `className` and `style`. The
 | ![](images/grid-unified.png) | ![](images/grid-split.png) |
 
 For a code-review-style split view rendered as HTML instead of canvas, see
-[spreadiff/lite](lite.md).
+[spreadiff/html](html.md).
 
 ## Displaying a change
 
@@ -208,7 +210,7 @@ popover is attached with `aria-describedby` while it's open.
 
 Text and status colours meet WCAG AA contrast in light and dark. The
 tests check the canvas colours themselves, and run axe-core over the
-grid, `spreadiff/lite` and the viewer. [Accessibility](accessibility.md)
+grid, `spreadiff/html` and the viewer. [Accessibility](accessibility.md)
 has what's covered, how it's tested, and what isn't (no manual
 screen-reader testing yet).
 

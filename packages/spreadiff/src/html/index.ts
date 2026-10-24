@@ -1,16 +1,16 @@
 /**
- * spreadiff/lite — a dependency-free renderer that turns a diff into an HTML
+ * spreadiff/html — a dependency-free renderer that turns a diff into an HTML
  * string (or plain text). No canvas, no DOM APIs, no workers: render on the
  * server, in an email, a PR comment, or a static page. Shows only changes
  * plus a little context, so it's meant for reviewing edits, not for
  * scrolling a million-row sheet (use `DiffGrid` for that).
  *
  * ```ts
- * import { diffTables, parseCsv, renderHTML, LITE_CSS } from 'spreadiff/lite';
+ * import { diffTables, parseCsv, renderHTML, HTML_CSS } from 'spreadiff/html';
  * declare const before: string, after: string, container: HTMLElement;
  *
  * const diff = diffTables(parseCsv(before), parseCsv(after));
- * container.innerHTML = `<style>${LITE_CSS}</style>` + renderHTML(diff, { layout: 'split' });
+ * container.innerHTML = `<style>${HTML_CSS}</style>` + renderHTML(diff, { layout: 'split' });
  * ```
  */
 import { columnLabel } from '../core/csv.js';
@@ -31,16 +31,16 @@ export type { TableDiff, Table, CellValue, DiffOptions } from '../core/types.js'
  * - `split`: old | new side by side, one row per line, like a code review.
  * - `unified`: one table; modified rows as a − line and a + line, like `git diff`.
  */
-export type LiteLayout = 'split' | 'unified';
+export type HtmlLayout = 'split' | 'unified';
 /** How a changed cell reads; same meanings as the canvas grid's {@link CellDisplay}. */
-export type LiteDisplay = 'stacked' | 'new' | 'delta' | 'inline';
+export type HtmlDisplay = 'stacked' | 'new' | 'delta' | 'inline';
 
 /** Options for {@link renderHTML}. All are optional. */
-export interface LiteOptions {
+export interface HtmlOptions {
   /** `split`: old | new side by side, one row per line. `unified`: −/+ line pairs, like `git diff`. Default `split`. */
-  layout?: LiteLayout;
+  layout?: HtmlLayout;
   /** How changed cells read. Default `stacked` (unified: a − line then a + line). */
-  display?: LiteDisplay;
+  display?: HtmlDisplay;
   /** Unchanged rows shown around each change. Default 2. */
   context?: number;
   /** Only show columns that changed, plus key columns (or, when rows were matched by order, the first mostly-text column, which names the rows). Default false. */
@@ -118,8 +118,8 @@ function intra(before: string, after: string, side: 'old' | 'new'): string {
     .join('');
 }
 
-/** Render a table diff as an HTML string. Pair it with `LITE_CSS`. */
-export function renderHTML(diff: TableDiff, options: LiteOptions = {}): string {
+/** Render a table diff as an HTML string. Pair it with `HTML_CSS`. */
+export function renderHTML(diff: TableDiff, options: HtmlOptions = {}): string {
   const layout = options.layout ?? 'split';
   const display = options.display ?? 'stacked';
   const cols = visibleColumns(diff, options.changedColumnsOnly ?? false);
@@ -287,7 +287,7 @@ function isNumericColumn(diff: TableDiff, ci: number): boolean {
  * A row that moved (rows matched by key) is marked `~`, with the row it
  * moved from: `~  P-1007  12.5  3  (moved from row 2)`.
  */
-export function renderText(diff: TableDiff, options: Pick<LiteOptions, 'context' | 'changedColumnsOnly' | 'maxRows'> & { maxWidth?: number } = {}): string {
+export function renderText(diff: TableDiff, options: Pick<HtmlOptions, 'context' | 'changedColumnsOnly' | 'maxRows'> & { maxWidth?: number } = {}): string {
   const cols = visibleColumns(diff, options.changedColumnsOnly ?? false);
   const items = hunks(diff, options.context ?? 2);
   const maxW = options.maxWidth ?? 24;
@@ -332,7 +332,7 @@ export function renderText(diff: TableDiff, options: Pick<LiteOptions, 'context'
   return out.join('\n') + '\n';
 }
 
-const LITE_BASE = /* css */ `
+const HTML_BASE = /* css */ `
 .sdl-wrap {
   --_bg: var(--sd-bg, light-dark(#fff, #0b0b0c));
   --_fg: var(--sd-fg, light-dark(#0b0b0c, #ededef));
@@ -397,9 +397,9 @@ const LITE_BASE = /* css */ `
 `;
 
 /** Styles for `renderHTML`. Themed by the same `--sd-*` variables as the canvas grid. Includes a fallback for browsers and mail clients without `light-dark()`. */
-export const LITE_CSS =
-  LITE_BASE +
-  lightDarkFallback(/\.sdl-wrap \{([\s\S]*?)\n\}/.exec(LITE_BASE)![1].replace(/\/\*[\s\S]*?\*\//g, ''), {
+export const HTML_CSS =
+  HTML_BASE +
+  lightDarkFallback(/\.sdl-wrap \{([\s\S]*?)\n\}/.exec(HTML_BASE)![1].replace(/\/\*[\s\S]*?\*\//g, ''), {
     light: '.sdl-wrap',
     darkWhenSystem: '.sdl-wrap',
   });

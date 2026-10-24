@@ -7,12 +7,40 @@ the repository.
 
 ### Added
 
+- **spreadiff-lite**, a new package with no UI. `compare` two workbooks
+  into a report of every edit, with its before and after values and what
+  the sheet calls the cell. Each downstream result comes with the edits
+  that moved it and their contributions, plus shape changes and notes.
+  `toMarkdown` renders the report, `summarize` does both, and
+  `spreadiff-lite OLD NEW` is the CLI (`--json`, `--outputs-only`, exit
+  codes like `diff`). Final outputs are listed apart from intermediate
+  results. See `docs/spreadiff-lite.md`.
+- **Outside data.** A changed cell whose formula reads data from outside
+  the workbook is now an `input`, not a recalculated result, and the
+  results it feeds are traced to it. That covers Bloomberg `BDP`/`BDH`,
+  LSEG, FactSet, Capital IQ, Morningstar, `RTD`, `WEBSERVICE`,
+  `STOCKHISTORY`, any `_xll.` add-in function and links to other
+  workbooks. New: `CellTrace.external`, `TraceStats.external`,
+  `TraceOptions.liveFunctions`, `externalSource`, `LIVE_FUNCTIONS`.
+- **Cell labels.** `tableLabeler` and `formatLabel` name a cell from the
+  layout: section headings, row label and column headings
+  (`India › Revenue · 2025`). The XLSX reader now reads indent and bold
+  on text cells (`Table.labelStyles`) to nest sections.
+- **A documentation site** (`apps/docs`, `npm run docs:site`) built from
+  the same Markdown:
+  - search, light and dark themes, contents and copy buttons;
+  - live demos with Preview and Code tabs;
+  - "Typechecked" and "Verified output" marks on code blocks;
+  - `llms.txt` and the Markdown of each page.
+
+  A GitHub Pages workflow publishes it.
+
 - **Moved rows.** With rows matched by key, rows whose position changed
   are flagged: the fewest rows that explain the new order
   (`TableDiff.moved`, `DiffStats.rowsMoved`, `CellInfo.moved`). They're
-  shown with `↕` in the grid and lite, `~` in text, and `:` in
+  shown with `↕` in the grid and the HTML renderer, `~` in text, and `:` in
   `toUnifiedCsv`, and they count for `hasChanges` (now also exported from
-  `spreadiff/lite`).
+  `spreadiff/html`).
 - **Accessibility.** The grid mirrors its visible cells as a hidden ARIA
   grid:
   - row and column headers;
@@ -23,7 +51,7 @@ the repository.
   New options `accessibility` and `ariaLabel`. Every text colour meets
   WCAG AA in light and dark, and new `--sd-modified-fg` /
   `--sd-computed-fg` tokens carry text in those hues. Checked by axe-core
-  on the grid, lite and the viewer, and by a canvas contrast test. See
+  on the grid, the HTML renderer and the viewer, and by a canvas contrast test. See
   `docs/accessibility.md`.
 - **Merged cells** are read into `Table.merges`. The grid draws an
   unchanged horizontal merge as one cell.
@@ -38,7 +66,7 @@ the repository.
 - **CSP and older browsers.**
   - The grid's styles are an adopted stylesheet, so it runs under a strict
     Content-Security-Policy (tested).
-  - The grid and `LITE_CSS` carry a fallback for browsers without CSS
+  - The grid and `HTML_CSS` carry a fallback for browsers without CSS
     `light-dark()` (Safari before 17.5, Chrome before 123), derived from
     the same tokens and tested to give identical colours.
 - **Docs:**
@@ -82,7 +110,7 @@ the repository.
   impacts.
 - **Cell displays:** `cellDisplay: 'stacked' | 'new' | 'delta' | 'inline'`,
   with absolute and percent change for numbers.
-- **`spreadiff/lite`**: an HTML and text renderer with no DOM APIs, in a
+- **`spreadiff/html`**: an HTML and text renderer with no DOM APIs, in a
   code-review style split or unified layout.
 - **Formula comparison by meaning.** References are mapped through the row
   and column alignment, so formulas that only shifted with an insert
@@ -97,6 +125,11 @@ the repository.
 
 ### Changed
 
+- **`spreadiff/lite` is now `spreadiff/html`**, and `LITE_CSS`,
+  `LiteOptions`, `LiteLayout` and `LiteDisplay` are now `HTML_CSS`,
+  `HtmlOptions`, `HtmlLayout` and `HtmlDisplay`. The name `spreadiff-lite`
+  now belongs to the new package.
+
 - **Undoing a formula edit** while tracing re-evaluates the old formula on
   today's inputs, instead of restoring its old result. Contributions of
   formula edits are now exact. Against LibreOffice, 3,400 of 3,400
@@ -108,7 +141,7 @@ the repository.
 - Text colours are darker in light mode (secondary text, row numbers,
   `+`/`−` signs, deltas) to meet WCAG AA.
 - `spreadiff` is 57.1 KB gzip, up from 53.1, for the accessibility mirror,
-  merges, moved rows and the colour fallback. `lite` is 13.1 KB.
+  merges, moved rows and the colour fallback. `spreadiff/html` is 13.1 KB.
 - The viewer has a page heading and landmarks, and doesn't inline assets
   as `data:` URLs.
 - `parseFile`, the worker and the viewer default to `header: 'auto'`. The
@@ -122,7 +155,7 @@ the repository.
 - The viewer serves its own fonts instead of loading Google Fonts.
 - `PackedTable.formulas` is packed rather than nested arrays.
 - `spreadiff/core` is 38.9 KB gzip, up from 16.1, almost all of it the
-  formula engine. `spreadiff/lite` is unchanged in scope (13.1 KB).
+  formula engine. `spreadiff/html` is unchanged in scope (13.1 KB).
 - `parseXlsx` defaults to `header: 'auto'`: a first row with numbers,
   dates or formulas, or one that formulas read, is data rather than
   column names. Years next to labels still count as names, and a row

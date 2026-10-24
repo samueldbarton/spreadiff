@@ -5,13 +5,14 @@ from several entry points: import from the smallest one that has it.
 
 | Entry point | Contents |
 | --- | --- |
-| `spreadiff` | Everything below except React, lite and the worker client |
+| `spreadiff` | Everything below except React, the HTML renderer and the worker client |
 | `spreadiff/core` | Diffing, parsing (CSV, XLSX), tracing, formulas, transfer, utilities. No DOM |
-| `spreadiff/lite` | `diffTables`, `parseCsv`, text utilities, and the HTML/text renderers |
+| `spreadiff/html` | `diffTables`, `parseCsv`, text utilities, and the HTML/text renderers |
 | `spreadiff/xlsx` | `parseXlsx` only |
 | `spreadiff/react` | The `DiffGrid` React component and its types |
 | `spreadiff/worker` | `createDiffWorker` and its types |
 | `spreadiff/worker/worker.js` | The worker script itself (load it with `new Worker`) |
+| `spreadiff-lite` | A separate package: `compare`, `toMarkdown`, `summarize` and the report types ([below](#spreadiff-lite)) |
 
 Coordinates used throughout:
 - **aligned row**: an index into a `TableDiff`'s rows (`0 … rowCount - 1`);
@@ -36,7 +37,7 @@ Diff two tables: match columns, match rows, compare cells. See
 compared textually; use [`diffWorkbooks`](#diffworkbooks) for
 cross-sheet-aware comparison.
 
-From `spreadiff`, `spreadiff/core`, `spreadiff/lite`.
+From `spreadiff`, `spreadiff/core`, `spreadiff/html`.
 
 ### diffWorkbooks
 
@@ -60,7 +61,7 @@ hasChanges(diff: TableDiff): boolean
 
 True when any row was added, removed, modified or moved, or any column
 added, removed or renamed.
-From `spreadiff`, `spreadiff/core`, `spreadiff/lite`.
+From `spreadiff`, `spreadiff/core`, `spreadiff/html`.
 
 ### cellsEqual
 
@@ -182,6 +183,7 @@ strings: `"2026-01-31"`, `"2026-01-31 14:05:00"` or `"14:05:00"`.
 | `origin` | `{ row, col }?` | Sheet position of `rows[0][0]`, 0-based. Default `{ row: 1, col: 0 }` (A2) |
 | `header` | `CellValue[]?` | The header row's original cells, when the first row became column names. Formula evaluation reads them on the row above `origin.row` |
 | `arrays` | `{ r0, c0, r1, c1 }[]?` | Array-formula and spill blocks, 0-based inclusive sheet coordinates. Every cell of a block holds the block's formula |
+| `labelStyles` | `{ r, c, indent?, bold? }[]?` | Indented or bold text cells, 0-based sheet coordinates. The XLSX reader fills it; row labels use it to nest sections |
 | `merges` | `{ r0, c0, r1, c1 }[]?` | Merged ranges, 0-based inclusive sheet coordinates. The value is in the top-left cell. `DiffGrid` draws an unchanged horizontal merge as one cell |
 | `names` | `Record<string, string>?` | Defined names scoped to this sheet. Its formulas see them over `Workbook.names`; other sheets reach them as `Sheet!Name`. See `scopedNames` |
 
@@ -374,6 +376,7 @@ traceTable(diff: TableDiff, options?: TraceOptions): WorkbookTrace
 | `budget` | `5_000_000` | Graph steps before stopping and setting `truncated` |
 | `recalculate` | `true` | Recalculate formulas for exact causes, contributions and stale values. `false`: causes from references only |
 | `evaluationBudget` | `2_000_000` | Formula evaluations for recalculation, across the trace. Past it, the rest falls back to references |
+| `liveFunctions` | none | More data-feed functions, by provider, on top of [`LIVE_FUNCTIONS`](#live_functions): `{ 'In-house': ['PRICE_OF'] }`. A changed cell calling one is an outside-data input |
 
 ### WorkbookTrace
 
@@ -398,6 +401,7 @@ traceTable(diff: TableDiff, options?: TraceOptions): WorkbookTrace
 | `contributions` | `(number \| null)[]?` | Parallel to `causes`, when `method` is `'recalculated'`: new value − value without that cause. Parts needn't add up to the total |
 | `method` | `'recalculated' \| 'references'?` | How `causes` was found: by undoing each edit and recalculating (exact), or by following references (may over-include) |
 | `stale` | `{ cached, recalculated }?` | The new file's saved value is out of date: `cached` is what the file says, `recalculated` what its formulas give |
+| `external` | `ExternalSource?` | On `input` cells whose formula reads outside data (Bloomberg `BDP`, `RTD`, another workbook): where from. Their saved value is taken as given, never recalculated |
 
 ### CellRef
 
@@ -411,11 +415,12 @@ of change](tracing.md#four-kinds-of-change).
 
 ### TraceStats
 
-`{ inputs, formulas, computed, unexplained, stale, recalculated, unmodelled }`:
+`{ inputs, formulas, computed, unexplained, stale, recalculated, unmodelled, external }`:
 counts of changed cells by kind; `unexplained` counts computed cells with
 no traced cause, `stale` those whose saved value was out of date,
-`recalculated` those whose causes came from recalculation, and
-`unmodelled` formulas near a change the engine couldn't reproduce.
+`recalculated` those whose causes came from recalculation, `unmodelled`
+formulas near a change the engine couldn't reproduce, and `external`
+inputs whose value came from outside data (also counted in `inputs`).
 
 ### applyRecalculation
 
@@ -437,6 +442,73 @@ changeKind(diff: TableDiff, row: number, col: number): ChangeKind
 Classify one changed cell without a full trace: `formula` if its formula
 changed, `computed` if it has the same formula on both sides, else
 `input`. This is what the renderers use when no trace is attached.
+
+### externalSource
+
+```ts signature
+externalSource(formula: string, extra?: Record<string, string[]>): ExternalSource | null
+```
+
+Where a formula's value comes from, if from outside the workbook: a
+data-feed function from [`LIVE_FUNCTIONS`](#live_functions) or `extra`
+(with or without Excel's `_xll.` prefix), any other `_xll.` add-in
+function, or a link to another workbook (`[1]Sheet1!A1`). Text inside
+strings is ignored. `null` for a formula that reads only the workbook.
+See [spreadiff-lite → Outside data](spreadiff-lite.md#outside-data).
+
+### ExternalSource
+
+`{ provider, function }`: `provider` is `'Bloomberg'`, `'LSEG'`,
+`'FactSet'`, `'S&P Capital IQ'`, `'Morningstar'`, `'Excel'`, `'add-in'`
+(another XLL function), `'link'` (another workbook) or a provider from
+`liveFunctions`; `function` is the function's name (`'BDP'`) or the link
+(`'[1]'`).
+
+### LIVE_FUNCTIONS
+
+`Record<provider, functionNames[]>`: the data-feed functions recognised by
+default. A name ending in `*` matches every function starting with it
+(`CIQ*`). The list is in [spreadiff-lite → Outside
+data](spreadiff-lite.md#outside-data).
+
+---
+
+## Labels
+
+### tableLabeler
+
+```ts signature
+tableLabeler(table: Table, options?: LabelOptions): (row: number, col: number) => CellLabel
+```
+
+What the sheet calls a cell, from the layout around it: section headings
+above the row, the row's label cells and the column headings above the
+cell. Takes table coordinates (`row` into `table.rows`). The layout is
+analysed once, on the first call. The rules and their failure modes are in
+[spreadiff-lite → How cells are named](spreadiff-lite.md#how-cells-are-named).
+
+### LabelOptions
+
+| Field | Default | |
+| --- | --- | --- |
+| `keyColumns` | `[]` | Key columns by name (`TableDiff.keyColumns`): their values lead each row's label, and no sections are inferred (the table is records, not a model) |
+| `maxRowCells` | `2` | Label cells per row |
+
+### CellLabel
+
+`{ sections, row, column }`, each a `string[]`: section headings
+outermost first (`['India']`), the row's label cells (`['Revenue']`) and
+the column headings outermost first (`['Actual', 'Q2']`, or the column
+name). Any can be empty.
+
+### formatLabel
+
+```ts signature
+formatLabel(label: CellLabel): string
+```
+
+One line: sections and row joined with ` › `, then ` · ` and the column
+headings: `'India › Revenue · 2025'`. Empty when there are no labels.
 
 ---
 
@@ -650,18 +722,18 @@ underlying `DiffGrid`, or `null` before mount).
 
 ---
 
-## Lite rendering
+## HTML and text rendering
 
-From `spreadiff/lite`. See [spreadiff/lite](lite.md) for a guide.
+From `spreadiff/html`. See [spreadiff/html](html.md) for a guide.
 
 ### renderHTML
 
 ```ts signature
-renderHTML(diff: TableDiff, options?: LiteOptions): string
+renderHTML(diff: TableDiff, options?: HtmlOptions): string
 ```
 
 The diff as an HTML string (changes plus context). Cell content is escaped.
-Style it with [`LITE_CSS`](#lite_css).
+Style it with [`HTML_CSS`](#html_css).
 
 ### renderText
 
@@ -672,7 +744,7 @@ renderText(diff: TableDiff, options?: { context?; changedColumnsOnly?; maxRows?;
 An aligned plain-text diff with ASCII `+` / `-` line markers, for terminals,
 logs and ```` ```diff ```` blocks. `maxWidth` (default 24) caps column width.
 
-### LiteOptions
+### HtmlOptions
 
 | Field | Default | |
 | --- | --- | --- |
@@ -684,15 +756,15 @@ logs and ```` ```diff ```` blocks. `maxWidth` (default 24) caps column width.
 | `kindOf` | — | `(row, col) => ChangeKind \| undefined` override |
 | `rowNumberOffset` | from `origin` | Displayed number of row index 0 |
 
-### LiteLayout
+### HtmlLayout
 
 `'split' | 'unified'`
 
-### LiteDisplay
+### HtmlDisplay
 
 `'stacked' | 'new' | 'delta' | 'inline'`
 
-### LITE_CSS
+### HTML_CSS
 
 A CSS string for `renderHTML` output, scoped under `.sdl-wrap` and themed
 by the `--sd-*` variables. Include it once per page.
@@ -889,8 +961,8 @@ made for.
 One sheet's traces as typed arrays: `keys`, `codes` (kind, method,
 unexplained, has contributions), `counts` (cause and impact counts),
 offsets `causeAt` / `impactAt` / `contribAt` into `refs` (sheet, row, col
-triples) and `contributions` (NaN for null), plus `stale` values by
-index. Structured-cloning one object per traced cell cost about 200 ms per
+triples) and `contributions` (NaN for null), plus `stale` and `external`
+values by index. Structured-cloning one object per traced cell cost about 200 ms per
 40,000 cells.
 
 ---
@@ -908,3 +980,131 @@ matched index pairs flattened as `[a0, b0, a1, b1, …]`, increasing in both.
 Optimal (Myers) for small edit distances; when the work budget runs out it
 falls back to patience anchoring, which stays near-linear but may not be
 minimal. The diff uses it on interned row contents.
+
+---
+
+## spreadiff-lite
+
+A separate package (`import … from 'spreadiff-lite'`), with no UI. It also
+re-exports `externalSource`, `LIVE_FUNCTIONS`, `tableLabeler`,
+`formatLabel`, `CellLabel` and `ExternalSource` from `spreadiff/core`. Guide:
+[spreadiff-lite](spreadiff-lite.md).
+
+### compare
+
+```ts signature
+compare(oldFile: FileInput, newFile: FileInput, options?: CompareOptions): ChangeReport
+```
+
+Parse (if needed), diff and trace two workbooks, and build the report:
+edits, downstream results with their causes and contributions, shape
+changes and notes. Formulas reading outside data are taken as saved.
+
+### summarize
+
+```ts signature
+summarize(oldFile: FileInput, newFile: FileInput, options?: CompareOptions & MarkdownOptions): string
+```
+
+`toMarkdown(compare(oldFile, newFile, options), options)`.
+
+### reportOf
+
+```ts signature
+reportOf(diff: WorkbookDiff, trace: WorkbookTrace, oldName?: string, newName?: string): ChangeReport
+```
+
+The report for a diff and trace you already have, for example from a
+`spreadiff` worker.
+
+### toMarkdown
+
+```ts signature
+toMarkdown(report: ChangeReport, options?: MarkdownOptions): string
+```
+
+The report as Markdown. In order:
+- a summary line;
+- tables of edits, final outputs and intermediate results (or one
+  *Downstream* table when every result is an output);
+- rows, columns and sheets that changed;
+- notes.
+
+Empty sections are left out. Identical files give `No changes.`
+
+### FileInput
+
+`Workbook | { name: string; data: ArrayBuffer | Uint8Array }`: a parsed
+workbook, or a file's name (which picks the parser: `.xlsx`, `.xlsm`,
+`.csv`, `.tsv`) and bytes.
+
+### CompareOptions
+
+| Field | |
+| --- | --- |
+| `diff` | [`DiffOptions`](#diffoptions): `keys`, `numericTolerance`, … |
+| `parse` | [`ParseFileOptions`](#parsefileoptions): `header`, `delimiter`. Ignored for workbooks passed in parsed |
+| `trace` | [`TraceOptions`](#traceoptions): `recalculate`, `liveFunctions`, budgets |
+| `sheets` | Only these sheets, by name |
+
+### MarkdownOptions
+
+| Field | Default | |
+| --- | --- | --- |
+| `maxRows` | `50` | Rows per table; the rest are counted under it. `Infinity` for all |
+| `maxCauses` | `3` | Causes listed per downstream result |
+| `headingLevel` | `2` | Level of the title; sections are one deeper |
+| `digits` | `15` | Significant digits for values and changes (15 is exact). Contributions show at most 4 |
+| `intermediate` | `true` | List intermediate results as well as final outputs |
+
+### ChangeReport
+
+| Field | Type | |
+| --- | --- | --- |
+| `old`, `new` | `string` | File names |
+| `totals` | `{ inputs, formulas, external, downstream, outputs, recalculated, unexplained, stale }` | Counts |
+| `edits` | `CellChange[]` | Input, formula and outside-data changes, in sheet order |
+| `downstream` | `CellChange[]` | Results that moved: final outputs first, then sheet order |
+| `structure` | `StructureChange[]` | Rows, columns and sheets added, removed or moved |
+| `notes` | `string[]` | Caveats: outside data, stale files, results traced by references, truncation |
+| `diff`, `trace` | `WorkbookDiff`, `WorkbookTrace` | The underlying diff and trace. Not enumerable, so `JSON.stringify` leaves them out |
+
+### CellChange
+
+| Field | Type | |
+| --- | --- | --- |
+| `id` | `string` | `Sheet!A1` (new file; old file for removed cells) |
+| `sheet`, `cell` | `string` | Sheet name and A1 address |
+| `label`, `labels` | `string`, `CellLabel` | What the sheet calls it ([How cells are named](spreadiff-lite.md#how-cells-are-named)) |
+| `kind` | `'input' \| 'formula' \| 'external' \| 'computed'` | Typed over, formula edited, outside data refreshed, or moved downstream |
+| `before`, `after` | `CellValue` | Values (the recalculated one when the new file's was stale) |
+| `formula` | `{ before, after }?` | Formula text, when either side has one |
+| `delta`, `ratio` | `number?` | `after − before` and `delta / \|before\|`, for numbers |
+| `external` | `ExternalSource?` | For `external` edits |
+| `impact` | `number?` | For edits: downstream results it moved |
+| `causes` | `Cause[]?` | For `computed`: the edits that moved it, largest contribution first |
+| `causeCount` | `number?` | Exact number of causes |
+| `method` | `'recalculated' \| 'references'?` | How the causes were found |
+| `output` | `boolean?` | No other changed cell reads it: a final output |
+| `unexplained` | `'volatile' \| 'dynamic' \| 'unknown'?` | Why no cause was found |
+| `stale` | `{ saved }?` | The new file saved this value without recalculating |
+
+### Cause
+
+`{ id, label, contribution }`: the edit's `Sheet!A1`, its label, and the
+result now minus the result without that edit (`null` when traced by
+references or not numeric).
+
+### StructureChange
+
+`{ sheet, kind, rows?, labels?, column?, impact? }`. `kind` is one of:
+- `'sheet-added'`, `'sheet-removed'`;
+- `'rows-added'`, `'rows-removed'`, `'rows-moved'`;
+- `'column-added'`, `'column-removed'`, `'column-renamed'`.
+
+The other fields:
+- `rows`: spreadsheet row numbers;
+- `labels`: their row labels;
+- `column`: the column name (`'old → new'` for a rename);
+- `impact`: results the added or removed cells moved.
+

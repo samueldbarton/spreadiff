@@ -25,6 +25,7 @@
  *    connects them. This over-approximates (both IF branches count) but
  *    doesn't miss a cause.
  */
+import { externalSource, type ExternalSource } from './external.js';
 import { formulaRefs, scopedNames, type SheetRange } from './formula.js';
 import { numericDelta } from './text.js';
 import { Engine, Unsupported, type Compiled, type Read } from './engine/evaluate.js';
@@ -101,6 +102,14 @@ export interface CellTrace {
    * changing to `recalculated`, even if its cached value didn't change.
    */
   stale?: { cached: CellValue; recalculated: CellValue };
+  /**
+   * Set on `input` cells that hold a formula reading data from outside the
+   * workbook (a Bloomberg `BDP`, `RTD`, a link to another file; see
+   * {@link externalSource}). Their value can't be recalculated here, so the
+   * file's saved value is taken as given: when it changed (the data
+   * refreshed), the cell is an input, and a root cause of what it feeds.
+   */
+  external?: ExternalSource;
 }
 
 /** Totals over a {@link WorkbookTrace}. */
@@ -119,6 +128,8 @@ export interface TraceStats {
   recalculated: number;
   /** Formulas near a change that couldn't be recalculated, so causes through them come from references. */
   unmodelled: number;
+  /** Inputs whose value came from outside the workbook (`CellTrace.external`); counted in `inputs` too. */
+  external: number;
 }
 
 /** The result of {@link traceWorkbook}. Lookups are O(1). */
@@ -155,6 +166,12 @@ export interface TraceOptions {
   recalculate?: boolean;
   /** Max formula evaluations for recalculation, across the trace. Default 2,000,000. */
   evaluationBudget?: number;
+  /**
+   * More live-data functions, by provider, on top of {@link LIVE_FUNCTIONS}
+   * (`{ 'In-house': ['PRICE_OF'] }`). A changed cell calling one is an
+   * external input rather than a recalculated result.
+   */
+  liveFunctions?: Readonly<Record<string, readonly string[]>>;
 }
 
 type Side = 'old' | 'new';
@@ -421,7 +438,10 @@ export function traceWorkbook(diff: WorkbookDiff, options: TraceOptions = {}): W
       for (let col = 0; col < mask.length; col++) {
         if (!mask[col]) continue;
         const nf = d.newTable.formulas?.[ni]?.[d.columns[col].newIndex] ?? null;
-        traces[si].set(key({ sheet: si, row, col }), blank(fm?.[col] ? 'formula' : nf ? 'computed' : 'input'));
+        const ext = nf && !fm?.[col] ? externalSource(nf, options.liveFunctions) : null;
+        const t = blank(fm?.[col] ? 'formula' : nf && !ext ? 'computed' : 'input');
+        if (ext) t.external = ext;
+        traces[si].set(key({ sheet: si, row, col }), t);
       }
     }
   });
@@ -549,10 +569,11 @@ export function traceWorkbook(diff: WorkbookDiff, options: TraceOptions = {}): W
   const exact = analysis?.butFor(roots) ?? null;
 
   // ---- Assemble -------------------------------------------------------------
-  const stats: TraceStats = { inputs: 0, formulas: 0, computed: 0, unexplained: 0, stale: 0, recalculated: 0, unmodelled: analysis?.unmodelled ?? 0 };
+  const stats: TraceStats = { inputs: 0, formulas: 0, computed: 0, unexplained: 0, stale: 0, recalculated: 0, unmodelled: analysis?.unmodelled ?? 0, external: 0 };
   diff.sheets.forEach((_, si) => {
     for (const [k, t] of traces[si]) {
       if (t.kind === 'input') stats.inputs++;
+      if (t.external) stats.external++;
       else if (t.kind === 'formula') stats.formulas++;
       if (t.kind !== 'computed') continue;
       stats.computed++;
@@ -791,7 +812,7 @@ function recalculate(diff: WorkbookDiff, maps: SheetMaps[], traces: Map<number, 
     if (r.side !== 'new' || queued.has(r.id)) continue;
     queued.add(r.id);
     queue.push(r.id);
-    if (formulaAt('new', r.id)) cone.add(r.id);
+    if (formulaAt('new', r.id) && !r.trace.external) cone.add(r.id);
   }
   const deps: number[] = [];
   for (let qi = 0; qi < queue.length && !truncated; qi++) {

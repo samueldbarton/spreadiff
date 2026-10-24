@@ -14,11 +14,19 @@ cd spreadiff && npm install && npm run build -w spreadiff
 cd /path/to/your/app && npm install /path/to/spreadiff/packages/spreadiff
 ```
 
+For [spreadiff-lite](spreadiff-lite.md), build it too and install both
+packages (it depends on the library):
+
+```bash
+cd spreadiff && npm run build -w spreadiff-lite
+cd /path/to/your/app && npm install /path/to/spreadiff/packages/spreadiff /path/to/spreadiff/packages/spreadiff-lite
+```
+
 Requirements:
 - a bundler that understands package `exports` (Vite, webpack 5, esbuild,
   Rollup) and an ES2022 target;
 - for the grid, a browser from 2023 or later (Chrome / Edge 111, Firefox
-  113, Safari 16.2). `lite` and `core` also run in Node 18+;
+  113, Safari 16.2). `spreadiff/html` and `spreadiff/core` also run in Node 18+;
 - React 18+, only for `spreadiff/react`.
 
 Details, including CSP and server-side rendering, are in
@@ -28,15 +36,18 @@ Details, including CSP and server-side rendering, are in
 
 | Import | Use it for | Size (min+gzip) |
 | --- | --- | --- |
-| `spreadiff/lite` | Diff + CSV + an HTML/text renderer. No canvas or DOM APIs, so it runs on servers too | 13.1 KB |
-| `spreadiff/core` | The diff engine, CSV and XLSX parsers, formula tracing. No rendering | 38.9 KB |
-| `spreadiff` | Everything in core plus the canvas `DiffGrid` | 57.1 KB |
+| `spreadiff/html` | Diff + CSV + an HTML/text renderer. No canvas or DOM APIs, so it runs on servers too | 13.1 KB |
+| `spreadiff/core` | The diff engine, CSV and XLSX parsers, formula tracing. No rendering | 41.6 KB |
+| `spreadiff` | Everything in core plus the canvas `DiffGrid` | 59.7 KB |
 | `spreadiff/react` | The `DiffGrid` React component | + React |
 | `spreadiff/worker` | Parse, diff and trace in a Web Worker | small client + worker |
+| `spreadiff-lite` | A separate package with no UI: a Markdown or JSON report of what changed and what it moved downstream, and a CLI | Node / server |
 
 Rule of thumb:
-- To review a handful of edits, especially outside a browser, use `lite`.
+- To review a handful of edits, especially outside a browser, use `spreadiff/html`.
 - To scroll through large sheets interactively, use `DiffGrid`.
+- To tell a reader (or an agent) what changed and what it moved, in
+  Markdown, use `spreadiff-lite`.
 
 ## 1. Diff two tables
 
@@ -99,16 +110,16 @@ import { DiffGrid } from 'spreadiff/react';
 export const Review = () => <DiffGrid diff={diff} layout="split" style={{ height: 600 }} />;
 ```
 
-### Anywhere, as HTML: `spreadiff/lite`
+### Anywhere, as HTML: `spreadiff/html`
 
 ```ts
-import { LITE_CSS, renderHTML } from 'spreadiff/lite';
+import { HTML_CSS, renderHTML } from 'spreadiff/html';
 
-container.innerHTML = `<style>${LITE_CSS}</style>` + renderHTML(diff, { layout: 'split' });
+container.innerHTML = `<style>${HTML_CSS}</style>` + renderHTML(diff, { layout: 'split' });
 ```
 
 `renderHTML` returns a string, so you can produce it on a server, in a CI
-job or in an email. See [spreadiff/lite](lite.md).
+job or in an email. See [spreadiff/html](html.md).
 
 ## 3. Big files: parse off the main thread
 

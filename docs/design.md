@@ -13,13 +13,34 @@ Surveyed in 2026, before writing any code:
 | [Glide Data Grid](https://github.com/glideapps/glide-data-grid) | Canvas grid that scales to millions of rows | A general-purpose grid: React-only, with peer dependencies pinned to React ≤ 18, and no diff semantics |
 | RevoGrid, AG Grid, Handsontable | Virtualized DOM grids | DOM cells cost more per frame, and diff features would be bolted on |
 | Univer, Fortune Sheet | Full canvas spreadsheet editors | A large editor surface for what is a read-only view |
-| [`@pierre/diffs`](https://diffs.com) | The model for the API and the look: Shadow DOM, `light-dark()` and `color-mix()` tokens, split and stacked layouts, annotations, workers | Built for lines of text, not a 2-D grid |
 | SheetJS | Reads nearly every spreadsheet format | About 900 KB. The npm release (0.18.5) is old and has published CVEs; newer builds ship only from the vendor's CDN |
 
 Nothing combined a table-aware diff with a renderer that stays smooth at a
 million rows, so spreadiff does both. daff's ideas (match columns, then
 rows, then pair leftovers by similarity) shaped the engine; the code is
 new.
+
+### Downstream impact (surveyed October 2026)
+
+Before building [spreadiff-lite](spreadiff-lite.md), the question was
+whether anything already reports what an edit *moved downstream*. Several
+tools get part of the way:
+
+| Tool | Downstream | Recalculates | Per-output causes and contributions | Labels |
+| --- | --- | --- | --- | --- |
+| [ExcelCompare](https://github.com/na-ka-na/ExcelCompare), [xlsxDiff](https://github.com/rafal-dot/xlsxDiff), [sheets-diff](https://github.com/forskscope/sheets-diff-rs), [git-xl](https://github.com/xltrail/git-xl) | No: cell-by-cell differences | No | No | No |
+| Microsoft Spreadsheet Compare | Colours "calculated values" apart from "entered values" | Uses saved values | No | No |
+| [sheetdelta](https://github.com/sqmyou/sheetdelta) | Lists the addresses a change reaches ("affects 3 cells downstream") | No ("it does not evaluate formulas") | No | No |
+| [xlsx-review](https://github.com/Keremozdemirra/xlsx-review) | `explain_cell` lists a cell's dependents | No ("never calculates anything") | No | No |
+| [agent-spreadsheet](https://github.com/PSU3D0/agent-spreadsheet) (`asp`) | `verify diff` separates "direct edits vs recalculation fallout" | Yes, a separate step (Formualizer) | Not documented | Not documented |
+| spreadiff / spreadiff-lite | Every downstream result | Yes, checked against LibreOffice | Yes: each edit undone in turn | Section, row and column headings |
+
+*How this could be wrong:* the survey covered public repositories and
+vendor pages. Commercial add-ins (PerfectXL, Operis OAK, Arixcel) didn't
+document their compare features well enough to judge, and
+agent-spreadsheet's diff output isn't documented in detail. The claim is
+narrow: the combination of recalculated per-output attribution and
+label-aware Markdown wasn't found, not that no tool traces dependents.
 
 ## The engine
 
@@ -31,7 +52,7 @@ per row, so ~9 MB for a million rows on top of the tables. Modified rows
 also get a byte per column marking which cells changed.
 
 Every view reads the same structure: the unified and split grid layouts,
-the lite HTML renderer, the text renderer and the CSV export. A view never
+the HTML renderer, the text renderer and the CSV export. A view never
 re-diffs.
 
 *Cost:* the model can't express a row that moved. A reordered keyed row is
@@ -106,7 +127,7 @@ falls back to static references for that part of the model.
 units"), stale values flagged rather than shown as if current, and files
 without cached values still diffable.
 
-*Cost:* `core` grew from 16 to 36 KB gzip; `lite` doesn't include the
+*Cost:* `core` grew from 16 to 36 KB gzip; `spreadiff/html` doesn't include the
 engine. Recalculating takes 3–5× as long as static tracing
 ([Tracing → Cost](tracing.md#cost)). The engine is one spreadsheet's
 opinion: where it disagrees with Excel (hidden rows in `SUBTOTAL`,
@@ -125,7 +146,7 @@ calling `String(Number(x))` per field.
 
 The reader handles values, shared strings, dates, booleans and shared
 formulas, on top of [fflate](https://github.com/101arrowz/fflate). The
-whole `core` entry, tracing included, is 38.9 KB gzip.
+whole `core` entry, tracing included, is 41.6 KB gzip.
 
 *Cost:* no styles, merged cells, comments or legacy `.xls`. A file that
 needs those needs another parser; any parser that produces a `Table` works.
@@ -171,9 +192,9 @@ look like fifty edits. Amber separates "someone typed this" from "this
 moved because of something else". The colour choice hasn't been tested
 with users.
 
-## The lite renderer
+## The HTML renderer
 
-`spreadiff/lite` renders to an HTML string with no DOM APIs, so it runs on
+`spreadiff/html` renders to an HTML string with no DOM APIs, so it runs on
 a server, in CI or in an email. It shows changes plus context, like a code
 review, and caps the output with `maxRows`.
 

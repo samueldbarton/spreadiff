@@ -2,6 +2,7 @@
 // Documentation checks. Run with `npm run docs:check`. Fails (exit 1) when:
 //   1. a ```ts / ```tsx block in the docs or in a JSDoc comment doesn't typecheck,
 //   2. a block tagged <!-- example: id --> doesn't print its <!-- output: id --> block,
+//      or a block tagged <!-- excerpt-of: id --> has a line that output doesn't,
 //   3. a public export has no entry (### heading) in docs/api.md,
 //   4. a relative link or #anchor doesn't resolve,
 //   5. a public export or interface member has no JSDoc,
@@ -13,6 +14,7 @@
 import { build } from 'esbuild';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listExports } from './exports.mjs';
@@ -20,6 +22,7 @@ import { measure } from '../bench/size.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const LIB = join(ROOT, 'packages/spreadiff/src');
+const LITE = join(ROOT, 'packages/spreadiff-lite/src');
 const OUT = join(ROOT, 'node_modules/.docs-check');
 const problems = [];
 const fail = (where, msg) => problems.push(`${where}: ${msg}`);
@@ -35,6 +38,7 @@ const markdown = [
   'CONTRIBUTING.md',
   'CHANGELOG.md',
   'packages/spreadiff/README.md',
+  'packages/spreadiff-lite/README.md',
   ...walk(join(ROOT, 'docs')).filter((f) => f.endsWith('.md')).map((f) => relative(ROOT, f)),
 ].filter((f) => existsSync(join(ROOT, f)));
 
@@ -50,7 +54,7 @@ function blocks(file, text) {
     for (i++; i < lines.length && !/^\s*```\s*$/.test(lines[i]); i++) body.push(lines[i].slice(m[1].length));
     let tag = null;
     for (let k = start - 1; k >= 0 && k >= start - 3; k--) {
-      const t = /<!--\s*(example|output|no-check):?\s*([\w-]*)\s*-->/.exec(lines[k]);
+      const t = /<!--\s*(example|output|excerpt-of|no-check):?\s*([\w-]*)\s*-->/.exec(lines[k]);
       if (t) {
         tag = { kind: t[1], id: t[2] };
         break;
@@ -68,7 +72,7 @@ const docs = markdown.map((f) => ({ file: f, text: readFileSync(join(ROOT, f), '
 const allBlocks = docs.flatMap((d) => blocks(d.file, d.text));
 
 // JSDoc examples in the library source.
-for (const f of walk(LIB).filter((f) => /\.tsx?$/.test(f))) {
+for (const f of [...walk(LIB), ...walk(LITE)].filter((f) => /\.tsx?$/.test(f))) {
   const src = readFileSync(f, 'utf8');
   const re = /\/\*\*([\s\S]*?)\*\//g;
   let m;
@@ -100,10 +104,11 @@ writeFileSync(
       paths: {
         spreadiff: [join(LIB, 'index.ts')],
         'spreadiff/core': [join(LIB, 'core/index.ts')],
-        'spreadiff/lite': [join(LIB, 'lite/index.ts')],
+        'spreadiff/html': [join(LIB, 'html/index.ts')],
         'spreadiff/xlsx': [join(LIB, 'core/xlsx.ts')],
         'spreadiff/react': [join(LIB, 'react/index.tsx')],
         'spreadiff/worker': [join(LIB, 'worker/index.ts')],
+        'spreadiff-lite': [join(LITE, 'index.ts')],
         react: [join(ROOT, 'node_modules/@types/react/index.d.ts')],
         'react/jsx-runtime': [join(ROOT, 'node_modules/@types/react/jsx-runtime.d.ts')],
       },
@@ -134,16 +139,26 @@ for (const b of allBlocks.filter((b) => b.tag?.kind === 'example')) {
     stdin: { contents: b.code, loader: b.lang === 'tsx' ? 'tsx' : 'ts', resolveDir: ROOT },
     bundle: true, write: false, format: 'cjs', platform: 'node', logLevel: 'silent',
     alias: {
-      spreadiff: join(LIB, 'index.ts'), 'spreadiff/core': join(LIB, 'core/index.ts'), 'spreadiff/lite': join(LIB, 'lite/index.ts'),
+      spreadiff: join(LIB, 'index.ts'), 'spreadiff/core': join(LIB, 'core/index.ts'), 'spreadiff/html': join(LIB, 'html/index.ts'), 'spreadiff-lite': join(LITE, 'index.ts'),
     },
   });
   const printed = [];
   const log = (...a) => printed.push(a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' '));
-  new Function('console', 'require', res.outputFiles[0].text)({ log }, () => ({}));
+  new Function('console', 'require', res.outputFiles[0].text)({ log }, createRequire(import.meta.url));
   const got = printed.join('\n').trimEnd();
   if (got !== expected.code.trimEnd()) {
     fail(`${expected.file}:${expected.line}`, `output of example "${b.tag.id}" differs.\n--- documented\n${expected.code}\n--- actual\n${got}`);
   }
+  // Excerpts elsewhere (a README) must quote the real output, line for line.
+  const lines = new Set(got.split('\n'));
+  for (const ex of allBlocks.filter((x) => x.tag?.kind === 'excerpt-of' && x.tag.id === b.tag.id)) {
+    for (const line of ex.code.split('\n')) {
+      if (line.trim() && !lines.has(line)) fail(`${ex.file}:${ex.line}`, `excerpt of "${b.tag.id}" has a line its output doesn't: ${line}`);
+    }
+  }
+}
+for (const ex of allBlocks.filter((x) => x.tag?.kind === 'excerpt-of' && !allBlocks.some((b) => b.tag?.kind === 'example' && b.tag.id === x.tag.id))) {
+  fail(`${ex.file}:${ex.line}`, `excerpt of "${ex.tag.id}", which isn't an example`);
 }
 
 // ---- 3. API reference covers every export ---------------------------------

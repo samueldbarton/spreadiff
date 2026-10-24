@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { diffTables, parseCsv, renderHTML, renderText, LITE_CSS } from '../src/lite';
+import { diffTables, parseCsv, renderHTML, renderText, HTML_CSS } from '../src/html';
 import type { Table } from '../src/core';
 
 const csv = (s: string) => parseCsv(s.trim() + '\n');
 const a = csv('id,name,price\n1,Lamp,10\n2,Chair,20\n3,Desk,30\n4,Mug,4\n5,Rug,50\n6,Vase,6\n7,Tray,7');
 const b = csv('id,name,price\n1,Lamp,10\n2,Armchair,25\n3,Desk,30\n4,Mug,4\n5,Rug,50\n6,Vase,6\n8,Clock,12');
 
-describe('lite', () => {
+describe('html', () => {
   it('split layout: aligned rows, line numbers, hunks, intra-cell marks', () => {
     const html = renderHTML(diffTables(a, b), { layout: 'split', context: 1 });
     expect(html).toContain('sdl-split');
@@ -64,17 +64,17 @@ describe('lite', () => {
     );
   });
 
-  it('ships its CSS', () => expect(LITE_CSS).toContain('.sdl-split'));
+  it('ships its CSS', () => expect(HTML_CSS).toContain('.sdl-split'));
 });
 
 describe('changedColumnsOnly keeps what names the rows', () => {
   it('keeps the row-label column when rows were matched by order', async () => {
-    const { diffTables, parseCsv, renderText } = await import('../src/lite');
+    const { diffTables, parseCsv, renderText } = await import('../src/html');
     const d = diffTables(parseCsv('line,a,b\nRevenue,1,2\nCosts,3,4'), parseCsv('line,a,b\nRevenue,1,9\nCosts,3,4'), { keys: 'none' });
     expect(renderText(d, { changedColumnsOnly: true, context: 0 }).split('\n')[0].trim().split(/\s+/)).toEqual(['line', 'b']);
   });
   it('keeps only keys when there are keys, and no label column for numbers', async () => {
-    const { diffTables, parseCsv, renderText } = await import('../src/lite');
+    const { diffTables, parseCsv, renderText } = await import('../src/html');
     const keyed = diffTables(parseCsv('id,name,b\n1,x,2\n2,y,4'), parseCsv('id,name,b\n1,x,9\n2,y,4'), { keys: ['id'] });
     expect(renderText(keyed, { changedColumnsOnly: true, context: 0 }).split('\n')[0].trim().split(/\s+/)).toEqual(['id', 'b']);
     const numeric = diffTables(parseCsv('a,b\n1,2\n3,4'), parseCsv('a,b\n1,9\n3,4'), { keys: 'none' });

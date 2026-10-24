@@ -375,7 +375,7 @@ export function App() {
               value={renderer}
               onChange={setRenderer}
               label="Renderer"
-              options={[['spreadiff', 'Grid', 'Canvas grid'], ['code', 'Code', 'Code-review HTML (spreadiff/lite)'], ['glide', 'Glide', 'Glide Data Grid, for comparison']]}
+              options={[['spreadiff', 'Grid', 'Canvas grid'], ['code', 'Code', 'Code-review HTML (spreadiff/html)'], ['glide', 'Glide', 'Glide Data Grid, for comparison']]}
             />
             {trace && (
               <button className={`btn icon ${panel ? 'on' : ''}`} onClick={() => setPanel((v) => !v)} aria-pressed={panel} title={panel ? 'Hide trace panel' : 'Show trace panel'} aria-label="Trace panel">

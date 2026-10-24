@@ -4,7 +4,7 @@
 
 | Entry | Needs | Minimum |
 | --- | --- | --- |
-| `spreadiff/lite`, `spreadiff/core` | ES2022 JavaScript. No DOM: runs in Node, Deno, Bun, workers and edge runtimes | Node 18, or any 2022+ browser |
+| `spreadiff/html`, `spreadiff/core` | ES2022 JavaScript. No DOM: runs in Node, Deno, Bun, workers and edge runtimes | Node 18, or any 2022+ browser |
 | `spreadiff` (`DiffGrid`) | ES2022, Shadow DOM, `ResizeObserver`, canvas 2D, CSS `color-mix()` | **Chrome / Edge 111, Firefox 113, Safari 16.2** (2023) |
 | `spreadiff/worker` | Module workers (`new Worker(url, { type: 'module' })`) | Chrome / Edge 80, Firefox 114, Safari 15 |
 | `spreadiff/react` | React 18 or 19 | |
@@ -17,7 +17,7 @@ They get the same colours from plain light values plus a
 `light-dark()` and checks every resolved colour against the normal theme
 in light, dark and forced-dark modes.
 
-`spreadiff/lite`'s `LITE_CSS` has the same fallback. Mail clients vary
+`spreadiff/html`'s `HTML_CSS` has the same fallback. Mail clients vary
 far more than browsers, though. Many drop `<style>` blocks or custom
 properties altogether, so for email, test in the clients you target. The
 markers (`+`, `−`, `•`, `↕`, struck-through old values) keep a diff

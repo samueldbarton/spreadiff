@@ -1,6 +1,6 @@
-# spreadiff/lite
+# spreadiff/html
 
-`spreadiff/lite` renders a diff as an **HTML string** or as **plain text**.
+`spreadiff/html` renders a diff as an **HTML string** or as **plain text**.
 It uses no canvas, no DOM APIs and no workers, so the same call works in a
 browser, a Node server, a CI job or a static-site build. At 13.1 KB
 (min+gzip) for the diff engine, the CSV parser and both renderers, it's the
@@ -12,15 +12,17 @@ a large sheet, use the [DiffGrid](grid.md).
 
 | `layout: 'split'` | `layout: 'unified'` |
 | --- | --- |
-| ![Split: old and new side by side, one row per line](images/lite-split.png) | ![Unified: a − line and a + line per modified row](images/lite-unified.png) |
+| ![Split: old and new side by side, one row per line](images/html-split.png) | ![Unified: a − line and a + line per modified row](images/html-unified.png) |
+
+<!-- demo: html -->
 
 ## HTML
 
 ```ts
-import { diffTables, LITE_CSS, parseCsv, renderHTML } from 'spreadiff/lite';
+import { diffTables, HTML_CSS, parseCsv, renderHTML } from 'spreadiff/html';
 
 const html = renderHTML(diffTables(parseCsv(before), parseCsv(after)), { layout: 'split' });
-container.innerHTML = `<style>${LITE_CSS}</style>${html}`;
+container.innerHTML = `<style>${HTML_CSS}</style>${html}`;
 ```
 
 - **`split`** puts old and new side by side, one row per line, with line
@@ -50,7 +52,7 @@ deltas are green or red by direction, as in the grid.
 
 ### Styling
 
-`LITE_CSS` styles everything under `.sdl-wrap`. It reads the same `--sd-*`
+`HTML_CSS` styles everything under `.sdl-wrap`. It reads the same `--sd-*`
 variables as the grid (see [Theming](theming.md#tokens)): `--sd-bg`,
 `--sd-fg`, `--sd-added`, `--sd-removed`, `--sd-modified`, `--sd-computed`,
 `--sd-formula`, `--sd-font-family`, `--sd-mono-font-family`. Light and dark
@@ -64,7 +66,7 @@ Markdown code blocks:
 
 <!-- example: render-text -->
 ```ts
-import { diffTables, parseCsv, renderText } from 'spreadiff/lite';
+import { diffTables, parseCsv, renderText } from 'spreadiff/html';
 
 const before = parseCsv('id,name,price\n1,Lamp,10\n2,Chair,20\n3,Desk,30\n4,Mug,4\n5,Rug,50\n6,Vase,6\n7,Tray,7');
 const after = parseCsv('id,name,price\n1,Lamp,10\n2,Armchair,25\n3,Desk,30\n4,Mug,4\n5,Rug,50\n6,Vase,6\n8,Clock,12');
@@ -96,7 +98,7 @@ on the `+` line.
 
 ```ts
 import { readFileSync } from 'node:fs';
-import { diffTables, hasChanges, parseCsv, renderText } from 'spreadiff/lite';
+import { diffTables, hasChanges, parseCsv, renderText } from 'spreadiff/html';
 
 const d = diffTables(parseCsv(readFileSync('prices.base.csv', 'utf8')), parseCsv(readFileSync('prices.csv', 'utf8')));
 const body = !hasChanges(d)
@@ -111,11 +113,11 @@ Lines start with ASCII `+` and `-`, so fencing the text as `diff` makes GitHub c
 ### Server-rendered HTML
 
 ```ts
-import { diffTables, LITE_CSS, parseCsv, renderHTML } from 'spreadiff/lite';
+import { diffTables, HTML_CSS, parseCsv, renderHTML } from 'spreadiff/html';
 
 export function diffPage(a: string, b: string): string {
   const html = renderHTML(diffTables(parseCsv(a), parseCsv(b)), { layout: 'split', display: 'delta' });
-  return `<!doctype html><meta charset="utf-8"><style>${LITE_CSS}</style>${html}`;
+  return `<!doctype html><meta charset="utf-8"><style>${HTML_CSS}</style>${html}`;
 }
 ```
 
@@ -127,7 +129,7 @@ color cells of added rows that feed totals:
 
 ```ts
 import { traceWorkbook } from 'spreadiff';
-import { renderHTML } from 'spreadiff/lite';
+import { renderHTML } from 'spreadiff/html';
 
 const trace = traceWorkbook(workbookDiff);
 const html = renderHTML(workbookDiff.sheets[0].diff, {
@@ -135,11 +137,11 @@ const html = renderHTML(workbookDiff.sheets[0].diff, {
 });
 ```
 
-(`traceWorkbook` is in `spreadiff/core`, not in `lite`.)
+(`traceWorkbook` is in `spreadiff/core`, not in `spreadiff/html`.)
 
 ## What's in the box
 
-`spreadiff/lite` exports `renderHTML`, `renderText`, `LITE_CSS`, and the
+`spreadiff/html` exports `renderHTML`, `renderText`, `HTML_CSS`, and the
 pieces needed to produce a diff: `diffTables`, `parseCsv`, `cellsEqual`,
 `changeKind`, `formatCell`, `numericDelta` and `diffText`. It doesn't
 include the XLSX parser (`spreadiff/xlsx`) or tracing (`spreadiff/core`):

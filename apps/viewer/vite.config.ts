@@ -12,7 +12,7 @@ export default defineConfig({
       { find: /^spreadiff$/, replacement: lib('index.ts') },
       { find: /^spreadiff\/react$/, replacement: lib('react/index.tsx') },
       { find: /^spreadiff\/core$/, replacement: lib('core/index.ts') },
-      { find: /^spreadiff\/lite$/, replacement: lib('lite/index.ts') },
+      { find: /^spreadiff\/html$/, replacement: lib('html/index.ts') },
       { find: /^spreadiff\/worker$/, replacement: lib('worker/index.ts') },
     ],
   },

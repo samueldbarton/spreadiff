@@ -9,5 +9,7 @@ export { toUnifiedCsv } from './export.js';
 export { packTable, unpackTable, packWorkbookDiff, unpackWorkbookDiff, packWorkbookTrace, unpackWorkbookTrace, type PackedTable, type PackedWorkbookDiff, type PackedWorkbookTrace, type PackedSheetTrace } from './transfer.js';
 export { tokenizeFormula, formulaRefs, canonicalFormula, structuredRange, scopedNames, type SheetRange, type FormulaRefs, type FormulaToken, type FormulaContext } from './formula.js';
 export { traceWorkbook, traceTable, applyRecalculation, type WorkbookTrace, type CellTrace, type CellRef, type ChangeKind, type TraceOptions, type TraceStats } from './trace.js';
+export { externalSource, LIVE_FUNCTIONS, type ExternalSource } from './external.js';
+export { tableLabeler, formatLabel, type CellLabel, type LabelOptions } from './labels.js';
 export { changeKind } from './kind.js';
 export { computeMissingValues, type MissingValues } from './recalc.js';

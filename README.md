@@ -1,14 +1,19 @@
 # spreadiff
 
-**See what changed between two spreadsheets, and why.**
+**An elegant but fully featured spreadsheet diff and UI library.**
 
 spreadiff diffs CSV and Excel files the way a spreadsheet is read: by rows
-and columns, not lines of text. It shows the result as a canvas grid that
-scrolls a million rows, or as static HTML for a pull request or an email.
-For workbooks with formulas, it separates what someone *edited* from what
-*moved as a consequence*. It also traces every changed result back to the
-edits that caused it, with how much each one contributed. It's to
-spreadsheets what [`@pierre/diffs`](https://diffs.com) is to code.
+and columns, not lines of text. For workbooks with formulas, it separates
+what someone *edited* from what *moved as a consequence*. It traces every
+changed result back to the edits that caused it, with how much each one
+contributed.
+
+It comes as two packages:
+
+| Package | For | What you get |
+| --- | --- | --- |
+| **`spreadiff`** | People reviewing changes | A canvas grid that scrolls a million rows, a React component, static HTML for a pull request or an email, and a Web Worker |
+| **[`spreadiff-lite`](docs/spreadiff-lite.md)** | Agents, CI and scripts | No UI. A Markdown or JSON report of every edit, its before and after values, and what it moved downstream, from an API or a CLI |
 
 ![The viewer: a financial model diff with downstream changes in amber, deltas under each value, and an outputs panel listing each changed result with its drivers](docs/images/viewer.png)
 
@@ -16,6 +21,31 @@ spreadsheets what [`@pierre/diffs`](https://diffs.com) is to code.
 rate were edited, APAC's COGS formula was rewritten, and a LATAM row was
 added. The amber cells are formula results that moved because of those
 edits; the panel lists each changed output and what drove it.*
+
+### What spreadiff-lite prints
+
+```bash
+npx spreadiff-lite regions-v1.xlsx regions-v2.xlsx
+```
+
+Growth went from 10% to 12%, and the Bloomberg rupee rate refreshed from
+83 to 84. An excerpt:
+
+<!-- excerpt-of: lite-regions -->
+```markdown
+**2 edits** (1 input, 1 outside-data value) moved **4 results downstream** (2 final outputs). Every cause was found by recalculating.
+
+| Cell | What | Before | After | Change | Driven by |
+| --- | --- | --- | --- | --- | --- |
+| `Model!B5` | India › Profit (USD) · 2024 | 50 | 49.4047619047619 | −0.5952380952381 (−1.19%) | USD/INR −0.5952 |
+| `Model!C5` | India › Profit (USD) · 2025 | 55 | 55.3333333333333 | +0.3333333333333 (+0.61%) | Growth +0.9881; USD/INR −0.6667 |
+```
+
+Every cell is named the way the sheet names it (`India › Profit (USD) ·
+2025`). A value from a data feed such as Bloomberg's `BDP` is taken as
+saved and reported as an input, because it can't be recalculated without
+the connection. [spreadiff-lite](docs/spreadiff-lite.md) shows the full
+report.
 
 ## Why spreadiff
 
@@ -40,7 +70,7 @@ edits; the panel lists each changed output and what drove it.*
     like a ten-row one.
   - Parsing, diffing and tracing run in a Web Worker.
 - **It runs anywhere.**
-  - `spreadiff/lite` has no DOM dependency, so the same diff renders in
+  - `spreadiff/html` has no DOM dependency, so the same diff renders in
     Node, in CI, or on an edge function.
   - Nothing is sent to a server.
   - It works under a strict Content-Security-Policy.
@@ -54,9 +84,9 @@ edits; the panel lists each changed output and what drove it.*
 | --- | --- |
 | ![Split layout: old and new tables side by side, removed values in red, added in green](docs/images/grid-split.png) | ![Hovering a computed cell lists the six edits that caused it, each with its change and contribution](docs/images/trace-tooltip.png) |
 
-| New value + Δ and % | Static HTML (`spreadiff/lite`) |
+| New value + Δ and % | Static HTML (`spreadiff/html`) |
 | --- | --- |
-| ![Each changed cell shows its new value with the absolute and percent change underneath](docs/images/display-delta.png) | ![A code-review style side-by-side HTML table](docs/images/lite-split.png) |
+| ![Each changed cell shows its new value with the absolute and percent change underneath](docs/images/display-delta.png) | ![A code-review style side-by-side HTML table](docs/images/html-split.png) |
 
 ## Quick start
 
@@ -94,9 +124,9 @@ export const Review = () => <DiffGrid diff={diff} layout="unified" style={{ heig
 **HTML or text, on a server or in CI:**
 
 ```ts
-import { LITE_CSS, renderHTML, renderText } from 'spreadiff/lite';
+import { HTML_CSS, renderHTML, renderText } from 'spreadiff/html';
 
-const html = `<style>${LITE_CSS}</style>` + renderHTML(diff, { layout: 'split' });
+const html = `<style>${HTML_CSS}</style>` + renderHTML(diff, { layout: 'split' });
 const text = renderText(diff, { changedColumnsOnly: true }); // for a ```diff block in a PR comment
 ```
 
@@ -135,9 +165,9 @@ and `npm run test:hosted` reproduce them.
 
 | Import | Contents | min + gzip |
 | --- | --- | --- |
-| `spreadiff/lite` | Diff engine, CSV parser, HTML and text renderers. No DOM | 13.1 KB |
-| `spreadiff/core` | + XLSX reader, formula engine and tracing | 38.9 KB |
-| `spreadiff` | + canvas `DiffGrid` | 57.1 KB |
+| `spreadiff/html` | Diff engine, CSV parser, HTML and text renderers. No DOM | 13.1 KB |
+| `spreadiff/core` | + XLSX reader, formula engine and tracing | 41.6 KB |
+| `spreadiff` | + canvas `DiffGrid` | 59.7 KB |
 | `spreadiff/react` | React component for `DiffGrid` | + React |
 | `spreadiff/worker` | Parse, diff and trace in a Web Worker | |
 
@@ -156,7 +186,7 @@ how they could be wrong.
 ## Browser support
 
 The grid needs Chrome / Edge 111, Firefox 113 or Safari 16.2 (it uses
-CSS `color-mix()`). `lite` and `core` run in Node 18 and any 2022+
+CSS `color-mix()`). `spreadiff/html` and `spreadiff/core` run in Node 18 and any 2022+
 runtime. Testing is in Chromium and Node; Firefox and Safari aren't
 tested yet. See [Browser support](docs/browser-support.md).
 
@@ -182,7 +212,7 @@ The full list, with what's been closed, is in
   - [How diffing works](docs/diffing.md)
   - [Tracing](docs/tracing.md)
   - [The DiffGrid](docs/grid.md)
-  - [spreadiff/lite](docs/lite.md)
+  - [spreadiff/html](docs/html.md)
   - [Workers](docs/workers.md)
   - [Theming](docs/theming.md)
   - [Accessibility](docs/accessibility.md)

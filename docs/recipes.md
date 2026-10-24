@@ -106,12 +106,12 @@ up to the total change. Here they do: +9 and +5 make +14. See
 
 ## A diff in a pull-request comment
 
-`spreadiff/lite` has no DOM dependency, so this runs in a CI job. Plain
+`spreadiff/html` has no DOM dependency, so this runs in a CI job. Plain
 text in a `diff` fence colours itself on GitHub:
 
 ```ts
 import { readFileSync, writeFileSync } from 'node:fs';
-import { diffTables, hasChanges, parseCsv, renderText } from 'spreadiff/lite';
+import { diffTables, hasChanges, parseCsv, renderText } from 'spreadiff/html';
 
 const d = diffTables(parseCsv(readFileSync('base/prices.csv', 'utf8')), parseCsv(readFileSync('prices.csv', 'utf8')));
 const s = d.stats;
@@ -126,7 +126,7 @@ writeFileSync(
 
 Post `comment.md` with your CI's usual step (for example
 `gh pr comment --body-file comment.md`). For rich HTML instead, use
-`renderHTML` with `LITE_CSS` ([spreadiff/lite](lite.md)).
+`renderHTML` with `HTML_CSS` ([spreadiff/html](html.md)).
 
 ## A command-line diff of two workbooks
 
@@ -135,7 +135,7 @@ Every changed sheet as text, plus what moved downstream, from Node:
 ```ts
 import { readFileSync } from 'node:fs';
 import { diffWorkbooks, parseFile, traceWorkbook } from 'spreadiff/core';
-import { renderText } from 'spreadiff/lite';
+import { renderText } from 'spreadiff/html';
 
 const [a, b] = process.argv.slice(2);
 const d = diffWorkbooks(parseFile(a, readFileSync(a)), parseFile(b, readFileSync(b)));

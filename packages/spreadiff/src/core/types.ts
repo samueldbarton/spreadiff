@@ -51,6 +51,12 @@ export interface Table {
    * `Sheet!Rate`.
    */
   names?: Record<string, string>;
+  /**
+   * Text cells that are indented or bold, in 0-based sheet coordinates.
+   * Row labels use them to tell a section heading ("India") from the items
+   * under it ("Revenue"). The XLSX reader fills this; it's optional.
+   */
+  labelStyles?: { r: number; c: number; indent?: number; bold?: boolean }[];
 }
 
 /** An ordered list of sheets. A CSV file is a one-sheet workbook. */

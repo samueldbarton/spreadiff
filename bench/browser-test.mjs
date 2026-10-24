@@ -403,7 +403,7 @@ await test('canvas text colors meet WCAG AA in light and dark', async () => {
   assert(fails.length === 0, fails.join('\n    '));
 });
 
-await test('axe-core finds no violations in spreadiff/lite HTML, light and dark', async () => {
+await test('axe-core finds no violations in spreadiff/html HTML, light and dark', async () => {
   const axe = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
   await page.addScriptTag({ content: axe });
   const out = [];
@@ -411,11 +411,11 @@ await test('axe-core finds no violations in spreadiff/lite HTML, light and dark'
     await page.emulateMedia({ colorScheme: scheme });
     const v = await page.evaluate(async () => {
       window.G?.cleanUp();
-      const { parseCsv, diffTables, renderHTML, LITE_CSS } = window.sd;
+      const { parseCsv, diffTables, renderHTML, HTML_CSS } = window.sd;
       const mk = (b) => 'id,name,price,qty\n' + Array.from({ length: 30 }, (_, i) => `${i},item ${b && i === 4 ? 'renamed' : i},${b && i % 5 === 0 ? i + 0.5 : i},${i}`).join('\n') + (b ? '\n99,new,1,1' : '');
       const d = diffTables(parseCsv(mk(false)), parseCsv(mk(true)), { keys: ['id'] });
       const host = document.getElementById('grid');
-      host.innerHTML = `<style>${LITE_CSS}</style>` + renderHTML(d, { layout: 'unified', display: 'delta' }) + renderHTML(d, { layout: 'split' });
+      host.innerHTML = `<style>${HTML_CSS}</style>` + renderHTML(d, { layout: 'unified', display: 'delta' }) + renderHTML(d, { layout: 'split' });
       const r = await window.axe.run(host, { resultTypes: ['violations'] });
       host.innerHTML = '';
       return r.violations.map((x) => `${x.impact} ${x.id}: ${x.nodes.slice(0, 2).map((n) => n.any?.[0]?.message ?? n.failureSummary).join(' | ')}`);
