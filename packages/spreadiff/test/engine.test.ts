@@ -42,6 +42,70 @@ describe('engine: operators and coercion', () => {
   });
 });
 
+describe('engine: found by differential testing against LibreOffice', () => {
+  // bench/engine-fuzz compares thousands of formulas with LibreOffice; these pin what it found.
+  it('rounds CEILING and FLOOR with Excel\'s sign rules', () => {
+    expect(calc('=CEILING(-2.1,-1)')).toBe(-3); // both negative: away from zero
+    expect(calc('=FLOOR(-2.1,-1)')).toBe(-2); // both negative: toward zero
+    expect(calc('=CEILING(-2.5,2)')).toBe(-2);
+    expect(calc('=FLOOR(-2.5,2)')).toBe(-4);
+    expect(err(calc('=CEILING(2.5,-1)'))).toBe('#NUM!');
+    expect(err(calc('=FLOOR(2.5,0)'))).toBe('#DIV/0!');
+    expect(calc('=CEILING.MATH(-2.1)')).toBe(-2);
+    expect(calc('=CEILING.MATH(-2.1,1,1)')).toBe(-3);
+    expect(calc('=FLOOR.MATH(-2.1)')).toBe(-3);
+    expect(calc('=FLOOR.MATH(-2.1,1,1)')).toBe(-2);
+  });
+  it('reads thousands separators, currency and accounting negatives in text', () => {
+    expect(calc('=VALUE("1,234")')).toBe(1234);
+    expect(calc('="$1,234.5"+0')).toBe(1234.5);
+    expect(calc('="(5)"+0')).toBe(-5);
+    expect(err(calc('="1,23"+0'))).toBe('#VALUE!'); // misplaced separator: not a number
+  });
+  it('reads date and time text in arithmetic, and refuses locale-dependent dates', () => {
+    expect(calc('="2024-03-01"-"2024-02-01"')).toBe(29);
+    expect(calc('="15-Jan-2024"+0')).toBe(45306);
+    expect(calc('="Jan 15, 2024"+0')).toBe(45306);
+    expect(calc('="2:30 PM"*24')).toBe(14.5);
+    expect(calc('="24:00"+0')).toBe(1);
+    expect(calc('="1900-02-29"+0')).toBe(60); // Excel's fictional leap day
+    expect(err(calc('="2023-02-29"+0'))).toBe('#VALUE!');
+    expect(calc('=DATEVALUE("2024-01-31 12:00")')).toBe(45322);
+    expect(() => calc('="1/2/2024"+0')).toThrow(); // January 2 or 1 February: unsupported, not guessed
+  });
+  // These came from the real-workbook corpus (bench/trace-eval), checked against Excel's own saved results.
+  it('reads serial 0 as Excel\'s 1900-01-00', () => {
+    expect(calc('=YEAR(0)')).toBe(1900);
+    expect(calc('=MONTH(0)')).toBe(1);
+    expect(calc('=DAY(0)')).toBe(0);
+    expect(calc('=WEEKDAY(0)')).toBe(7);
+    expect(calc('=DATE(YEAR(0),MONTH(0),0)')).toBe(0);
+    expect(calc('=TEXT(0,"yyyy-mm-dd")')).toBe('1900-01-00');
+  });
+  it('formats text and logicals through TEXT\'s fourth section, and hides empty sections', () => {
+    expect(calc('=TEXT("jello",";;;-@-")')).toBe('-jello-');
+    expect(calc('=TEXT("jello",";;;""@""@")')).toBe('@jello'); // quoted @ is a literal
+    expect(calc('=TEXT(TRUE,";;;@!")')).toBe('TRUE!');
+    expect(calc('=TEXT("jello","0.00")')).toBe('jello'); // no text section: unchanged
+    expect(calc('=TEXT(1,";;;@")')).toBe('');
+    expect(calc('=TEXT(-1,"0;;")')).toBe('');
+  });
+  it('writes numbers past 15 digits in scientific form', () => {
+    expect(calc('=1E+20&""')).toBe('1E+20');
+    expect(calc('=123456789012345678&""')).toBe('1.23456789012346E+17');
+    expect(calc('=123456789012345&""')).toBe('123456789012345');
+  });
+  it('orders text like Excel: punctuation before digits before letters, case ignored, accents counted', () => {
+    expect(calc('="~"<"b"')).toBe(true);
+    expect(calc('="-"<"1"')).toBe(true);
+    expect(calc('="1"<"a"')).toBe(true);
+    expect(calc('="Zebra">"apple"')).toBe(true);
+    expect(calc('="é"="e"')).toBe(false);
+    expect(calc('="é"<"f"')).toBe(true);
+    expect(calc('="ABC"="abc"')).toBe(true);
+  });
+});
+
 describe('engine: functions', () => {
   const data = [
     ['apple', 'fruit', 3],

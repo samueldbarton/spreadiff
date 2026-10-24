@@ -419,8 +419,10 @@ function serialToIso(serial: number, date1904: boolean): string | null {
   const ms = Math.round((s - 25569) * 86400000);
   const iso = new Date(ms).toISOString();
   if (Number.isInteger(serial)) return iso.slice(0, 10);
-  if (serial < 1) return iso.slice(11, 19);
-  return `${iso.slice(0, 10)} ${iso.slice(11, 19)}`;
+  // Milliseconds only when there are some: "04:05:06.009", else "04:05:06".
+  const frac = iso.slice(19, 23) === '.000' ? '' : iso.slice(19, 23).replace(/0+$/, '');
+  if (serial < 1) return iso.slice(11, 19) + frac;
+  return `${iso.slice(0, 10)} ${iso.slice(11, 19)}${frac}`;
 }
 
 function decodeRef(ref: string): [row: number, col: number] {

@@ -1,7 +1,8 @@
 /**
  * A single cell value. Parsers produce numbers only when the conversion is
  * lossless (`"007"` stays a string), and dates as ISO strings
- * (`"2026-01-31"`, `"2026-01-31 14:05:00"`, or `"14:05:00"` for times).
+ * (`"2026-01-31"`, `"2026-01-31 14:05:00"`, or `"14:05:00"` for times;
+ * milliseconds when there are some, `"14:05:00.25"`).
  */
 export type CellValue = string | number | boolean | null;
 

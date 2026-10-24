@@ -146,7 +146,7 @@ calling `String(Number(x))` per field.
 
 The reader handles values, shared strings, dates, booleans and shared
 formulas, on top of [fflate](https://github.com/101arrowz/fflate). The
-whole `core` entry, tracing included, is 42.1 KB gzip.
+whole `core` entry, tracing included, is 43.4 KB gzip.
 
 *Cost:* no styles, merged cells, comments or legacy `.xls`. A file that
 needs those needs another parser; any parser that produces a `Table` works.
