@@ -44,6 +44,10 @@ export const BUILTIN_FORMATS: Readonly<Record<number, string>> = {
   47: 'mm:ss.0',
   48: '##0.0E+0',
   49: '@',
+  // Built-in dates and times of East Asian Excel (these are Japanese; Chinese and Korean differ only in text).
+  27: 'yyyy"年"m"月"', 28: 'm"月"d"日"', 29: 'm"月"d"日"', 30: 'm/d/yy', 31: 'yyyy"年"m"月"d"日"', 32: 'h"時"mm"分"',
+  33: 'h"時"mm"分"ss"秒"', 34: 'yyyy"年"m"月"', 35: 'm"月"d"日"', 36: 'yyyy"年"m"月"', 50: 'yyyy"年"m"月"', 51: 'm"月"d"日"',
+  52: 'yyyy"年"m"月"', 53: 'm"月"d"日"', 54: 'm"月"d"日"', 55: 'yyyy"年"m"月"', 56: 'm"月"d"日"', 57: 'yyyy"年"m"月"', 58: 'm"月"d"日"',
 };
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];

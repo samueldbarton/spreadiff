@@ -1,6 +1,7 @@
 import { parseCsv } from './csv.js';
 import { parseXlsx } from './xlsx.js';
 import { parseOds } from './ods.js';
+import { parseXls } from './xls.js';
 import type { Workbook } from './types.js';
 
 /** Options for {@link parseFile}. */
@@ -24,9 +25,13 @@ export function parseFile(name: string, data: ArrayBuffer | Uint8Array, options:
     if (/\.ods$/i.test(name) || head.includes('opendocument.spreadsheet')) return parseOds(bytes, { name, header: options.header });
     return parseXlsx(bytes, { name, header: options.header });
   }
-  // Legacy binary formats would otherwise be "parsed" as garbage CSV.
+  // A compound file: a legacy .xls workbook.
   if (bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0) {
-    throw new Error(`${name}: legacy .xls (BIFF) files aren't supported. Save as .xlsx or .csv.`);
+    try {
+      return parseXls(bytes, { name, header: options.header });
+    } catch (e) {
+      throw new Error(`${name}: ${(e as Error).message}`);
+    }
   }
   if (/\.(xlsx|xlsm|xlsb|ods)$/i.test(name)) throw new Error(`${name}: not a valid ${name.slice(name.lastIndexOf('.'))} file`);
   const text = decodeText(bytes);

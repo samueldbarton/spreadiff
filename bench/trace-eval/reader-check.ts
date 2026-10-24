@@ -40,7 +40,21 @@ function cells(t: Table): Map<string, { v: unknown; f: string | null }> {
   );
   return m;
 }
-const normF = (f: string | null) => (f ? f.replace(/^=/, '').replace(/_xlfn\.|_xlws\.|_xludf\./gi, '').replace(/\s+/g, '').toUpperCase() : null);
+// Cosmetic differences between writers: Excel quotes sheet names that look like cells ('S2'!A1),
+// LibreOffice writes a 3-D single cell as A1:A1.
+const normF = (f: string | null) =>
+  f
+    ? f
+        .replace(/^=/, '')
+        .replace(/_xlfn\.|_xlws\.|_xludf\./gi, '')
+        .replace(/'([A-Za-z_][\w.]*)'!/g, '$1!')
+        .replace(/!(\$?[A-Z]+\$?\d+):\1(?![\d$A-Z])/gi, '!$1')
+        // LibreOffice has no boolean literal (FALSE()), and spells whole columns out to row 1048576.
+        .replace(/\b(TRUE|FALSE)\(\)/gi, '$1')
+        .replace(/(\$?[A-Z]+)\$?1:(\$?[A-Z]+)\$?1048576(?!\d)/gi, '$1:$2')
+        .replace(/\s+/g, '')
+        .toUpperCase()
+    : null;
 const sameV = (a: unknown, b: unknown) => {
   if (a === b) return true;
   if (typeof a === 'number' && typeof b === 'number') return Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
@@ -92,9 +106,9 @@ for (const file of files) {
       if (x.f || y.f) {
         formulaCells++;
         if (normF(x.f) === normF(y.f)) formulas++;
-        else if (examples.length < 60) examples.push(`${basename(file)} ${t.name}!${k} formula ${JSON.stringify(x.f)} vs ${JSON.stringify(y.f)}`);
+        else if (examples.length < (process.env.ALL ? 1e9 : 60)) examples.push(`${basename(file)} ${t.name}!${k} formula ${JSON.stringify(x.f)} vs ${JSON.stringify(y.f)}`);
       }
-      if (!vOk && examples.length < 60) examples.push(`${basename(file)} ${t.name}!${k} value ${JSON.stringify(x.v)} vs ${JSON.stringify(y.v)}`);
+      if (!vOk && examples.length < (process.env.ALL ? 1e9 : 60)) examples.push(`${basename(file)} ${t.name}!${k} value ${JSON.stringify(x.v)} vs ${JSON.stringify(y.v)}`);
     }
   }
 }
