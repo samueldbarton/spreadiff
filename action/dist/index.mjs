@@ -7929,7 +7929,9 @@ function parseXls(data, options = {}) {
 
 // packages/spreadiff/src/core/ods.ts
 var LO_ERRORS = { 503: "#NUM!", 519: "#VALUE!", 521: "#NULL!", 524: "#REF!", 525: "#NAME?", 532: "#DIV/0!", 32767: "#N/A" };
-var MAX_REPEAT = 1e4;
+var MAX_ROWS = 1048576;
+var MAX_COLS = 16384;
+var count = (v, max2) => Math.max(1, Math.min(Number(v ?? 1) || 1, max2));
 function openFormulaToExcel(f) {
   let s = f.replace(/^of:/, "");
   if (!s.startsWith("=")) s = "=" + s;
@@ -8020,7 +8022,7 @@ function parseOds(data, options = {}) {
     for (const m of (body ?? "").matchAll(rowRe)) {
       const rowAttrs = m[1];
       const rowBody = m[3] ?? "";
-      const repeat = Math.min(Number(attr(rowAttrs, "table:number-rows-repeated") ?? 1), MAX_REPEAT);
+      const repeat = count(attr(rowAttrs, "table:number-rows-repeated"), MAX_ROWS);
       const visibility = attr(rowAttrs, "table:visibility") ?? "";
       const isHidden = visibility === "collapse" || visibility === "filter";
       const row = [];
@@ -8031,7 +8033,7 @@ function parseOds(data, options = {}) {
       for (const cm of rowBody.matchAll(cellRe)) {
         const a = cm[2];
         const cb = cm[4] ?? "";
-        const reps = Math.min(Number(attr(a, "table:number-columns-repeated") ?? 1), MAX_REPEAT);
+        const reps = count(attr(a, "table:number-columns-repeated"), MAX_COLS);
         let value = null;
         const type = attr(a, "office:value-type") ?? attr(a, "calcext:value-type");
         if (cm[1] === "table-cell") {
@@ -8068,30 +8070,31 @@ function parseOds(data, options = {}) {
           value = formula.slice(1);
           formula = null;
         }
+        if (formula && /^=(TRUE|FALSE)\(\)$/i.test(formula) && typeof value === "boolean") formula = null;
         const mc = Number(attr(a, "table:number-matrix-columns-spanned") ?? 0);
         const mr = Number(attr(a, "table:number-matrix-rows-spanned") ?? 0);
         if (formula && (mc > 1 || mr > 1)) arrays.push({ r0: r, c0: c, r1: r + Math.max(1, mr) - 1, c1: c + Math.max(1, mc) - 1, formula });
         const cs = Number(attr(a, "table:number-columns-spanned") ?? 1);
         const rs = Number(attr(a, "table:number-rows-spanned") ?? 1);
         if (cs > 1 || rs > 1) merges.push({ r0: r, c0: c, r1: r + rs - 1, c1: c + cs - 1 });
-        for (let k = 0; k < reps; k++) {
-          if (value !== null || formula) {
+        if (value === null && !formula) c += reps;
+        else
+          for (let k = 0; k < reps && c < MAX_COLS; k++) {
             row[c] = value;
             frow[c] = formula;
             any = true;
+            c++;
           }
-          c++;
-        }
       }
-      for (let k = 0; k < repeat; k++) {
-        if (isHidden) hidden.push(r);
-        if (visibility === "filter") filters.push({ r0: r, r1: r });
-        if (any) {
+      if (!any) r += repeat;
+      else
+        for (let k = 0; k < repeat && r < MAX_ROWS; k++) {
+          if (isHidden) hidden.push(r);
+          if (visibility === "filter") filters.push({ r0: r, r1: r });
           grid[r] = row.slice();
           formulas[r] = frow.slice();
+          r++;
         }
-        r++;
-      }
     }
     for (const b of arrays) {
       for (let rr = b.r0; rr <= b.r1; rr++) {
