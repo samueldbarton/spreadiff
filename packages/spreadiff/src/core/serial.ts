@@ -50,3 +50,18 @@ export function isoToSerial(s: string, date1904 = false): number | null {
   if (m) return (Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3])) / 86400;
   return null;
 }
+
+/** Excel serial → ISO date/time, or null when it isn't a representable date. */
+export function serialToIso(serial: number, date1904: boolean): string | null {
+  if (!Number.isFinite(serial) || serial < 0 || serial > 2958465) return null; // > 9999-12-31
+  // Excel's 1900 system pretends 1900-02-29 existed (serial 60); serials
+  // below it are one day later than the naive conversion.
+  const s = date1904 ? serial + 1462 : serial < 60 ? serial + 1 : serial;
+  const ms = Math.round((s - 25569) * 86400000);
+  const iso = new Date(ms).toISOString();
+  if (Number.isInteger(serial)) return iso.slice(0, 10);
+  // Milliseconds only when there are some: "04:05:06.009", else "04:05:06".
+  const frac = iso.slice(19, 23) === '.000' ? '' : iso.slice(19, 23).replace(/0+$/, '');
+  if (serial < 1) return iso.slice(11, 19) + frac;
+  return `${iso.slice(0, 10)} ${iso.slice(11, 19)}${frac}`;
+}

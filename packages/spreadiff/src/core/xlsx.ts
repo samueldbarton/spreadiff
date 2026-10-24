@@ -13,6 +13,7 @@ import { computeMissingValues } from './recalc.js';
 import { BUILTIN_FORMATS } from './numfmt.js';
 import { attr, decode, decodeRef, eachElement, removeElements, resolvePath, textRuns } from './xml.js';
 import { parseObjects } from './objects.js';
+import { serialToIso } from './serial.js';
 
 export { applyDecisionsToXlsx, type SkippedDecision } from './xlsx-write.js';
 import type { CellValue, Table, TableDefinition, Workbook } from './types.js';
@@ -149,14 +150,7 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
     }
   });
 
-  const header = options.header ?? 'auto';
-  const headers = header === 'auto' ? detectHeaders(raws, names, tables, localNames) : raws.map(() => header);
-  const sheets = raws.map((r, i) => {
-    const t = buildTable(r, headers[i], header === 'auto');
-    const own = localNames.get(r.name);
-    if (own) t.names = own;
-    return t;
-  });
+  const sheets = tablesFromRaw(raws, options.header ?? 'auto', names, tables, localNames);
   const workbook: Workbook = {
     name: options.name ?? 'workbook.xlsx',
     sheets,
@@ -349,21 +343,6 @@ function parseLabelStyles(xml: string): Map<number, { indent?: number; bold?: bo
   return out;
 }
 
-/** Excel serial → ISO date/time, or null when it isn't a representable date. */
-function serialToIso(serial: number, date1904: boolean): string | null {
-  if (!Number.isFinite(serial) || serial < 0 || serial > 2958465) return null; // > 9999-12-31
-  // Excel's 1900 system pretends 1900-02-29 existed (serial 60); serials
-  // below it are one day later than the naive conversion.
-  const s = date1904 ? serial + 1462 : serial < 60 ? serial + 1 : serial;
-  const ms = Math.round((s - 25569) * 86400000);
-  const iso = new Date(ms).toISOString();
-  if (Number.isInteger(serial)) return iso.slice(0, 10);
-  // Milliseconds only when there are some: "04:05:06.009", else "04:05:06".
-  const frac = iso.slice(19, 23) === '.000' ? '' : iso.slice(19, 23).replace(/0+$/, '');
-  if (serial < 1) return iso.slice(11, 19) + frac;
-  return `${iso.slice(0, 10)} ${iso.slice(11, 19)}${frac}`;
-}
-
 /** Shift relative A1 references in a shared formula by a row/column offset. */
 function shiftFormula(formula: string, dRow: number, dCol: number): string {
   const colName = (abs: string, letters: string) => {
@@ -403,7 +382,54 @@ function shiftFormula(formula: string, dRow: number, dCol: number): string {
   );
 }
 
-interface RawSheet {
+/**
+ * Tables from raw sheets: with `'auto'`, decide per sheet whether its first
+ * row is a header (see `detectHeaders`), then build each table. Shared by
+ * the XLSX, ODS, XLS and XLSB readers.
+ */
+export function tablesFromRaw(
+  raws: RawSheet[],
+  header: boolean | 'auto',
+  names: Record<string, string> = {},
+  tables: TableDefinition[] = [],
+  localNames: Map<string, Record<string, string>> = new Map(),
+): Table[] {
+  const headers = header === 'auto' ? detectHeaders(raws, names, tables, localNames) : raws.map(() => header);
+  return raws.map((r, i) => {
+    const t = buildTable(r, headers[i], header === 'auto');
+    const own = localNames.get(r.name);
+    if (own) t.names = own;
+    return t;
+  });
+}
+
+/** A raw sheet from sparse grids of values and formulas (`=…`), in sheet coordinates. */
+export function rawSheet(
+  name: string,
+  grid: CellValue[][],
+  formulaGrid: (string | null)[][],
+  extra: Partial<Pick<RawSheet, 'arrays' | 'merges' | 'labelStyles' | 'formats' | 'hidden' | 'filters'>> = {},
+): RawSheet {
+  let minCol = Infinity;
+  let maxCol = -1;
+  for (const g of [grid, formulaGrid]) {
+    for (const row of g) {
+      if (!row) continue;
+      for (let c = 0; c < row.length; c++) {
+        const v = row[c];
+        if (v === undefined || v === null) continue;
+        if (c < minCol) minCol = c;
+        if (c > maxCol) maxCol = c;
+      }
+    }
+  }
+  let first = 0;
+  while (first < grid.length && !grid[first]?.some((v) => v !== null && v !== undefined) && !formulaGrid[first]?.some((f) => f)) first++;
+  return { name, grid, formulaGrid, minCol, maxCol, first, arrays: [], merges: [], labelStyles: [], hidden: [], filters: [], ...extra };
+}
+
+/** A sheet as a reader sees it, in sheet coordinates, before it becomes a table. */
+export interface RawSheet {
   name: string;
   grid: CellValue[][];
   formulaGrid: (string | null)[][];
