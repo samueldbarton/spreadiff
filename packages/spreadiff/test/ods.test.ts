@@ -71,6 +71,12 @@ describe('OpenDocument repeats and booleans', () => {
     expect([t.rows[0][0], t.rows[20001][0]]).toEqual([1, 2]);
   });
 
+  it('converts references into other files', () => {
+    expect(openFormulaToExcel("of:=['file:///home/x/56737.xlsx'#$Uses.$A$1]")).toBe("='[56737.xlsx]Uses'!$A$1");
+    expect(openFormulaToExcel("of:=['file:///a/My%20Book.ods'#$'Q1 data'.B2:C3]+[.A1]")).toBe("='[My Book.ods]Q1 data'!B2:C3+A1");
+    expect(openFormulaToExcel('of:=[1]defines!nr_to_a1')).toBe('=[1]defines!nr_to_a1');
+  });
+
   it('reads =TRUE() as the boolean LibreOffice means', () => {
     const wb = parseOds(ods(`<table:table-row>${cell('table:formula="of:=TRUE()" office:value-type="boolean" office:boolean-value="true"', 'TRUE')}${cell('table:formula="of:=1=1" office:value-type="boolean" office:boolean-value="true"', 'TRUE')}</table:table-row>`), { header: false });
     const t = wb.sheets[0];

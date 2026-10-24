@@ -178,7 +178,7 @@ contribution.
 
 The file readers are checked the same way, cell by cell against
 LibreOffice's reading of the same files: .xls values agree on 99.84% of
-71,627 cells, .ods on 100% of 52,738, and .xlsb on 464 of 467, a corpus
+71,627 cells, .ods on 99.91% of 1,105,498, and .xlsb on 464 of 467, a corpus
 too small to say much ([File formats](docs/formats.md)).
 
 When spreadiff's engine can't reproduce a formula, it says so: that
@@ -192,8 +192,8 @@ and `npm run test:hosted` reproduce them.
 | Import | Contents | min + gzip |
 | --- | --- | --- |
 | `spreadiff/html` | Diff engine, CSV parser, number formats, HTML and text renderers. No DOM | 19.9 KB |
-| `spreadiff/core` | + XLSX, XLSB, XLS and ODS readers, formula engine, tracing, review and merge | 74.0 KB |
-| `spreadiff` | + canvas `DiffGrid` and `SpreadsheetDiff` | 101.2 KB |
+| `spreadiff/core` | + XLSX, XLSB, XLS and ODS readers, formula engine, tracing, review and merge | 74.2 KB |
+| `spreadiff` | + canvas `DiffGrid` and `SpreadsheetDiff` | 101.3 KB |
 | `spreadiff/react` | React component for `DiffGrid` | + React |
 | `spreadiff/worker` | Parse, diff and trace in a Web Worker | |
 

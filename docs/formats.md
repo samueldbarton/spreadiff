@@ -30,10 +30,13 @@ prefixes, quoting of sheet names, `A1:A1` for `A1`).
 | --- | --- | --- | --- |
 | `.xls` | 119 of 120 Apache POI test files (one LibreOffice can't open) | 99.84% of 71,627 cells | 98.97% of 4,253 |
 | `.xlsb` | 10 of 11 POI test files (one is encrypted) | 464 of 467 cells | 281 of 284 |
-| `.ods` | 353 POI .xlsx files, converted to .ods by LibreOffice | 100% of 52,738 cells | 99.86% of 29,466 |
+| `.ods` | 331 of 353 POI .xlsx files, converted to .ods by LibreOffice (it can't open the rest) | 99.91% of 1,105,498 cells | 85.02% of 27,317; 99.69% leaving out structured references, which ODS can't hold |
 
-Every disagreement was looked at. In this corpus, none is the reader
-misreading the file:
+Every disagreement was looked at. Checking the .ods figure found two
+reader bugs, now fixed: long runs of repeated cells were cut at 10,000
+(one file lost 6,384 cells) and cells after a long empty run were
+misplaced. With those fixed, none of the remaining disagreements is the
+reader misreading the file:
 
 - **LibreOffice recalculates on load, spreadiff reads the stored value.**
   `TODAY()` cells, results saved stale by an older Excel, `YEAR(0)` (Excel
@@ -43,7 +46,12 @@ misreading the file:
   (one file stores 32,770), stores plain booleans as `=TRUE()` formulas, and
   spells data tables and external-link numbers its own way (43 of the 44
   .xls formula differences).
-- **ODS can't hold structured references,** so they come back as ranges.
+- **ODS can't hold structured references** (`Sales[Amount]`), so
+  LibreOffice converts them to ranges: 4,018 of the 4,091 .ods formula
+  differences.
+- **The conversion itself.** LibreOffice regenerates pivot tables in its
+  own language and layout when it opens a file (most of the 1,000 .ods
+  value differences), and drops cells from a few damaged files.
 
 ### How this can be wrong
 

@@ -26,6 +26,24 @@ const MAX_ROWS = 1_048_576;
 const MAX_COLS = 16_384;
 const count = (v: string | undefined, max: number) => Math.max(1, Math.min(Number(v ?? 1) || 1, max));
 
+/** A reference into another file, `'file:///dir/Book.xlsx'#$Sheet.A1`, as Excel writes it: `'[Book.xlsx]Sheet'!A1`. */
+function externalRef(inner: string): string | null {
+  const m = /^'((?:[^']|'')*)'#(.*)$/.exec(inner);
+  if (!m) return null;
+  let file = m[1].replace(/''/g, "'");
+  try {
+    file = decodeURIComponent(file);
+  } catch {
+    // keep it as written
+  }
+  file = file.replace(/^.*[\\/]/, '');
+  const ref = refToExcel(m[2]);
+  const bang = ref.lastIndexOf('!');
+  if (bang < 0) return `[${file}]${ref}`;
+  const sheet = ref.slice(0, bang).replace(/^'(.*)'$/, '$1').replace(/''/g, "'");
+  return `'${`[${file}]${sheet}`.replace(/'/g, "''")}'${ref.slice(bang)}`;
+}
+
 /**
  * An OpenFormula expression in Excel's syntax: `of:=[.A1]+['Data'.B2:.C3]`
  * → `=A1+Data!B2:C3`, `;` between arguments → `,`.
@@ -44,8 +62,11 @@ export function openFormulaToExcel(f: string): string {
       i = j;
     } else if (ch === '[') {
       const end = s.indexOf(']', i);
-      out += refToExcel(s.slice(i + 1, end < 0 ? s.length : end));
+      const inner = s.slice(i + 1, end < 0 ? s.length : end);
       i = end < 0 ? s.length : end;
+      // [1]Sheet!A1: Excel's own external-link syntax, which LibreOffice keeps as written.
+      if (/^\d+$/.test(inner)) out += `[${inner}]`;
+      else out += externalRef(inner) ?? refToExcel(inner);
     } else if (ch === ';') out += ',';
     else if (ch === '|' && braces > 0) out += ';'; // array constant rows: {1;2|3;4} → {1,2;3,4}
     else {

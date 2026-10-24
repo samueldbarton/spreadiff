@@ -37,7 +37,7 @@ the repository only.
   `formatNumberCode`, `Table.numberFormats`, and more (see the API reference).
 - **More file formats.** `.xlsb`, `.xls` (Excel 97-2003) and `.ods`, found
   by content. Agreement with LibreOffice: .xls values 99.84% of 71,627
-  cells, .ods 100% of 52,738, .xlsb 464 of 467 (a small corpus). See
+  cells, .ods 99.91% of 1,105,498, .xlsb 464 of 467 (a small corpus). See
   `docs/formats.md`. Encrypted workbooks get a plain error.
 - **Materiality.** `DiffOptions.relativeTolerance` (CLI `--min-change`):
   moves smaller than a share of the number aren't changes anywhere.
@@ -186,10 +186,10 @@ the repository only.
 
 - **`parseFile` picks the reader from the contents**, and reads `.xls`
   instead of rejecting it. Sizes (gzip, whole entries): `spreadiff/html`
-  16.0 → 19.9 KB (number formats), `spreadiff/core` 42.1 → 74.0 KB (the new
-  readers, review, merge and the .xlsx writer), `spreadiff` 62.6 → 101.2 KB.
+  16.0 → 19.9 KB (number formats), `spreadiff/core` 42.1 → 74.2 KB (the new
+  readers, review, merge and the .xlsx writer), `spreadiff` 62.6 → 101.3 KB.
   Bundlers keep only what you import: `parseXlsx` alone is 29.5 KB,
-  `parseFile` 42.8 KB.
+  `parseFile` 43.0 KB.
 - **`spreadiff/lite` is now `spreadiff/html`**, and `LITE_CSS`,
   `LiteOptions`, `LiteLayout` and `LiteDisplay` are now `HTML_CSS`,
   `HtmlOptions`, `HtmlLayout` and `HtmlDisplay`. The name `spreadiff-lite`
