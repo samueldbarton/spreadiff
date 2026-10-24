@@ -101,8 +101,11 @@ export function parseXlsx(data: ArrayBuffer | Uint8Array, options: ParseXlsxOpti
       const target = attr(ra, 'Target');
       if (!target || !/\/table$/.test(attr(ra, 'Type') ?? '')) return;
       const tablePath = resolvePath(path, target);
-      const t = parseTableDefinition(text(tablePath), name);
+      const tableXml = text(tablePath);
+      const t = parseTableDefinition(tableXml, name);
       if (t) tables.push(t);
+      const raw = raws[raws.length - 1];
+      if (raw.hidden.length) raw.filters.push(...activeFilters(tableXml));
     });
   });
   // Defined names (TaxRate → Inputs!$B$2) let formula tracing see through them.
@@ -512,6 +515,22 @@ interface RawSheet {
   labelStyles: NonNullable<Table['labelStyles']>;
   /** Number formats: codes (1-based) and each cell's code number (sheet coordinates). */
   formats?: { codes: string[]; grid: number[][]; date1904: boolean };
+  /** Hidden rows (sheet rows, ascending). */
+  hidden: number[];
+  /** Data rows of active filters (sheet rows, inclusive), from the sheet's autoFilter; tables' are added later. */
+  filters: { r0: number; r1: number }[];
+}
+
+/** Data rows under an autoFilter that filters something (it has a filterColumn). */
+function activeFilters(xml: string): { r0: number; r1: number }[] {
+  const out: { r0: number; r1: number }[] = [];
+  eachElement(xml, 'autoFilter', (a, body) => {
+    const ref = attr(a, 'ref');
+    if (!ref || !body || !/<(?:\w+:)?filterColumn\b/.test(body)) return;
+    const [from, to = from] = ref.split(':');
+    out.push({ r0: decodeRef(from)[0] + 1, r1: decodeRef(to)[0] });
+  });
+  return out;
 }
 
 function parseCells(
@@ -537,10 +556,13 @@ function parseCells(
   let minCol = Infinity;
   let maxCol = -1;
   let implicitRow = 0;
+  const hidden: number[] = [];
   eachElement(xml, 'row', (rowAttrs, rowBody) => {
     const rAttr = attr(rowAttrs, 'r');
     const r = rAttr ? Number(rAttr) - 1 : implicitRow;
     implicitRow = r + 1;
+    const h = attr(rowAttrs, 'hidden');
+    if ((h === '1' || h === 'true') && r >= 0) hidden.push(r);
     if (!rowBody || !(r >= 0)) return;
     let implicitCol = 0;
     eachElement(rowBody, 'c', (attrs, cellBody) => {
@@ -662,7 +684,20 @@ function parseCells(
   });
   let first = 0;
   while (first < grid.length && !grid[first]) first++;
-  return { name, grid, formulaGrid, minCol, maxCol, first, arrays, merges, labelStyles: styled, formats: codes.length > 1 ? { codes, grid: fmtGrid, date1904 } : undefined };
+  return {
+    name,
+    grid,
+    formulaGrid,
+    minCol,
+    maxCol,
+    first,
+    arrays,
+    merges,
+    labelStyles: styled,
+    formats: codes.length > 1 ? { codes, grid: fmtGrid, date1904 } : undefined,
+    hidden,
+    filters: hidden.length ? activeFilters(xml) : [],
+  };
 }
 
 /**
@@ -683,7 +718,7 @@ function labelRow(r: RawSheet): boolean {
 }
 
 function buildTable(raw: RawSheet, header: boolean, auto = false): Table {
-  const { name, grid, formulaGrid, minCol, maxCol, first, arrays, merges, labelStyles, formats } = raw;
+  const { name, grid, formulaGrid, minCol, maxCol, first, arrays, merges, labelStyles, formats, hidden, filters } = raw;
   if (maxCol < 0) return { name, columns: [], rows: [], formulas: [], origin: { row: 0, col: 0 }, ...(merges.length ? { merges } : {}) };
   const width = maxCol - minCol + 1;
   const dense = <T,>(src: (T | null)[] | undefined): (T | null)[] => {
@@ -733,5 +768,6 @@ function buildTable(raw: RawSheet, header: boolean, auto = false): Table {
     ...(merges.length ? { merges } : {}),
     ...(labelStyles.length ? { labelStyles } : {}),
     ...(numberFormats ? { numberFormats } : {}),
+    ...(hidden.length ? { hiddenRows: { rows: hidden, filtered: hidden.filter((r) => filters.some((f) => r >= f.r0 && r <= f.r1)) } } : {}),
   };
 }

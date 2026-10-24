@@ -331,3 +331,38 @@ describe('but-for of a formula edit', () => {
     expect(by[0 * width + 1]).toBe(12); // the price: 73 − (10×3×2 + 1)
   });
 });
+
+describe('engine: SUBTOTAL skips what Excel skips', () => {
+  // Rows (0-based): 0..3 values 10,20,30,40; row 1 hidden by hand, row 2 by a filter; row 4 a nested subtotal.
+  const host = () => {
+    const t = sheet('S', [[10], [20], [30], [40], ['=SUBTOTAL(9,A1:A4)']], [[10], [20], [30], [40], [70]]);
+    t.hiddenRows = { rows: [1, 2], filtered: [2] };
+    return new Engine(tableHost([t]));
+  };
+  const at = (f: string) => host().evaluate(f, 'S', 10, 3).value;
+  it('1-11 leave out filtered rows; 101-111 every hidden row', () => {
+    expect(at('=SUBTOTAL(9,A1:A4)')).toBe(70); // 10 + 20 (hidden by hand: counted) + 40
+    expect(at('=SUBTOTAL(109,A1:A4)')).toBe(50); // 10 + 40
+    expect(at('=SUBTOTAL(2,A1:A4)')).toBe(3);
+    expect(at('=SUBTOTAL(101,A1:A4)')).toBe(25);
+    expect(at('=SUM(A1:A4)')).toBe(100); // other functions see everything
+  });
+  it('leaves out nested subtotals, so totals of subtotals don’t double count', () => {
+    expect(at('=SUBTOTAL(9,A1:A5)')).toBe(70);
+    expect(at('=SUM(A1:A5)')).toBe(170);
+  });
+  it('rejects unknown function numbers', () => {
+    expect(err(at('=SUBTOTAL(12,A1:A4)'))).toBe('#VALUE!');
+    expect(err(at('=SUBTOTAL(100,A1:A4)'))).toBe('#VALUE!');
+  });
+  it('reads hidden rows and active filters from an .xlsx', async () => {
+    const ExcelJS = (await import('exceljs')).default;
+    const { parseXlsx } = await import('../src/core');
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('S');
+    for (const v of [1, 2, 3, 4]) ws.addRow([v]);
+    ws.getRow(2).hidden = true;
+    const t = parseXlsx(new Uint8Array(await wb.xlsx.writeBuffer()), { header: false }).sheets[0];
+    expect(t.hiddenRows).toEqual({ rows: [1], filtered: [] });
+  });
+});

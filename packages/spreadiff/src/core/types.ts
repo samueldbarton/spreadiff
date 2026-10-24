@@ -65,6 +65,12 @@ export interface Table {
    * be missing. The XLSX reader fills this; see `displayValue`.
    */
   numberFormats?: { codes: string[]; rows: (Uint16Array | undefined)[]; date1904?: boolean };
+  /**
+   * Hidden rows, 0-based sheet rows, ascending; `filtered` are those an
+   * active filter hid (the rest were hidden by hand). `SUBTOTAL` skips them
+   * as Excel does. The XLSX reader fills this.
+   */
+  hiddenRows?: { rows: number[]; filtered: number[] };
 }
 
 /** An ordered list of sheets. A CSV file is a one-sheet workbook. */

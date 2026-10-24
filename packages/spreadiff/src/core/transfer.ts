@@ -42,6 +42,8 @@ export interface PackedTable {
   merges?: Table['merges'];
   /** `Table.labelStyles`, unchanged. */
   labelStyles?: Table['labelStyles'];
+  /** `Table.hiddenRows`, unchanged. */
+  hiddenRows?: Table['hiddenRows'];
   /** `Table.numberFormats`, its rows as one `width * height` array. */
   numberFormats?: { codes: string[]; cells: Uint16Array; date1904?: boolean };
 }
@@ -79,7 +81,7 @@ export function packTable(t: Table): PackedTable {
     t.numberFormats.rows.forEach((row, r) => row && r < height && cells.set(row.subarray(0, width), r * width));
     numberFormats = { codes: t.numberFormats.codes, cells, ...(t.numberFormats.date1904 ? { date1904: true } : {}) };
   }
-  return { name: t.name, columns: t.columns, width, height, types, numbers, strings: parts.join(SEP), formulas: t.formulas && packFormulas(t.formulas), origin: t.origin, header: t.header, arrays: t.arrays, names: t.names, merges: t.merges, labelStyles: t.labelStyles, numberFormats };
+  return { name: t.name, columns: t.columns, width, height, types, numbers, strings: parts.join(SEP), formulas: t.formulas && packFormulas(t.formulas), origin: t.origin, header: t.header, arrays: t.arrays, names: t.names, merges: t.merges, labelStyles: t.labelStyles, hiddenRows: t.hiddenRows, numberFormats };
 }
 
 function packFormulas(f: (string | null)[][]): NonNullable<PackedTable['formulas']> {
@@ -141,6 +143,7 @@ export function unpackTable(p: PackedTable): Table {
   if (p.names) t.names = p.names;
   if (p.merges) t.merges = p.merges;
   if (p.labelStyles) t.labelStyles = p.labelStyles;
+  if (p.hiddenRows) t.hiddenRows = p.hiddenRows;
   if (p.numberFormats) {
     const { codes, cells, date1904 } = p.numberFormats;
     const rows: (Uint16Array | undefined)[] = [];

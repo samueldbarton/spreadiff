@@ -719,8 +719,43 @@ export const FUNCTIONS: Record<string, Fn> = {
     const code = num(ctx, args[0]);
     if (isError(code)) return code;
     const fn = ({ 1: 'AVERAGE', 2: 'COUNT', 3: 'COUNTA', 4: 'MAX', 5: 'MIN', 6: 'PRODUCT', 7: 'STDEV', 8: 'STDEVP', 9: 'SUM', 10: 'VAR', 11: 'VARP' } as Record<number, string>)[code % 100];
-    if (!fn) return ERR.value;
-    return FUNCTIONS[fn](args.slice(1), ctx);
+    if (!fn || !(code >= 1 && code < 12) && !(code >= 101 && code < 112)) return ERR.value;
+    // Excel leaves out rows hidden by a filter (1-11) or hidden at all
+    // (101-111), and cells that are subtotals themselves, so nested
+    // subtotals don't count twice. Only references can do that.
+    const refs = args.slice(1).map((a) => ctx.ev(a));
+    if (refs.some((v) => !isRange(v))) return FUNCTIONS[fn](args.slice(1), ctx);
+    const host = ctx.host;
+    const skipHidden = code > 100 ? 1 : 2;
+    const kept: Scalar[] = [];
+    for (const v of refs as RangeVal[]) {
+      const values = ctx.values(v);
+      const w = v.c1 - v.c0 + 1;
+      for (let i = 0; i < values.length; i++) {
+        const r = v.r0 + Math.floor(i / w);
+        const h = host.rowHidden?.(v.sheet, r) ?? 0;
+        if (h && h >= skipHidden) continue;
+        const f = host.formulaAt?.(v.sheet, r, v.c0 + (i % w));
+        if (f && /\b(?:SUBTOTAL|AGGREGATE)\s*\(/i.test(f)) continue;
+        kept.push(values[i]);
+      }
+    }
+    if (fn === 'COUNTA') return kept.filter((x) => x !== null).length;
+    if (fn === 'COUNT') return kept.filter((x) => typeof x === 'number').length;
+    const err = kept.find(isError);
+    if (err) return err;
+    const xs = kept.filter((x): x is number => typeof x === 'number');
+    switch (fn) {
+      case 'SUM': return sum(xs);
+      case 'AVERAGE': return mean(xs);
+      case 'MAX': return xs.length ? Math.max(...xs) : 0;
+      case 'MIN': return xs.length ? Math.min(...xs) : 0;
+      case 'PRODUCT': return xs.length ? xs.reduce((a, b) => a * b, 1) : 0;
+      case 'STDEV': return sqrtOr(variance(xs, true));
+      case 'STDEVP': return sqrtOr(variance(xs, false));
+      case 'VAR': return variance(xs, true);
+      default: return variance(xs, false);
+    }
   },
   SUMIF: ifAggregate('sum'),
   AVERAGEIF: ifAggregate('avg'),
