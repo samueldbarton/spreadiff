@@ -31,6 +31,7 @@ jobs:
       - run: npm run docs:check
       - run: npm run test:cli
       - run: npm run test:action
+      - run: node scripts/check-pack.mjs
       - name: The committed action bundle matches its source
         run: npm run build:action && git diff --exit-code -- action/dist
 

@@ -7,6 +7,52 @@ the repository.
 
 ### Added
 
+- **Two files in, a review out.** `SpreadsheetDiff` (vanilla and
+  `spreadiff/react`) takes two files, URLs or byte arrays, compares and
+  traces them (in a worker if you pass one), and shows sheet tabs, the
+  grid, an outputs panel with a waterfall of what drove each changed
+  result, and changed names, charts and pivot tables. It has a
+  `renderSheetHeader` slot and events (`onLoad`, `onSheetChange`, …).
+  `diffFiles` (async, any input) and `compareWorkbooks` (sync) give the
+  same comparison without the UI: each sheet carries its own trace, so a
+  sheet can no longer be shown with another sheet's trace. `report()` gives
+  the spreadiff-lite report, now built in core (`reportOf`).
+- **Review.** Accept and reject changes by cell, range, row or column
+  (`decideRange`, `applyDecisions`, `SheetDecisions`). Only edits are
+  decided: downstream results follow them. `applyDecisionsToXlsx` writes
+  rejected cells back into the .xlsx in place, moving formulas to the new
+  rows and refreshing dependent cached values. In `SpreadsheetDiff` with
+  `review: true`: buttons, `a`/`r`/`u` keys and a download. See
+  `docs/review.md`.
+- **Three-way merge.** `mergeTables(base, ours, theirs)` merges by row
+  key and lists conflicts; `conflictAnnotations` shows them in the grid.
+- **Range selection** in `DiffGrid`: drag, shift-click, shift + arrows,
+  `selectRange()`, `getRange()` and `onRangeChange`, with the range in A1
+  on each side.
+- **Number formats.** Cells show as the sheet shows them (`12.3%`,
+  `$1,234`, `1-Jan-24`), and changes in the cell's format (`+1.2 pp`), in
+  the grid, HTML renderer and textconv; `numberFormats: false` turns it
+  off. `TEXT()` uses the same formatter. Agrees with LibreOffice on 99.8%
+  of 7,603 formatted cells. New: `displayValue`, `displayCell`,
+  `formatNumberCode`, `Table.numberFormats`, and more (see the API reference).
+- **More file formats.** `.xlsb`, `.xls` (Excel 97-2003) and `.ods`, found
+  by content. Agreement with LibreOffice: .xls values 99.84% of 71,627
+  cells, .ods 100% of 52,738, .xlsb 464 of 467 (a small corpus). See
+  `docs/formats.md`. Encrypted workbooks get a plain error.
+- **Materiality.** `DiffOptions.relativeTolerance` (CLI `--min-change`):
+  moves smaller than a share of the number aren't changes anywhere.
+- **Hidden and filtered rows** are read, and `SUBTOTAL`/`AGGREGATE` skip
+  them as Excel does, as well as nested subtotals.
+- **Workbook objects.** Changes to defined names, charts and pivot tables
+  (`WorkbookDiff.objects`, `diffWorkbookObjects`), in the report and the
+  component.
+- **Git.** `spreadiff-lite --textconv` (readable `git diff`), `--git` (the
+  full report as git's diff driver) and `merge` (a merge driver for CSV and
+  TSV). A GitHub Action comments on pull requests with the report. See
+  `docs/git.md`.
+- **CI** runs the tests, browser checks, and the formula engine against
+  LibreOffice with a baseline of known differences.
+
 - **Labelled headers.** `DiffGrid` and `renderHTML` now show what the
   sheet calls rows and columns (`India › Revenue`, `FY2025`) instead of
   row numbers and letters, inferred from the layout. The column heading
@@ -138,6 +184,12 @@ the repository.
 
 ### Changed
 
+- **`parseFile` picks the reader from the contents**, and reads `.xls`
+  instead of rejecting it. Sizes (gzip, whole entries): `spreadiff/html`
+  16.0 → 19.9 KB (number formats), `spreadiff/core` 42.1 → 74.0 KB (the new
+  readers, review, merge and the .xlsx writer), `spreadiff` 62.6 → 101.1 KB.
+  Bundlers keep only what you import: `parseXlsx` alone is 29.5 KB,
+  `parseFile` 42.8 KB.
 - **`spreadiff/lite` is now `spreadiff/html`**, and `LITE_CSS`,
   `LiteOptions`, `LiteLayout` and `LiteDisplay` are now `HTML_CSS`,
   `HtmlOptions`, `HtmlLayout` and `HtmlDisplay`. The name `spreadiff-lite`

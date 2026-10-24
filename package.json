@@ -25,7 +25,8 @@
     "docs:dev": "npm run dev -w @spreadiff/docs",
     "bench:engine": "node bench/engine-fuzz/run.mjs",
     "build:action": "npm run build -w spreadiff && node scripts/build-action.mjs",
-    "test:action": "node scripts/test-action.mjs"
+    "test:action": "node scripts/test-action.mjs",
+    "check:pack": "node scripts/check-pack.mjs"
   },
   "devDependencies": {
     "axe-core": "^4.14.0",

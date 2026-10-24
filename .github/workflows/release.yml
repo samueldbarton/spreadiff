@@ -1,0 +1,36 @@
+# Publishes both packages to npm when a version tag (v1.2.3) is pushed.
+# Needs an NPM_TOKEN secret (an npm automation token). The tag must match
+# both packages' versions; bump them, commit, then: git tag v1.2.3 && git push --tags
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  id-token: write # npm provenance: the package is linked to this workflow run
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:cli
+      - run: node scripts/check-pack.mjs --tag "$GITHUB_REF_NAME"
+      # spreadiff-lite depends on spreadiff at this version, so spreadiff goes first.
+      - run: npm publish -w spreadiff
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: npm publish -w spreadiff-lite
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
