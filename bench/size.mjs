@@ -11,15 +11,28 @@ const entries = {
   'spreadiff/core (diff + CSV + XLSX + trace)': 'core/index.ts',
   'spreadiff (core + canvas DiffGrid)': 'index.ts',
 };
+// What a bundle costs for a few common imports (bundlers drop the rest).
+const imports = {
+  'import { diffTables, parseCsv }': "export { diffTables, parseCsv } from './core/index.ts';",
+  'import { parseXlsx }': "export { parseXlsx } from './core/xlsx.ts';",
+  'import { parseFile } (every reader)': "export { parseFile } from './core/file.ts';",
+  'import { DiffGrid, diffTables }': "export { DiffGrid } from './index.ts'; export { diffTables } from './core/index.ts';",
+  'import { SpreadsheetDiff }': "export { SpreadsheetDiff } from './index.ts';",
+};
+
+async function sizeOf(input) {
+  const r = await build({ ...input, bundle: true, minify: true, format: 'esm', write: false, platform: 'browser', target: 'es2022', treeShaking: true });
+  const code = r.outputFiles[0].contents;
+  return { min: (code.length / 1024).toFixed(1), gz: (gzipSync(code).length / 1024).toFixed(1) };
+}
 
 /** Sizes in KB, rounded to one decimal as the docs print them. */
 export async function measure() {
   const rows = [];
   for (const [name, entry] of Object.entries(entries)) {
-    const r = await build({ entryPoints: [join(SRC, entry)], bundle: true, minify: true, format: 'esm', write: false, platform: 'browser', target: 'es2022', treeShaking: true });
-    const code = r.outputFiles[0].contents;
-    rows.push({ name, min: (code.length / 1024).toFixed(1), gz: (gzipSync(code).length / 1024).toFixed(1) });
+    rows.push({ name, ...(await sizeOf({ entryPoints: [join(SRC, entry)] })) });
   }
+  for (const [name, contents] of Object.entries(imports)) rows.push({ name, ...(await sizeOf({ stdin: { contents, resolveDir: SRC, loader: 'ts' } })) });
   return rows;
 }
 

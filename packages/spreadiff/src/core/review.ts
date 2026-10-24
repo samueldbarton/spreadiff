@@ -32,8 +32,11 @@ export type Decision = 'accept' | 'reject';
  * - `columns`: added, removed and renamed columns, by index into `diff.columns`.
  */
 export interface SheetDecisions {
+  /** Changed cells, by aligned cell key `row * diff.columns.length + col`. */
   cells: Map<number, Decision>;
+  /** Added and removed rows, by aligned row. */
   rows: Map<number, Decision>;
+  /** Added, removed and renamed columns, by index into `diff.columns`. */
   columns: Map<number, Decision>;
 }
 

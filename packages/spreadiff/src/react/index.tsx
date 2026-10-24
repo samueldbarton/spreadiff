@@ -176,6 +176,9 @@ export type SpreadsheetDiffHandle = Pick<SpreadsheetDiffView, 'showSheet' | 'rev
   readonly instance: SpreadsheetDiffView | null;
 };
 
+/** What identifies an input across renders: a URL by its address, anything else by identity. */
+const inputKey = (input: SpreadsheetInput | undefined): unknown => (input instanceof URL ? `url:${input.href}` : input);
+
 /**
  * Two spreadsheets in, the whole review out: sheet tabs, the traced grid,
  * the outputs panel and, with `review`, accept/reject and the merged
@@ -221,7 +224,9 @@ export const SpreadsheetDiff = forwardRef(function SpreadsheetDiff<A>(
     if (!view || !container) return;
     if (comparison) void view.render({ comparison, container });
     else if (oldFile && newFile) view.render({ oldFile, newFile, container }).catch(() => {}); // shown, and passed to onError
-  }, [oldFile, newFile, comparison]);
+    // A URL written inline (`oldFile={new URL(…)}`) is a new object each render: compare by address, or every render would compare again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inputKey(oldFile), inputKey(newFile), comparison]);
 
   useImperativeHandle(
     ref,

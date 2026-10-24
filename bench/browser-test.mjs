@@ -758,6 +758,30 @@ await test('SpreadsheetDiff review: reject a selection, see it marked, download 
   assert(r.after === 'accept' && r.decided === 5 && r.download, `keyboard ${JSON.stringify(r)}`);
 });
 
+await test('SpreadsheetDiff (React): inline URL props that re-render on load compare once', async () => {
+  const r = await page.evaluate(async ({ a, b }) => {
+    window.G?.cleanUp();
+    window.W?.cleanUp();
+    const { SpreadsheetDiff, createElement: h, useState, createRoot } = window.sdReact;
+    const blob = (bytes) => URL.createObjectURL(new Blob([new Uint8Array(bytes)]));
+    const [oldHref, newHref] = [blob(a), blob(b)];
+    let loads = 0;
+    // The parent re-renders on every load, with new URL objects each time: the files must not be compared again.
+    const App = () => {
+      const [, setN] = useState(0);
+      return h(SpreadsheetDiff, { oldFile: new URL(oldHref), newFile: new URL(newHref), style: { height: 400 }, onLoad: () => setN(++loads) });
+    };
+    const container = document.getElementById('grid');
+    const root = createRoot(container);
+    root.render(h(App));
+    await new Promise((res) => setTimeout(res, 1500));
+    const tabs = container.firstElementChild?.firstElementChild?.shadowRoot?.querySelectorAll('.sx-tab').length ?? 0;
+    root.unmount();
+    return { loads, tabs };
+  }, { a: fixtureBytes('old.xlsx'), b: fixtureBytes('new.xlsx') });
+  assert(r.loads === 1 && r.tabs === 2, `compared ${r.loads} times, ${r.tabs} tabs`);
+});
+
 await test('SpreadsheetDiff: an unreadable file shows the error and rejects', async () => {
   const r = await page.evaluate(async () => {
     window.W?.cleanUp();

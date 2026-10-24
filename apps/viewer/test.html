@@ -13,7 +13,11 @@
       // Exposes the library on window for bench/browser-test.mjs.
       import * as sd from 'spreadiff';
       import * as html from 'spreadiff/html';
+      import * as react from 'spreadiff/react';
+      import { createElement, useState } from 'react';
+      import { createRoot } from 'react-dom/client';
       window.sd = { ...sd, ...html };
+      window.sdReact = { ...react, createElement, useState, createRoot };
       window.ready = true;
     </script>
   </body>

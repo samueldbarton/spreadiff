@@ -4871,6 +4871,146 @@ function toCellValue(v) {
   return isError(v) ? v.code : v;
 }
 
+// packages/spreadiff/src/core/sheet.ts
+function detectHeaders(raws, names, tables, localNames) {
+  const candidate = /* @__PURE__ */ new Map();
+  const result = raws.map((r, i) => {
+    const ok = headerLike(r);
+    if (ok) candidate.set(r.name.toUpperCase(), i);
+    return ok;
+  });
+  if (!candidate.size) return result;
+  const sheets = raws.map((r) => r.name);
+  const top = Math.max(...[...candidate.values()].map((i) => raws[i].first + 1));
+  const rowNumbers = Array.from({ length: top }, (_, i) => i + 1).join("|");
+  const spells = top <= 64 ? new RegExp(`(?:[A-Za-z$](?:${rowNumbers})(?!\\d))|(?:(?:^|[^\\w.$])\\$?(?:${rowNumbers}):)`) : /./;
+  const nameList = [...Object.keys(names), ...[...localNames.values()].flatMap((m) => Object.keys(m))].map((n) => n.toUpperCase());
+  const scoped = raws.map((r) => localNames.size ? scopedNames(names, raws.map((x) => ({ name: x.name, names: localNames.get(x.name) })), r.name) : names);
+  const mayHide = (f) => f.includes("[") || nameList.length > 0 && (nameList.length > 64 || nameList.some((n) => f.toUpperCase().includes(n)));
+  raws.forEach((r, ri) => {
+    for (let row = 0; row < r.formulaGrid.length && candidate.size; row++) {
+      const fr = r.formulaGrid[row];
+      if (!fr) continue;
+      for (const f of fr) {
+        if (!f) continue;
+        if (!spells.test(f) && !mayHide(f)) continue;
+        for (const rg of formulaRefs(f, scoped[ri], { tables, row, sheets }).ranges) {
+          const key = (rg.sheet ?? r.name).toUpperCase();
+          const i = candidate.get(key);
+          if (i === void 0 || rg.r0 < 0) continue;
+          const first = raws[i].first;
+          if (rg.r0 <= first && first <= rg.r1) {
+            result[i] = false;
+            candidate.delete(key);
+          }
+        }
+        if (!candidate.size) break;
+      }
+    }
+  });
+  return result;
+}
+var ISO_DATE = /^\d{4}-\d{2}-\d{2}/;
+function headerLike(r) {
+  if (r.maxCol < 0) return false;
+  const row = r.grid[r.first];
+  if (r.formulaGrid[r.first]?.some(Boolean)) return false;
+  let n = 0;
+  for (let c = r.minCol; c <= r.maxCol; c++) {
+    const v = row?.[c];
+    if (v === null || v === void 0 || v === "") continue;
+    if (isYear(v)) continue;
+    if (typeof v !== "string" || ISO_DATE.test(v)) return false;
+    n++;
+  }
+  return n > 0;
+}
+var isYear = (v) => typeof v === "number" && Number.isInteger(v) && v >= 1900 && v <= 2100;
+function tablesFromRaw(raws, header, names = {}, tables = [], localNames = /* @__PURE__ */ new Map()) {
+  const headers = header === "auto" ? detectHeaders(raws, names, tables, localNames) : raws.map(() => header);
+  return raws.map((r, i) => {
+    const t = buildTable(r, headers[i], header === "auto");
+    const own = localNames.get(r.name);
+    if (own) t.names = own;
+    return t;
+  });
+}
+function rawSheet(name, grid, formulaGrid, extra = {}) {
+  let minCol = Infinity;
+  let maxCol = -1;
+  for (const g of [grid, formulaGrid]) {
+    for (const row of g) {
+      if (!row) continue;
+      for (let c = 0; c < row.length; c++) {
+        const v = row[c];
+        if (v === void 0 || v === null) continue;
+        if (c < minCol) minCol = c;
+        if (c > maxCol) maxCol = c;
+      }
+    }
+  }
+  let first = 0;
+  while (first < grid.length && !grid[first]?.some((v) => v !== null && v !== void 0) && !formulaGrid[first]?.some((f) => f)) first++;
+  return { name, grid, formulaGrid, minCol, maxCol, first, arrays: [], merges: [], labelStyles: [], hidden: [], filters: [], ...extra };
+}
+function labelRow(r) {
+  const row = r.grid[r.first];
+  let text3 = 0;
+  let filled = 0;
+  for (let c = r.minCol; c <= r.maxCol; c++) {
+    const v = row?.[c];
+    if (v === null || v === void 0 || v === "") continue;
+    filled++;
+    if (typeof v === "string" && !ISO_DATE.test(v) && !r.formulaGrid[r.first]?.[c]) text3++;
+  }
+  return text3 >= 2 && text3 * 2 >= filled;
+}
+function buildTable(raw, header, auto = false) {
+  const { name, grid, formulaGrid, minCol, maxCol, first, arrays, merges, labelStyles, formats, hidden, filters } = raw;
+  if (maxCol < 0) return { name, columns: [], rows: [], formulas: [], origin: { row: 0, col: 0 }, ...merges.length ? { merges } : {} };
+  const width = maxCol - minCol + 1;
+  const dense = (src) => {
+    const out = new Array(width);
+    for (let c = 0; c < width; c++) out[c] = src?.[minCol + c] ?? null;
+    return out;
+  };
+  const columns = header ? uniqueNames(dense(grid[first]).map((v) => v === null ? "" : String(v))) : auto && labelRow(raw) ? uniqueNames(dense(grid[first]).map((v, c) => typeof v === "string" && v.trim() && !formulaGrid[first]?.[minCol + c] ? v : columnLabel(minCol + c))) : Array.from({ length: width }, (_, c) => columnLabel(minCol + c));
+  const start = header ? first + 1 : first;
+  const rows = [];
+  const formulas = [];
+  for (let r = start; r < grid.length; r++) {
+    rows.push(dense(grid[r]));
+    if (formulaGrid[r]) formulas[r - start] = dense(formulaGrid[r]);
+  }
+  while (rows.length && !formulas[rows.length - 1] && rows[rows.length - 1].every((v) => v === null)) rows.pop();
+  formulas.length = Math.min(formulas.length, rows.length);
+  let numberFormats;
+  if (formats) {
+    const fr = [];
+    for (let r = start; r < start + rows.length; r++) {
+      const src = formats.grid[r];
+      if (!src) continue;
+      const out = new Uint16Array(width);
+      for (let c = 0; c < width; c++) out[c] = src[minCol + c] ?? 0;
+      fr[r - start] = out;
+    }
+    if (fr.length) numberFormats = { codes: formats.codes, rows: fr, ...formats.date1904 ? { date1904: true } : {} };
+  }
+  return {
+    name,
+    columns,
+    rows,
+    formulas,
+    origin: { row: start, col: minCol },
+    ...header ? { header: dense(grid[first]) } : {},
+    ...arrays.length ? { arrays } : {},
+    ...merges.length ? { merges } : {},
+    ...labelStyles.length ? { labelStyles } : {},
+    ...numberFormats ? { numberFormats } : {},
+    ...hidden.length ? { hiddenRows: { rows: hidden, filtered: hidden.filter((r) => filters.some((f) => r >= f.r0 && r <= f.r1)) } } : {}
+  };
+}
+
 // packages/spreadiff/src/core/external.ts
 var LIVE_FUNCTIONS = {
   Bloomberg: ["BDP", "BDH", "BDS", "BQL", "BQL.QUERY", "BEQS", "BSRCH", "BCURVE", "BLP", "BLPH", "BLPW"],
@@ -5817,60 +5957,6 @@ function parseTableDefinition(xml, sheet) {
   });
   return d;
 }
-function detectHeaders(raws, names, tables, localNames) {
-  const candidate = /* @__PURE__ */ new Map();
-  const result = raws.map((r, i) => {
-    const ok = headerLike(r);
-    if (ok) candidate.set(r.name.toUpperCase(), i);
-    return ok;
-  });
-  if (!candidate.size) return result;
-  const sheets = raws.map((r) => r.name);
-  const top = Math.max(...[...candidate.values()].map((i) => raws[i].first + 1));
-  const rowNumbers = Array.from({ length: top }, (_, i) => i + 1).join("|");
-  const spells = top <= 64 ? new RegExp(`(?:[A-Za-z$](?:${rowNumbers})(?!\\d))|(?:(?:^|[^\\w.$])\\$?(?:${rowNumbers}):)`) : /./;
-  const nameList = [...Object.keys(names), ...[...localNames.values()].flatMap((m) => Object.keys(m))].map((n) => n.toUpperCase());
-  const scoped = raws.map((r) => localNames.size ? scopedNames(names, raws.map((x) => ({ name: x.name, names: localNames.get(x.name) })), r.name) : names);
-  const mayHide = (f) => f.includes("[") || nameList.length > 0 && (nameList.length > 64 || nameList.some((n) => f.toUpperCase().includes(n)));
-  raws.forEach((r, ri) => {
-    for (let row = 0; row < r.formulaGrid.length && candidate.size; row++) {
-      const fr = r.formulaGrid[row];
-      if (!fr) continue;
-      for (const f of fr) {
-        if (!f) continue;
-        if (!spells.test(f) && !mayHide(f)) continue;
-        for (const rg of formulaRefs(f, scoped[ri], { tables, row, sheets }).ranges) {
-          const key = (rg.sheet ?? r.name).toUpperCase();
-          const i = candidate.get(key);
-          if (i === void 0 || rg.r0 < 0) continue;
-          const first = raws[i].first;
-          if (rg.r0 <= first && first <= rg.r1) {
-            result[i] = false;
-            candidate.delete(key);
-          }
-        }
-        if (!candidate.size) break;
-      }
-    }
-  });
-  return result;
-}
-var ISO_DATE = /^\d{4}-\d{2}-\d{2}/;
-function headerLike(r) {
-  if (r.maxCol < 0) return false;
-  const row = r.grid[r.first];
-  if (r.formulaGrid[r.first]?.some(Boolean)) return false;
-  let n = 0;
-  for (let c = r.minCol; c <= r.maxCol; c++) {
-    const v = row?.[c];
-    if (v === null || v === void 0 || v === "") continue;
-    if (isYear(v)) continue;
-    if (typeof v !== "string" || ISO_DATE.test(v)) return false;
-    n++;
-  }
-  return n > 0;
-}
-var isYear = (v) => typeof v === "number" && Number.isInteger(v) && v >= 1900 && v <= 2100;
 function stripPrefixes(xml) {
   if (!/<[A-Za-z_][\w.-]*:(?:workbook|worksheet|sst|styleSheet|Relationships)\b/.test(xml.slice(0, 4096))) return xml;
   return xml.replace(/<(\/?)[A-Za-z_][\w.-]*:/g, "<$1");
@@ -5976,33 +6062,6 @@ function shiftFormula(formula, dRow, dCol) {
       return `${c}${r}`;
     }
   );
-}
-function tablesFromRaw(raws, header, names = {}, tables = [], localNames = /* @__PURE__ */ new Map()) {
-  const headers = header === "auto" ? detectHeaders(raws, names, tables, localNames) : raws.map(() => header);
-  return raws.map((r, i) => {
-    const t = buildTable(r, headers[i], header === "auto");
-    const own = localNames.get(r.name);
-    if (own) t.names = own;
-    return t;
-  });
-}
-function rawSheet(name, grid, formulaGrid, extra = {}) {
-  let minCol = Infinity;
-  let maxCol = -1;
-  for (const g of [grid, formulaGrid]) {
-    for (const row of g) {
-      if (!row) continue;
-      for (let c = 0; c < row.length; c++) {
-        const v = row[c];
-        if (v === void 0 || v === null) continue;
-        if (c < minCol) minCol = c;
-        if (c > maxCol) maxCol = c;
-      }
-    }
-  }
-  let first = 0;
-  while (first < grid.length && !grid[first]?.some((v) => v !== null && v !== void 0) && !formulaGrid[first]?.some((f) => f)) first++;
-  return { name, grid, formulaGrid, minCol, maxCol, first, arrays: [], merges: [], labelStyles: [], hidden: [], filters: [], ...extra };
 }
 function activeFilters(xml) {
   const out = [];
@@ -6163,63 +6222,6 @@ function parseCells(name, xml, strings, dateStyles, date19042, labelStyles, numb
     formats: codes.length > 1 ? { codes, grid: fmtGrid, date1904: date19042 } : void 0,
     hidden,
     filters: hidden.length ? activeFilters(xml) : []
-  };
-}
-function labelRow(r) {
-  const row = r.grid[r.first];
-  let text3 = 0;
-  let filled = 0;
-  for (let c = r.minCol; c <= r.maxCol; c++) {
-    const v = row?.[c];
-    if (v === null || v === void 0 || v === "") continue;
-    filled++;
-    if (typeof v === "string" && !ISO_DATE.test(v) && !r.formulaGrid[r.first]?.[c]) text3++;
-  }
-  return text3 >= 2 && text3 * 2 >= filled;
-}
-function buildTable(raw, header, auto = false) {
-  const { name, grid, formulaGrid, minCol, maxCol, first, arrays, merges, labelStyles, formats, hidden, filters } = raw;
-  if (maxCol < 0) return { name, columns: [], rows: [], formulas: [], origin: { row: 0, col: 0 }, ...merges.length ? { merges } : {} };
-  const width = maxCol - minCol + 1;
-  const dense = (src) => {
-    const out = new Array(width);
-    for (let c = 0; c < width; c++) out[c] = src?.[minCol + c] ?? null;
-    return out;
-  };
-  const columns = header ? uniqueNames(dense(grid[first]).map((v) => v === null ? "" : String(v))) : auto && labelRow(raw) ? uniqueNames(dense(grid[first]).map((v, c) => typeof v === "string" && v.trim() && !formulaGrid[first]?.[minCol + c] ? v : columnLabel(minCol + c))) : Array.from({ length: width }, (_, c) => columnLabel(minCol + c));
-  const start = header ? first + 1 : first;
-  const rows = [];
-  const formulas = [];
-  for (let r = start; r < grid.length; r++) {
-    rows.push(dense(grid[r]));
-    if (formulaGrid[r]) formulas[r - start] = dense(formulaGrid[r]);
-  }
-  while (rows.length && !formulas[rows.length - 1] && rows[rows.length - 1].every((v) => v === null)) rows.pop();
-  formulas.length = Math.min(formulas.length, rows.length);
-  let numberFormats;
-  if (formats) {
-    const fr = [];
-    for (let r = start; r < start + rows.length; r++) {
-      const src = formats.grid[r];
-      if (!src) continue;
-      const out = new Uint16Array(width);
-      for (let c = 0; c < width; c++) out[c] = src[minCol + c] ?? 0;
-      fr[r - start] = out;
-    }
-    if (fr.length) numberFormats = { codes: formats.codes, rows: fr, ...formats.date1904 ? { date1904: true } : {} };
-  }
-  return {
-    name,
-    columns,
-    rows,
-    formulas,
-    origin: { row: start, col: minCol },
-    ...header ? { header: dense(grid[first]) } : {},
-    ...arrays.length ? { arrays } : {},
-    ...merges.length ? { merges } : {},
-    ...labelStyles.length ? { labelStyles } : {},
-    ...numberFormats ? { numberFormats } : {},
-    ...hidden.length ? { hiddenRows: { rows: hidden, filtered: hidden.filter((r) => filters.some((f) => r >= f.r0 && r <= f.r1)) } } : {}
   };
 }
 
@@ -8816,7 +8818,7 @@ async function github(path, token, init = {}) {
     headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28", "content-type": "application/json" },
     body: init.body === void 0 ? void 0 : JSON.stringify(init.body)
   });
-  if (!res.ok) throw new Error(`GitHub API ${init.method ?? "GET"} ${path}: ${res.status} ${await res.text()}`);
+  if (!res.ok) throw Object.assign(new Error(`GitHub API ${init.method ?? "GET"} ${path}: ${res.status} ${await res.text()}`), { status: res.status });
   return res.status === 204 ? null : res.json();
 }
 async function upsertComment(repo, pr, token, body) {
@@ -8856,8 +8858,15 @@ changed=${changed}
     process.stdout.write(markdown);
     return;
   }
-  if (comment && pr && files && token) await upsertComment(process.env.GITHUB_REPOSITORY, pr.number, token, markdown);
-  else console.log(markdown);
+  if (comment && pr && files && token) {
+    try {
+      await upsertComment(process.env.GITHUB_REPOSITORY, pr.number, token, markdown);
+    } catch (e) {
+      if (e.status !== 403) throw e;
+      console.log(`::warning::Couldn't comment on the pull request (the token can't write; pull requests from forks get a read-only one). The report is in the job summary.`);
+      console.log(markdown);
+    }
+  } else console.log(markdown);
 }
 if (process.env.GITHUB_ACTIONS || process.env.SPREADIFF_DRY_RUN) {
   run().catch((e) => {

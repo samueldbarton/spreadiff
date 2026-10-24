@@ -15,6 +15,8 @@ export const NAV = [
     pages: [
       { slug: 'diffing', file: 'docs/diffing.md' },
       { slug: 'tracing', file: 'docs/tracing.md' },
+      { slug: 'review', file: 'docs/review.md' },
+      { slug: 'formats', file: 'docs/formats.md' },
     ],
   },
   {
@@ -29,7 +31,10 @@ export const NAV = [
   },
   {
     title: 'spreadiff-lite',
-    pages: [{ slug: 'spreadiff-lite', file: 'docs/spreadiff-lite.md', title: 'spreadiff-lite' }],
+    pages: [
+      { slug: 'spreadiff-lite', file: 'docs/spreadiff-lite.md', title: 'spreadiff-lite' },
+      { slug: 'git', file: 'docs/git.md' },
+    ],
   },
   {
     title: 'Reference',

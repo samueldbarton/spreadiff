@@ -10,7 +10,7 @@ import { decodeFormula, type PtgContext } from './ptg.js';
 import { BUILTIN_FORMATS, isDateFormat } from './numfmt.js';
 import { serialToIso } from './serial.js';
 import { attr, eachElement, resolvePath } from './xml.js';
-import { rawSheet, tablesFromRaw, type RawSheet } from './xlsx.js';
+import { rawSheet, tablesFromRaw, type RawSheet } from './sheet.js';
 import type { CellValue, Workbook } from './types.js';
 
 /** Options for {@link parseXlsb}. */

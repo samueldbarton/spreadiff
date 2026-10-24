@@ -213,9 +213,9 @@ sheet's alignment.
 | Merged cells | — | read into `Table.merges`; the value is the top-left cell's |
 | Defined names | — | workbook names in `Workbook.names`, sheet-scoped ones in `Table.names` |
 
-`parseFile(name, bytes)` picks the parser: zip content means XLSX, `.tsv`
-means tab-delimited, anything else is CSV. Legacy `.xls` (BIFF) files are
-rejected with a clear error.
+`parseFile(name, bytes)` picks the parser from the contents: .xlsx, .xlsb,
+.xls and .ods are recognized whatever they're named, and anything else is
+CSV (`.tsv` means tab-delimited). See [File formats](formats.md).
 
 **Why lossless numbers?** Converting `"007"` to `7` would hide a real
 change, and showing `1.50` as `1.5` would misrepresent the file. Numbers

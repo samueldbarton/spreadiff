@@ -169,9 +169,9 @@ and `npm run test:hosted` reproduce them.
 
 | Import | Contents | min + gzip |
 | --- | --- | --- |
-| `spreadiff/html` | Diff engine, CSV parser, HTML and text renderers. No DOM | 16.0 KB |
-| `spreadiff/core` | + XLSX reader, formula engine and tracing | 43.4 KB |
-| `spreadiff` | + canvas `DiffGrid` | 63.9 KB |
+| `spreadiff/html` | Diff engine, CSV parser, number formats, HTML and text renderers. No DOM | 19.9 KB |
+| `spreadiff/core` | + XLSX, XLSB, XLS and ODS readers, formula engine, tracing, review and merge | 74.0 KB |
+| `spreadiff` | + canvas `DiffGrid` and `SpreadsheetDiff` | 101.1 KB |
 | `spreadiff/react` | React component for `DiffGrid` | + React |
 | `spreadiff/worker` | Parse, diff and trace in a Web Worker | |
 
@@ -196,9 +196,10 @@ tested yet. See [Browser support](docs/browser-support.md).
 
 ## Limits
 
-- **Files.** No legacy `.xls`, `.xlsb` or `.ods`. Styles and number
-  formats other than dates aren't read, so a change of format alone isn't
-  a change.
+- **Files.** Reads .xlsx, .xlsb, .xls, .ods and CSV, but writes only .xlsx
+  and CSV. Styles other than number formats aren't read, so a change of
+  format alone isn't a change. The .xlsb reader is checked against a small
+  corpus ([File formats](docs/formats.md)).
 - **One spreadsheet engine.** Recalculation is spreadiff's own engine,
   checked against LibreOffice, not Excel. Files saved by different apps
   can differ slightly with nothing edited.

@@ -83,7 +83,7 @@ async function github(path: string, token: string, init: { method?: string; body
     headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', 'content-type': 'application/json' },
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
-  if (!res.ok) throw new Error(`GitHub API ${init.method ?? 'GET'} ${path}: ${res.status} ${await res.text()}`);
+  if (!res.ok) throw Object.assign(new Error(`GitHub API ${init.method ?? 'GET'} ${path}: ${res.status} ${await res.text()}`), { status: res.status });
   return res.status === 204 ? null : res.json();
 }
 
@@ -123,8 +123,16 @@ async function run(): Promise<void> {
     process.stdout.write(markdown);
     return;
   }
-  if (comment && pr && files && token) await upsertComment(process.env.GITHUB_REPOSITORY!, pr.number, token, markdown);
-  else console.log(markdown);
+  if (comment && pr && files && token) {
+    try {
+      await upsertComment(process.env.GITHUB_REPOSITORY!, pr.number, token, markdown);
+    } catch (e) {
+      // A pull request from a fork runs with a read-only token: the report is still in the job summary.
+      if ((e as { status?: number }).status !== 403) throw e;
+      console.log(`::warning::Couldn't comment on the pull request (the token can't write; pull requests from forks get a read-only one). The report is in the job summary.`);
+      console.log(markdown);
+    }
+  } else console.log(markdown);
 }
 
 if (process.env.GITHUB_ACTIONS || process.env.SPREADIFF_DRY_RUN) {

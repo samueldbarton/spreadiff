@@ -93,14 +93,6 @@ export interface CellInfo {
 }
 
 /**
- * How a changed cell shows its change:
- * - `stacked`: old value struck through above the new one (modified rows are taller).
- * - `new`: just the new value on a tinted background.
- * - `delta`: the new value, with the absolute and % change beneath it
- *   (or `was …` for text). Modified rows are taller.
- * - `inline`: `old → new` on one line.
- */
-/**
  * A rectangle of selected cells, from `DiffGrid.getRange()` and
  * `onRangeChange`. Rows and columns are as displayed: rows hidden in a
  * collapsed region and hidden columns aren't in it.
@@ -122,6 +114,14 @@ export interface GridRange {
   a1: { old?: string; new?: string };
 }
 
+/**
+ * How a changed cell shows its change:
+ * - `stacked`: old value struck through above the new one (modified rows are taller).
+ * - `new`: just the new value on a tinted background.
+ * - `delta`: the new value, with the absolute and % change beneath it
+ *   (or `was …` for text). Modified rows are taller.
+ * - `inline`: `old → new` on one line.
+ */
 export type CellDisplay = 'stacked' | 'new' | 'delta' | 'inline';
 
 

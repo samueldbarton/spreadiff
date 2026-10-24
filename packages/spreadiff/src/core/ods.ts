@@ -4,7 +4,7 @@
  * and hidden rows. Number formats aren't read; values show as stored.
  */
 import { strFromU8, unzipSync } from 'fflate';
-import { rawSheet, tablesFromRaw, type RawSheet } from './xlsx.js';
+import { rawSheet, tablesFromRaw, type RawSheet } from './sheet.js';
 import { attr, decode, eachElement } from './xml.js';
 import { serialToIso } from './serial.js';
 import type { CellValue, Table, Workbook } from './types.js';

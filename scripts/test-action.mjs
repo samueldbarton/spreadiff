@@ -97,6 +97,21 @@ const methods = requests.map((r) => r.method).join(' ');
 check('first run posts a comment, the next updates it', first.status === 0 && second.status === 0 && methods === 'GET POST GET PATCH', `${methods}\n${first.stdout}${first.stderr}${second.stderr}`);
 check('the comment is marked and authorized', comments.length === 1 && comments[0].body.startsWith('<!-- spreadiff-report -->') && requests.every((r) => r.auth === 'Bearer secret-token') && requests[1].url === '/repos/o/r/issues/7/comments', JSON.stringify(requests.map((r) => r.url)));
 
+// A read-only token (a pull request from a fork): no comment, a warning, and the job still passes.
+const denied = createServer((req, res) => {
+  res.statusCode = req.method === 'GET' ? 200 : 403;
+  res.setHeader('content-type', 'application/json');
+  res.end(req.method === 'GET' ? '[]' : '{"message":"Resource not accessible by integration"}');
+});
+await new Promise((r) => denied.listen(0, '127.0.0.1', r));
+const forked = await new Promise((resolve) => {
+  import('node:child_process').then(({ execFile }) => {
+    execFile(process.execPath, [bundle], { cwd: repo, env: env({ GITHUB_ACTIONS: 'true', GITHUB_API_URL: `http://127.0.0.1:${denied.address().port}` }) }, (err, stdout, stderr) => resolve({ status: err ? err.code ?? 1 : 0, stdout, stderr }));
+  });
+});
+denied.close();
+check('a read-only token warns and still passes', forked.status === 0 && forked.stdout.includes('::warning::') && forked.stdout.includes('## Spreadsheet changes'), forked.stdout.slice(0, 400) + forked.stderr);
+
 rmSync(dir, { recursive: true, force: true });
 if (failures.length) {
   console.error(`\n✗ ${failures.length} action check${failures.length === 1 ? '' : 's'} failed`);

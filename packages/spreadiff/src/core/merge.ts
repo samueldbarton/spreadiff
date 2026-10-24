@@ -22,12 +22,15 @@ export interface MergeConflict {
   baseRow?: number;
   /** Column name, for `cell` conflicts. */
   column?: string;
-  /** For `cell`: the base, our and their values. */
+  /** For `cell`: the base value. */
   base?: CellValue;
+  /** For `cell`: our value. */
   ours?: CellValue;
+  /** For `cell`: their value. */
   theirs?: CellValue;
-  /** For row conflicts: each side's row (in merged columns), or null where that side deleted it. */
+  /** For row conflicts: our row (in merged columns), or null where we deleted it. */
   oursRow?: CellValue[] | null;
+  /** For row conflicts: their row, or null where they deleted it. */
   theirsRow?: CellValue[] | null;
   /** Which side the merged table took. */
   took: 'ours' | 'theirs';

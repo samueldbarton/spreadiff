@@ -36,10 +36,10 @@ Details, including CSP and server-side rendering, are in
 
 | Import | Use it for | Size (min+gzip) |
 | --- | --- | --- |
-| `spreadiff/html` | Diff + CSV + an HTML/text renderer. No canvas or DOM APIs, so it runs on servers too | 16.0 KB |
-| `spreadiff/core` | The diff engine, CSV and XLSX parsers, formula tracing. No rendering | 43.4 KB |
-| `spreadiff` | Everything in core plus the canvas `DiffGrid` | 63.9 KB |
-| `spreadiff/react` | The `DiffGrid` React component | + React |
+| `spreadiff/html` | Diff + CSV + an HTML/text renderer. No canvas or DOM APIs, so it runs on servers too | 19.9 KB |
+| `spreadiff/core` | The diff engine, every file reader, formula tracing, review and merge. No rendering | 74.0 KB |
+| `spreadiff` | Everything in core plus the canvas `DiffGrid` and `SpreadsheetDiff` | 101.1 KB |
+| `spreadiff/react` | The `SpreadsheetDiff` and `DiffGrid` React components | + React |
 | `spreadiff/worker` | Parse, diff and trace in a Web Worker | small client + worker |
 | `spreadiff-lite` | A separate package with no UI: a Markdown or JSON report of what changed and what it moved downstream, and a CLI | Node / server |
 
@@ -48,6 +48,50 @@ Rule of thumb:
 - To scroll through large sheets interactively, use `DiffGrid`.
 - To tell a reader (or an agent) what changed and what it moved, in
   Markdown, use `spreadiff-lite`.
+
+## The short path: two files in, a review out
+
+`SpreadsheetDiff` takes two spreadsheets (`File`s from an `<input>`, URLs,
+bytes) in any [supported format](formats.md) and does the rest. It
+compares every sheet, traces which changes are edits and which are
+formula results that moved, and shows sheet tabs, the grid, and a panel of
+changed outputs, each with a waterfall of what drove it:
+
+```ts
+import { SpreadsheetDiff } from 'spreadiff';
+declare const container: HTMLElement; // give it a height
+
+const view = new SpreadsheetDiff();
+await view.render({ oldFile: new URL('/v1.xlsx', location.href), newFile: new URL('/v2.xlsx', location.href), container });
+```
+
+With React:
+
+```tsx
+import { SpreadsheetDiff } from 'spreadiff/react';
+
+export const Review = ({ before, after }: { before: File; after: File }) => (
+  <SpreadsheetDiff oldFile={before} newFile={after} style={{ height: 600 }} />
+);
+```
+
+Add `review: true` to accept and reject changes and download the result
+(see [Reviewing changes](review.md)). For large files, pass `worker` so the
+work happens off the main thread ([below](#3-big-files-parse-off-the-main-thread)).
+
+To lay out the page yourself, `diffFiles` gives you the comparison, and
+each of its sheets goes straight to a `DiffGrid` with its trace attached:
+
+```ts
+import { diffFiles, DiffGrid } from 'spreadiff';
+declare const before: File, after: File, container: HTMLElement;
+
+const cmp = await diffFiles(before, after);
+new DiffGrid({ layout: 'split' }).render({ sheet: cmp.sheets[cmp.firstChanged], container });
+console.log(cmp.report().edits.length, 'edits');
+```
+
+The rest of this page builds the same thing from its parts.
 
 ## 1. Diff two tables
 
@@ -73,8 +117,8 @@ The diff matched rows by the `id` column automatically, so reordering rows
 wouldn't change the result. Lamp's price changed (modified), Chair is gone
 (removed) and Rug is new (added).
 
-For files, `parseFile(name, bytes)` picks the parser from the name and
-contents (CSV, TSV, or XLSX), and `diffWorkbooks` compares every sheet:
+For files, `parseFile(name, bytes)` picks the parser from the contents
+(XLSX, XLSB, XLS, ODS, CSV or TSV), and `diffWorkbooks` compares every sheet:
 
 ```ts
 import { diffWorkbooks, parseFile } from 'spreadiff';
@@ -127,29 +171,32 @@ Parsing and diffing a large file takes seconds. Do it in a worker so the
 page stays responsive:
 
 ```ts
-import { createDiffWorker } from 'spreadiff/worker';
+import { diffFiles } from 'spreadiff';
+declare const oldFile: File, newFile: File;
 
-const differ = createDiffWorker(
-  new Worker(new URL('spreadiff/worker/worker.js', import.meta.url), { type: 'module' }),
-);
-const { result, trace } = await differ.diffFiles(oldFile, newFile, {}, { trace: true });
+const cmp = await diffFiles(oldFile, newFile, {
+  worker: () => new Worker(new URL('spreadiff/worker/worker.js', import.meta.url), { type: 'module' }),
+});
 ```
 
-`{ trace: true }` also traces formulas in the worker (next section), which
-can take seconds on a large model. See [Workers](workers.md) for bundler
+The worker is created on first use and kept. `SpreadsheetDiff` takes the
+same `worker` option. Tracing (next section) runs in the worker too. See [Workers](workers.md) for bundler
 notes and what crosses the boundary.
 
 ## 4. Spreadsheets with formulas
 
-For XLSX files, spreadiff also tells you **why** a cell changed. It
+For workbooks, spreadiff also tells you **why** a cell changed. It
 separates edited inputs from formula results that moved as a consequence,
-and traces each result back to its causes:
+and traces each result back to its causes. `diffFiles` and
+`compareWorkbooks` trace whenever there are formulas, and each sheet view
+carries its trace:
 
 ```ts
-import { DiffGrid, traceWorkbook } from 'spreadiff';
+import { compareWorkbooks, DiffGrid, type Workbook } from 'spreadiff';
+declare const before: Workbook, after: Workbook, container: HTMLElement;
 
-const trace = traceWorkbook(workbookDiff);
-const grid = new DiffGrid({ trace: { trace, workbook: workbookDiff, sheet: 0 } });
+const cmp = compareWorkbooks(before, after);
+new DiffGrid().render({ sheet: cmp.sheets[0], container });
 ```
 
 Downstream changes show in amber, and hovering one lists the edits that

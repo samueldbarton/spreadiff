@@ -10,7 +10,7 @@ import type { DiffWorker } from '../worker/index.js';
  * - a `File` or `Blob` (from an `<input>`, a drop, or `fetch(...).blob()`);
  * - a `URL`, fetched;
  * - `{ name, data }`: a file name (it picks the parser) and its bytes, or its text for CSV;
- * - raw bytes, with the format sniffed (XLSX if it's a zip, else CSV);
+ * - raw bytes, with the format sniffed from the contents;
  * - a `Workbook` or `Table` you already parsed.
  */
 export type SpreadsheetInput =
@@ -167,8 +167,8 @@ let createClient: ((w: Worker) => DiffWorker) | null = null;
 
 /**
  * Diff two spreadsheets from whatever you have: `File`s, `Blob`s, URLs,
- * bytes or text. Picks the parser from the file name or contents (CSV,
- * TSV, XLSX), diffs every sheet and, when there are formulas, traces
+ * bytes or text. Picks the parser from the contents (XLSX, XLSB, XLS, ODS,
+ * CSV, TSV), diffs every sheet and, when there are formulas, traces
  * downstream changes. Each sheet of the result carries its trace, so it
  * goes straight to a grid.
  *
