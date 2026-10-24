@@ -563,6 +563,118 @@ await test('labels for a large table come after the first frame; numbers until t
   assert(r.later === 'labels' && r.columns.join() === 'qty', `after: ${JSON.stringify(r)}`);
 });
 
+// A screen point inside the cell (aligned row, column index), found through the grid's own hit testing.
+const pointOf = (row, col) => page.evaluate(({ row, col }) => {
+  const g = window.G;
+  const r = g.scroller.getBoundingClientRect();
+  for (let y = r.top + 40; y < r.bottom - 4; y += 6) {
+    for (let x = r.left + 4; x < r.right - 20; x += 12) {
+      const c = g.cellAt(g.hitTest(x, y));
+      if (c && c.row === row && c.columnIndex === col) return { x: x + 2, y: y + 2 };
+    }
+  }
+  return null;
+}, { row, col });
+
+await test('drag, shift-click and shift+arrows select a range; onRangeChange reports it once per change', async () => {
+  await page.evaluate(() => {
+    window.G?.cleanUp();
+    const { parseCsv, diffTables, DiffGrid } = window.sd;
+    const mk = (v) => 'id,a,b,c\n' + Array.from({ length: 30 }, (_, i) => `${i},${v}${i},${i},${i}`).join('\n');
+    window.diff = diffTables(parseCsv(mk('a')), parseCsv(mk('b')));
+    window.ranges = [];
+    window.G = new DiffGrid({ collapseUnchanged: false, tooltips: false, onRangeChange: (r) => window.ranges.push(r && { rows: r.rows, columns: r.columns, a1: r.a1 }) });
+    window.G.render({ diff: window.diff, container: document.getElementById('grid') });
+  });
+  await page.waitForTimeout(150);
+  const a = await pointOf(2, 1);
+  const b = await pointOf(4, 2);
+  assert(a && b, 'cells not found on screen');
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move((a.x + b.x) / 2, (a.y + b.y) / 2);
+  await page.mouse.move(b.x, b.y);
+  await page.mouse.move(b.x, b.y + 1); // same cell: no new event
+  await page.mouse.up();
+  let r = await page.evaluate(() => window.G.getRange());
+  assert(r.rows.join() === '2,3,4' && r.columns.join() === '1,2', `drag: ${JSON.stringify(r)}`);
+  assert(r.a1.new === 'B4:C6' && r.a1.old === 'B4:C6', `a1: ${JSON.stringify(r.a1)}`);
+  const n = await page.evaluate(() => window.ranges.length);
+  const last = await page.evaluate(() => window.ranges[window.ranges.length - 1]);
+  assert(last.rows.join() === '2,3,4', `last event ${JSON.stringify(last)}`);
+  assert(n <= 4, `${n} events for one drag`);
+
+  // Shift-click moves the far corner, keeps the anchor.
+  const c = await pointOf(2, 3);
+  await page.keyboard.down('Shift');
+  await page.mouse.click(c.x, c.y);
+  await page.keyboard.up('Shift');
+  r = await page.evaluate(() => window.G.getRange());
+  assert(r.anchor.row === 2 && r.anchor.col === 1 && r.rows.join() === '2' && r.columns.join() === '1,2,3', `shift-click: ${JSON.stringify(r)}`);
+
+  // Shift+Down extends; a plain arrow collapses to one cell.
+  await page.keyboard.press('Shift+ArrowDown');
+  r = await page.evaluate(() => window.G.getRange());
+  assert(r.rows.join() === '2,3' && r.columns.join() === '1,2,3', `shift+down: ${JSON.stringify(r)}`);
+  await page.keyboard.press('ArrowDown');
+  r = await page.evaluate(() => window.G.getRange());
+  assert(r.rows.join() === '3' && r.columns.join() === '1' && r.anchor.row === 3, `arrow: ${JSON.stringify(r)}`);
+
+  // selectRange, and Escape clears.
+  const ok = await page.evaluate(() => window.G.selectRange(5, 0, 7, 1));
+  r = await page.evaluate(() => window.G.getRange());
+  assert(ok && r.a1.new === 'A7:B9', `selectRange: ${JSON.stringify(r)}`);
+  await page.keyboard.press('Escape');
+  assert((await page.evaluate(() => window.G.getRange())) === null, 'Escape should clear');
+  assert((await page.evaluate(() => window.ranges[window.ranges.length - 1])) === null, 'last event should be null');
+});
+
+await test('a range in A1 per side: an added row is skipped on the old side, moved rows scatter it', async () => {
+  await page.evaluate(() => {
+    window.G?.cleanUp();
+    const { parseCsv, diffTables, DiffGrid } = window.sd;
+    window.diff = diffTables(parseCsv('id,a\n1,x\n3,z'), parseCsv('id,a\n1,x\n2,y\n3,z'));
+    window.G = new DiffGrid({ collapseUnchanged: false, tooltips: false });
+    window.G.render({ diff: window.diff, container: document.getElementById('grid') });
+  });
+  await page.waitForTimeout(100);
+  const r = await page.evaluate(() => (window.G.selectRange(0, 1, 2, 1), window.G.getRange()));
+  assert(r.a1.new === 'B2:B4' && r.a1.old === 'B2:B3', JSON.stringify(r.a1));
+  const one = await page.evaluate(() => (window.G.selectRange(1, 1, 1, 1), window.G.getRange()));
+  assert(one.a1.new === 'B3' && one.a1.old === undefined, JSON.stringify(one.a1));
+  // Rows matched by key in a new order: old rows 3,1 aren't one block in order.
+  const moved = await page.evaluate(() => {
+    const { parseCsv, diffTables } = window.sd;
+    window.G.setDiff(diffTables(parseCsv('id,a\n1,x\n2,y\n3,z'), parseCsv('id,a\n3,z\n2,y\n1,x')));
+    window.G.selectRange(0, 1, 1, 1);
+    return window.G.getRange().a1;
+  });
+  assert(moved.new === 'B2:B3' && moved.old === undefined, JSON.stringify(moved));
+});
+
+await test('a sheet view brings its trace, and the grid finds the traced sheet from the diff', async () => {
+  const r = await page.evaluate(() => {
+    window.G?.cleanUp();
+    const { compareWorkbooks, DiffGrid } = window.sd;
+    const sheet = (name, rows, formulas) => ({ name, columns: ['A', 'B'], rows, formulas, origin: { row: 0, col: 0 } });
+    // Sheet 2 reads sheet 1: an edit on S1 moves S2!B1.
+    const a = { name: 'a', sheets: [sheet('S1', [[1, 2]], [[null, null]]), sheet('S2', [[0, 3]], [[null, '=S1!A1+2']])] };
+    const b = { name: 'b', sheets: [sheet('S1', [[5, 2]], [[null, null]]), sheet('S2', [[0, 7]], [[null, '=S1!A1+2']])] };
+    const cmp = compareWorkbooks(a, b);
+    window.G = new DiffGrid({ tooltips: false });
+    const container = document.getElementById('grid');
+    window.G.render({ sheet: cmp.sheets[1], container });
+    const kindOnS2 = window.G.cellInfo(0, 1).kind;
+    // A wrong index next to the right diff: the diff decides.
+    window.G.setOptions({ trace: { ...cmp.sheets[1].trace, sheet: 0 } });
+    const stillS2 = window.G.cellInfo(0, 1).kind;
+    window.G.render({ sheet: cmp.sheets[0], container });
+    const kindOnS1 = window.G.cellInfo(0, 0).kind;
+    return { kindOnS2, stillS2, kindOnS1 };
+  });
+  assert(r.kindOnS2 === 'computed' && r.stillS2 === 'computed' && r.kindOnS1 === 'input', JSON.stringify(r));
+});
+
 assert(true);
 if (errors.length) {
   failed++;

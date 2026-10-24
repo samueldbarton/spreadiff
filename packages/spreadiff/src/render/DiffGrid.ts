@@ -96,6 +96,28 @@ export interface CellInfo {
  *   (or `was …` for text). Modified rows are taller.
  * - `inline`: `old → new` on one line.
  */
+/**
+ * A rectangle of selected cells, from `DiffGrid.getRange()` and
+ * `onRangeChange`. Rows and columns are as displayed: rows hidden in a
+ * collapsed region and hidden columns aren't in it.
+ */
+export interface GridRange {
+  /** The active cell: where the selection started. */
+  anchor: { row: number; col: number };
+  /** The opposite corner. Equal to `anchor` for one cell. */
+  focus: { row: number; col: number };
+  /** Aligned rows in the range, top to bottom. */
+  rows: number[];
+  /** Column indices (into `diff.columns`) in the range, left to right. */
+  columns: number[];
+  /**
+   * The range in A1 notation on each side (`"B2:D5"`), when its cells are
+   * one block there. Undefined for a side the range has no cells on, or
+   * where its cells aren't one block (moved rows can scatter them).
+   */
+  a1: { old?: string; new?: string };
+}
+
 export type CellDisplay = 'stacked' | 'new' | 'delta' | 'inline';
 
 
@@ -183,6 +205,12 @@ export interface DiffGridOptions<A = unknown> {
   onCellHover?: (cell: CellInfo | null) => void;
   /** Called whenever the selected cell changes: click, keyboard, `nextChange()`, `select()`. */
   onSelectionChange?: (cell: CellInfo | null) => void;
+  /**
+   * Called whenever the selected range changes: drag across cells,
+   * shift-click, shift + arrow keys, `selectRange()`. A single selected cell
+   * is a one-cell range; `null` when nothing is selected.
+   */
+  onRangeChange?: (range: GridRange | null) => void;
   /** How changed cells show old vs. new. Default `stacked`. */
   cellDisplay?: CellDisplay;
   /**
@@ -311,6 +339,9 @@ export class DiffGrid<A = unknown> {
   private frame = 0;
   private hover: Hit | null = null;
   private selected: { row: number; col: number } | null = null;
+  /** The far corner of a range selection; null for a single cell. */
+  private extent: { row: number; col: number } | null = null;
+  private rangeKey = '';
   private tooltipTimer = 0;
   private resizing: { vcol: number; startX: number; startW: number } | null = null;
   private lastPointer: { x: number; y: number } | null = null;
@@ -403,6 +434,8 @@ export class DiffGrid<A = unknown> {
     this.resolveTrace();
     this.expanded.clear();
     this.selected = null;
+    this.extent = null;
+    this.rangeKey = '';
     this.hover = null;
     this.widthOverrides.clear();
     this.labels = null;
@@ -515,10 +548,75 @@ export class DiffGrid<A = unknown> {
   select(row: number | null, columnIndex = 0): boolean {
     if (row !== null && !this.isCell(row, columnIndex)) return false;
     this.selected = row === null ? null : { row, col: columnIndex };
+    this.extent = null;
     this.options.onSelectionChange?.(row === null ? null : this.cellInfo(row, columnIndex));
+    this.emitRange();
     if (row !== null) this.scrollToRow(row, 'nearest');
     this.schedule();
     return true;
+  }
+
+  /**
+   * Select a range: from the active cell (`row`, `col`) to the opposite
+   * corner. Returns false (and changes nothing) when either is out of range.
+   */
+  selectRange(row: number, col: number, focusRow: number, focusCol: number): boolean {
+    if (!this.isCell(row, col) || !this.isCell(focusRow, focusCol)) return false;
+    const was = this.selected;
+    this.selected = { row, col };
+    this.extent = focusRow === row && focusCol === col ? null : { row: focusRow, col: focusCol };
+    if (was?.row !== row || was?.col !== col) this.options.onSelectionChange?.(this.cellInfo(row, col));
+    this.emitRange();
+    this.scrollToRow(focusRow, 'nearest');
+    this.schedule();
+    return true;
+  }
+
+  /** The selected range (a single cell is a one-cell range), or null. */
+  getRange(): GridRange | null {
+    const sel = this.selected;
+    const d = this.diff;
+    if (!sel || !d) return null;
+    const focus = this.extent ?? sel;
+    const da = this.rows.displayOf[sel.row];
+    const df = this.rows.displayOf[focus.row];
+    const va = this.cols.cols.indexOf(sel.col);
+    const vf = this.cols.cols.indexOf(focus.col);
+    const rows: number[] = [];
+    let columns: number[];
+    if (da < 0 || df < 0 || va < 0 || vf < 0) {
+      // A corner scrolled into a collapsed region or a hidden column: just the active cell.
+      rows.push(sel.row);
+      columns = [sel.col];
+    } else {
+      for (let i = Math.min(da, df); i <= Math.max(da, df); i++) if (this.rows.kind[i] === ROW_KIND.data) rows.push(this.rows.ref[i]);
+      columns = Array.from(this.cols.cols.slice(Math.min(va, vf), Math.max(va, vf) + 1));
+    }
+    const a1 = (side: 'old' | 'new'): string | undefined => {
+      const t = side === 'old' ? d.oldTable : d.newTable;
+      const map = side === 'old' ? d.oldRows : d.newRows;
+      const rs = rows.map((r) => map[r]).filter((r) => r >= 0);
+      const cs = columns.map((c) => (side === 'old' ? d.columns[c].oldIndex : d.columns[c].newIndex)).filter((c) => c >= 0);
+      if (!rs.length || !cs.length) return undefined;
+      const block = (xs: number[]) => xs.every((x, i) => i === 0 || x === xs[i - 1] + 1);
+      if (!block(rs) || !block(cs)) return undefined;
+      const o = t.origin ?? { row: 1, col: 0 };
+      const at = (r: number, c: number) => `${columnLabel(c + o.col)}${r + o.row + 1}`;
+      const first = at(rs[0], cs[0]);
+      const last = at(rs[rs.length - 1], cs[cs.length - 1]);
+      return first === last ? first : `${first}:${last}`;
+    };
+    return { anchor: { ...sel }, focus: { ...focus }, rows, columns, a1: { old: a1('old'), new: a1('new') } };
+  }
+
+  /** Tell `onRangeChange` about a new range (once per distinct range). */
+  private emitRange(): void {
+    const sel = this.selected;
+    const f = this.extent ?? sel;
+    const key = sel && f ? `${sel.row}:${sel.col}:${f.row}:${f.col}` : '';
+    if (key === this.rangeKey) return;
+    this.rangeKey = key;
+    this.options.onRangeChange?.(this.getRange());
   }
 
   private isCell(row: number, columnIndex: number): boolean {
@@ -1359,6 +1457,34 @@ export class DiffGrid<A = unknown> {
       }
       this.drawGutter(p, r, status, missing, y, h, d);
       hline(ctx, p.x, right, y + h, t.border);
+    }
+
+    // A range: a tint over its cells and an outline around it.
+    if (this.selected && this.extent) {
+      const da = rows.displayOf[this.selected.row];
+      const df = rows.displayOf[this.extent.row];
+      const va = cols.cols.indexOf(this.selected.col);
+      const vf = cols.cols.indexOf(this.extent.col);
+      if (da >= 0 && df >= 0 && va >= 0 && vf >= 0) {
+        const [d0, d1] = da < df ? [da, df] : [df, da];
+        const [v0, v1] = va < vf ? [va, vf] : [vf, va];
+        const y0 = bodyTop + rows.offsets[d0] - scrollY;
+        const y1 = bodyTop + rows.offsets[d1 + 1] - scrollY;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(dataX, bodyTop, right - dataX, this.height - bodyTop);
+        ctx.clip();
+        // Frozen and scrolling columns sit apart on screen: tint each column, outline the span.
+        ctx.globalAlpha = 0.12;
+        ctx.fillStyle = t.selection;
+        for (let vi = v0; vi <= v1; vi++) ctx.fillRect(colX(vi), y0, cols.widths[vi], y1 - y0);
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = t.selection;
+        ctx.lineWidth = 1;
+        const x0 = colX(v0);
+        ctx.strokeRect(x0 + 0.5, y0 + 0.5, colX(v1) + cols.widths[v1] - x0 - 1, y1 - y0 - 1);
+        ctx.restore();
+      }
     }
 
     // Selection ring (drawn after rows so neighbors don't paint over it).
@@ -2263,20 +2389,47 @@ export class DiffGrid<A = unknown> {
     }
     const info = this.cellAt(hit);
     if (info) {
-      this.selected = { row: info.row, col: info.columnIndex };
-      this.options.onSelectionChange?.(info);
+      if (e.shiftKey && this.selected) {
+        this.extent = info.row === this.selected.row && info.columnIndex === this.selected.col ? null : { row: info.row, col: info.columnIndex };
+      } else {
+        this.selected = { row: info.row, col: info.columnIndex };
+        this.extent = null;
+        this.options.onSelectionChange?.(info);
+      }
+      this.emitRange();
       this.options.onCellClick?.(info, e);
       this.schedule();
+      // Drag to extend the range.
+      if (e.button !== 0) return;
+      this.scroller.setPointerCapture?.(e.pointerId);
+      const move = (m: PointerEvent) => {
+        const c = this.cellAt(this.hitTest(m.clientX, m.clientY));
+        if (!c || !this.selected) return;
+        const same = c.row === this.selected.row && c.columnIndex === this.selected.col;
+        this.extent = same ? null : { row: c.row, col: c.columnIndex };
+        this.emitRange();
+        this.schedule();
+      };
+      const up = () => {
+        this.scroller.removeEventListener('pointermove', move);
+        for (const t of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) this.scroller.removeEventListener(t, up);
+      };
+      this.scroller.addEventListener('pointermove', move);
+      for (const t of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) this.scroller.addEventListener(t, up);
     }
   }
 
   private onKeyDown(e: KeyboardEvent): void {
     if (e.metaKey || e.ctrlKey) {
       if (e.key === 'c' && this.selected) {
-        const info = this.cellInfo(this.selected.row, this.selected.col);
-        const v = info.newValue !== undefined ? info.newValue : info.oldValue;
-        // Copy the exact value, not the display-rounded one.
-        void navigator.clipboard?.writeText(typeof v === 'number' ? String(v) : formatCell(v ?? null));
+        // Exact values, not display-rounded ones; a range as tab-separated rows.
+        const text = (row: number, col: number) => {
+          const info = this.cellInfo(row, col);
+          const v = info.newValue !== undefined ? info.newValue : info.oldValue;
+          return typeof v === 'number' ? String(v) : formatCell(v ?? null);
+        };
+        const range = this.getRange()!;
+        void navigator.clipboard?.writeText(range.rows.map((r) => range.columns.map((c) => text(r, c)).join('\t')).join('\n'));
         e.preventDefault();
       }
       return;
@@ -2287,8 +2440,10 @@ export class DiffGrid<A = unknown> {
     };
     const move = (dr: number, dc: number) => {
       if (!this.cols.cols.length) return;
-      let d = this.selected ? this.rows.displayOf[this.selected.row] : -1;
-      const col = this.selected?.col ?? this.cols.cols[0];
+      const extend = e.shiftKey && this.selected !== null;
+      const from = extend ? (this.extent ?? this.selected) : this.selected;
+      let d = from ? this.rows.displayOf[from.row] : -1;
+      const col = from?.col ?? this.cols.cols[0];
       if (d < 0) {
         // No (visible) selection yet: start at the first row in view.
         d = firstDataRowFrom(Math.max(0, rowAt(this.rows, this.scroller.scrollTop)));
@@ -2303,8 +2458,16 @@ export class DiffGrid<A = unknown> {
       }
       let vi = this.cols.cols.indexOf(sel.col) + dc;
       vi = Math.max(0, Math.min(this.cols.cols.length - 1, vi));
-      this.selected = { row: this.rows.ref[d], col: this.cols.cols[vi] };
-      this.options.onSelectionChange?.(this.cellInfo(this.selected.row, this.selected.col));
+      const to = { row: this.rows.ref[d], col: this.cols.cols[vi] };
+      if (extend) {
+        const a = this.selected!;
+        this.extent = to.row === a.row && to.col === a.col ? null : to;
+      } else {
+        this.selected = to;
+        this.extent = null;
+        this.options.onSelectionChange?.(this.cellInfo(to.row, to.col));
+      }
+      this.emitRange();
       this.scrollToDisplay(d, 'nearest');
       this.scrollToColumn(vi);
       this.schedule();
@@ -2362,7 +2525,9 @@ export class DiffGrid<A = unknown> {
       }
     }
     this.selected = { row: r, col };
+    this.extent = null;
     this.options.onSelectionChange?.(this.cellInfo(r, col));
+    this.emitRange();
     this.scrollToDisplay(d, 'center');
     this.schedule();
     return true;
