@@ -26,6 +26,7 @@ Options:
   --no-recalc          Follow formula references instead of recalculating (faster; may over-attribute)
   --live NAME[,NAME]   More data-feed functions to treat as inputs (Provider:FN,FN or FN)
   --tolerance X        Numbers within X are equal
+  --min-change P       Ignore moves smaller than P of the number (0.1% or 0.001)
   -h, --help           Show this help
 
 Exit status: 0 no changes, 1 changes, 2 error.`;
@@ -94,6 +95,13 @@ function main(argv: string[]) {
         const n = Number(value());
         if (!(n >= 0)) fail('--tolerance needs a number');
         options.diff = { ...options.diff, numericTolerance: n };
+        break;
+      }
+      case '--min-change': {
+        const v = value();
+        const n = v.endsWith('%') ? Number(v.slice(0, -1)) / 100 : Number(v);
+        if (!(n >= 0)) fail('--min-change needs a fraction or a percentage (0.001 or 0.1%)');
+        options.diff = { ...options.diff, relativeTolerance: n };
         break;
       }
       default:

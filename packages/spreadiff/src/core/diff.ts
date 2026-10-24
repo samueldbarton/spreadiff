@@ -16,6 +16,7 @@ import {
 const DEFAULTS: Required<DiffOptions> = {
   keys: 'auto',
   numericTolerance: 0,
+  relativeTolerance: 0,
   precision: 15,
   trimWhitespace: true,
   ignoreCase: false,
@@ -56,14 +57,18 @@ export function cellsEqual(a: CellValue, b: CellValue, options: DiffOptions = {}
 function makeComparer(o: Required<DiffOptions>): (a: CellValue, b: CellValue) => boolean {
   const norm = makeNormalizer(o);
   const tol = o.numericTolerance;
+  const rel = o.relativeTolerance;
   const digits = o.precision;
   return (a, b) => {
     if (a === b) return true;
     if (digits < 17 && typeof a === 'number' && typeof b === 'number' && sameDigits(a, b, digits)) return true;
-    if (tol > 0) {
+    if (tol > 0 || rel > 0) {
       const x = toNumber(a);
       const y = toNumber(b);
-      if (!Number.isNaN(x) && !Number.isNaN(y)) return Math.abs(x - y) <= tol;
+      if (!Number.isNaN(x) && !Number.isNaN(y)) {
+        const d = Math.abs(x - y);
+        return d <= tol || d <= rel * Math.max(Math.abs(x), Math.abs(y));
+      }
     }
     return norm(a) === norm(b);
   };

@@ -93,6 +93,16 @@ describe('diffTables', () => {
     expect(diffTables(a, b, { numericTolerance: 1e-3, ignoreCase: true }).stats.cellsChanged).toBe(0);
   });
 
+  it('ignores changes below a relative threshold, scaled to each number', () => {
+    const a = csv(`k,v\nbig,1000000\nsmall,10\nzero,0`);
+    const b = csv(`k,v\nbig,1000500\nsmall,10.2\nzero,0.0001`);
+    const changed = (o: Parameters<typeof diffTables>[2]) => diffTables(a, b, o).stats.cellsChanged;
+    expect(changed({})).toBe(3);
+    expect(changed({ relativeTolerance: 0.001 })).toBe(2); // big moved 0.05%; small 2%; 0 → 0.0001 is all change
+    expect(changed({ relativeTolerance: 0.05 })).toBe(1);
+    expect(changed({ relativeTolerance: 0.05, numericTolerance: 0.001 })).toBe(0); // either one suffices
+  });
+
   it('diffs workbooks sheet by sheet', () => {
     const t = (name: string, s: string) => ({ ...csv(s), name });
     const d = diffWorkbooks(

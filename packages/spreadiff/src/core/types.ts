@@ -134,6 +134,13 @@ export interface DiffOptions {
   /** Treat numbers (or numeric strings) within this absolute difference as equal. Default 0. */
   numericTolerance?: number;
   /**
+   * Treat numbers within this fraction of the larger one as equal: `0.001`
+   * ignores moves under 0.1%. A materiality threshold: changes below it
+   * aren't changes anywhere (stats, the grid, tracing). Default 0. With
+   * `numericTolerance` too, a number within either counts as equal.
+   */
+  relativeTolerance?: number;
+  /**
    * Significant digits two numbers must share to be equal. Default 15,
    * Excel's own precision: Excel writes `0.9382716049382716` where
    * LibreOffice writes `0.938271604938272` for the same result, and neither

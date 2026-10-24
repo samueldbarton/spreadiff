@@ -52,6 +52,11 @@ check('--json prints the report', parsed?.totals?.external === 1 && parsed.edits
 const outputs = cli(a, b, '--outputs-only', '--sheet', 'Summary', '--sheet', 'Model', '--sheet', 'Inputs');
 check('--outputs-only drops intermediate results', outputs.stdout.includes('Final outputs') && !outputs.stdout.includes('Intermediate results'), outputs.stdout);
 
+const minor = cli(a, b, '--min-change', '5%', '--json');
+const minorReport = JSON.parse(minor.stdout || '{}');
+check('--min-change drops moves under the threshold', minorReport.edits?.map((e) => e.cell).join() === 'B1', minor.stdout.slice(0, 500) + minor.stderr);
+check('--min-change above every move: no changes, exit 0', cli(a, b, '--min-change', '0.5').status === 0);
+
 const bad = cli(a);
 check('a usage error exits 2', bad.status === 2 && /needs two files/.test(bad.stderr), bad.stderr);
 const missing = cli(a, join(dir, 'nope.xlsx'));
