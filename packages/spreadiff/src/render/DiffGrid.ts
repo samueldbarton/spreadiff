@@ -2833,7 +2833,7 @@ export class DiffGrid<A = unknown> {
         if (kind === 'computed' && count) {
           trace +=
             t.method === 'recalculated'
-              ? `<div class="sd-tt-note">${esc(contributions?.some((x) => typeof x === 'number') ? w.noteContributions : w.noteRecalculated)}</div>`
+              ? `<div class="sd-tt-note">${esc(contributions?.some((x) => typeof x === 'number') ? (t.attribution === 'shapley' ? w.noteShapley : w.noteContributions) : w.noteRecalculated)}</div>`
               : `<div class="sd-tt-note">${esc(w.noteReferences)}</div>`;
         }
         if (t.stale) {

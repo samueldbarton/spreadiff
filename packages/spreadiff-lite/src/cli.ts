@@ -30,6 +30,7 @@ Options:
   --keys COL[,COL]     Match rows on these columns
   --header auto|yes|no Whether row 1 holds column names (default auto)
   --no-recalc          Follow formula references instead of recalculating (faster; may over-attribute)
+  --shapley            Split each result's change so the contributions add up (Shapley values; slower)
   --live NAME[,NAME]   More data-feed functions to treat as inputs (Provider:FN,FN or FN)
   --tolerance X        Numbers within X are equal
   --min-change P       Ignore moves smaller than P of the number (0.1% or 0.001)
@@ -107,6 +108,9 @@ function main(argv: string[]) {
       }
       case '--no-recalc':
         options.trace = { ...options.trace, recalculate: false };
+        break;
+      case '--shapley':
+        options.trace = { ...options.trace, contributions: 'shapley' };
         break;
       case '--live': {
         const v = value();

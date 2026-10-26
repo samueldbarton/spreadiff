@@ -501,6 +501,7 @@ traceTable(diff: TableDiff, options?: TraceOptions): WorkbookTrace
 | `budget` | `5_000_000` | Graph steps before stopping and setting `truncated` |
 | `recalculate` | `true` | Recalculate formulas for exact causes, contributions and stale values. `false`: causes from references only |
 | `evaluationBudget` | `2_000_000` | Formula evaluations for recalculation, across the trace. Past it, the rest falls back to references |
+| `contributions` | `'but-for'` | How a change is split among its causes: `'but-for'` (one at a time; needn't add up) or `'shapley'` (adds up; one recalculation per subset of the edits reaching a result, up to 10 edits, within another `evaluationBudget`). See [Contributions that add up](tracing.md#contributions-that-add-up) |
 | `liveFunctions` | none | More data-feed functions, by provider, on top of [`LIVE_FUNCTIONS`](#live_functions): `{ 'In-house': ['PRICE_OF'] }`. A changed cell calling one is an outside-data input |
 
 ### WorkbookTrace
@@ -523,7 +524,8 @@ traceTable(diff: TableDiff, options?: TraceOptions): WorkbookTrace
 | `impacts` | `CellRef[]` | Root changes: computed cells they moved (capped) |
 | `impactCount` | `number` | Exact number of impacts |
 | `unexplained` | `'volatile' \| 'dynamic' \| 'unknown'?` | Computed cells without a traced cause: why |
-| `contributions` | `(number \| null)[]?` | Parallel to `causes`, when `method` is `'recalculated'`: new value − value without that cause. Parts needn't add up to the total |
+| `contributions` | `(number \| null)[]?` | Parallel to `causes`, when `method` is `'recalculated'`: how much of the change each accounts for, as `attribution` says |
+| `attribution` | `'but-for' \| 'shapley'?` | With `contributions`: `'but-for'`, new value − value without that cause (parts needn't add up); `'shapley'`, its average effect over every order of the edits (parts add up). See [Contributions that add up](tracing.md#contributions-that-add-up) |
 | `method` | `'recalculated' \| 'references'?` | How `causes` was found: by undoing each edit and recalculating (exact), or by following references (may over-include) |
 | `stale` | `{ cached, recalculated }?` | The new file's saved value is out of date: `cached` is what the file says, `recalculated` what its formulas give |
 | `external` | `ExternalSource?` | On `input` cells whose formula reads outside data (Bloomberg `BDP`, `RTD`, another workbook): where from. Their saved value is taken as given, never recalculated |
@@ -1643,6 +1645,7 @@ workbook, or a file's name (which picks the parser: `.xlsx`, `.xlsm`,
 | `causes` | `Cause[]?` | For `computed`: the edits that moved it, largest contribution first |
 | `causeCount` | `number?` | Exact number of causes |
 | `method` | `'recalculated' \| 'references'?` | How the causes were found |
+| `attribution` | `'but-for' \| 'shapley'?` | What the causes' contributions measure (see `CellTrace.attribution`) |
 | `output` | `boolean?` | No other changed cell reads it: a final output |
 | `unexplained` | `'volatile' \| 'dynamic' \| 'unknown'?` | Why no cause was found |
 | `stale` | `{ saved }?` | The new file saved this value without recalculating |

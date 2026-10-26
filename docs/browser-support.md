@@ -4,7 +4,7 @@
 
 | Entry | Needs | Minimum |
 | --- | --- | --- |
-| `spreadiff/html`, `spreadiff/core` | ES2022 JavaScript. No DOM: runs in Node, Deno, Bun, workers and edge runtimes | Node 18, or any 2022+ browser |
+| `spreadiff/html`, `spreadiff/core` | ES2022 JavaScript. No DOM: runs in Node, Deno, Bun, workers and edge runtimes | Node 20.19+, or any 2022+ browser |
 | `spreadiff` (`DiffGrid`) | ES2022, Shadow DOM, `ResizeObserver`, canvas 2D, CSS `color-mix()` | **Chrome / Edge 111, Firefox 113, Safari 16.2** (2023) |
 | `spreadiff/worker` | Module workers (`new Worker(url, { type: 'module' })`) | Chrome / Edge 80, Firefox 114, Safari 15 |
 | `spreadiff/react` | React 18 or 19 | |

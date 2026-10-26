@@ -103,6 +103,8 @@ export interface DiffStrings {
   more: (count: string, n: number) => string;
   /** Under causes with contributions: how they were found. */
   noteContributions: string;
+  /** Under Shapley contributions (`TraceOptions.contributions: 'shapley'`): what they mean. */
+  noteShapley: string;
   /** Under causes found by recalculating, without contributions. */
   noteRecalculated: string;
   /** Under causes found from references alone. */
@@ -224,6 +226,7 @@ export const ENGLISH_STRINGS: DiffStrings = {
   nothingDownstream: 'nothing downstream changed',
   more: (c) => `+ ${c} more`,
   noteContributions: "Right column: this cell's change from each edit, found by undoing it and recalculating.",
+  noteShapley: "Right column: each edit's share of this change, averaged over every order of applying the edits. The shares add up.",
   noteRecalculated: 'Found by undoing each edit and recalculating.',
   noteReferences: 'From formula references; some listed edits may not have mattered.',
   stale: (saved, recalculated) => `The file saved ${saved} here without recalculating; recalculating its inputs gives ${recalculated}.`,

@@ -68,12 +68,20 @@ export interface CellTrace {
   causeCount: number;
   /**
    * For `computed` cells, parallel to `causes`: how much of the change each
-   * cause accounts for, as *new value − value without that cause*. Present
-   * when `method` is `'recalculated'` (null where the values aren't
-   * numbers). The parts needn't add up to the total: causes interact (a
-   * rate times a balance), and a change can have several sufficient causes.
+   * cause accounts for. Present when `method` is `'recalculated'` (null
+   * where the values aren't numbers). What the numbers mean is `attribution`.
    */
   contributions?: (number | null)[];
+  /**
+   * How `contributions` were measured (see `TraceOptions.contributions`):
+   * - `'but-for'`: *new value − value without that cause*, one cause at a
+   *   time. The parts needn't add up to the total: causes interact (a rate
+   *   times a balance), and a change can have several sufficient causes.
+   * - `'shapley'`: each cause's average effect over every order the causes
+   *   could have been applied in. The parts add up to the change, less
+   *   anything no undoable edit explains (an added row, say).
+   */
+  attribution?: 'but-for' | 'shapley';
   /**
    * How `causes` was found:
    * - `'recalculated'`: by undoing each edit and recalculating (exact).
@@ -183,6 +191,17 @@ export interface TraceOptions {
   recalculate?: boolean;
   /** Max formula evaluations for recalculation, across the trace. Default 2,000,000. */
   evaluationBudget?: number;
+  /**
+   * How a result's change is split among its causes (`CellTrace.contributions`):
+   * - `'but-for'` (default): undo one cause at a time; the parts needn't add up.
+   * - `'shapley'`: average each cause's effect over every order of applying
+   *   them, so the parts add up. It recalculates once per subset of the
+   *   edits that reach a result, so a result reached by n edits costs 2^n
+   *   passes; results reached by more than 10 keep but-for contributions
+   *   (`attribution` says which). Uses up to `evaluationBudget` more
+   *   evaluations; past it, the remaining results keep but-for too.
+   */
+  contributions?: 'but-for' | 'shapley';
   /**
    * More live-data functions, by provider, on top of {@link LIVE_FUNCTIONS}
    * (`{ 'In-house': ['PRICE_OF'] }`). A changed cell calling one is an
@@ -584,6 +603,7 @@ export function traceWorkbook(diff: WorkbookDiff, options: TraceOptions = {}): W
 
   // ---- Exact causes: undo each root and recalculate (but-for) -------------
   const exact = analysis?.butFor(roots) ?? null;
+  const shares = options.contributions === 'shapley' && analysis ? analysis.shapley(roots, 10) : null;
 
   // ---- Assemble -------------------------------------------------------------
   const stats: TraceStats = { inputs: 0, formulas: 0, computed: 0, unexplained: 0, stale: 0, recalculated: 0, unmodelled: analysis?.unmodelled ?? 0, external: 0 };
@@ -601,9 +621,20 @@ export function traceWorkbook(diff: WorkbookDiff, options: TraceOptions = {}): W
       let list: number[];
       // Added/removed rows and self-caused cells aren't undone one by one: they come from references.
       const structural = [...(byRefs ?? [])].filter((r) => roots[r].trace.kind !== 'input' && roots[r].trace.kind !== 'formula');
-      if (precise && precise.causes.length && !precise.tainted) {
+      const shared = shares?.get(si)?.get(k);
+      if (shared && !precise?.tainted && (precise?.causes.length || shared.values.some((v) => v !== 0))) {
+        // But-for causes, then edits that mattered only together (MAX of two raised inputs).
+        const butFor = precise?.causes ?? [];
+        const ids = [...butFor, ...shared.players.filter((r, i) => shared.values[i] !== 0 && !butFor.includes(r))];
+        list = [...ids, ...structural];
+        t.contributions = [...ids.map((r) => shared.values[shared.players.indexOf(r)]), ...structural.map(() => null)].slice(0, maxCauses);
+        t.attribution = 'shapley';
+        t.method = 'recalculated';
+        stats.recalculated++;
+      } else if (precise && precise.causes.length && !precise.tainted) {
         list = [...precise.causes, ...structural];
         t.contributions = [...precise.contributions, ...structural.map(() => null)].slice(0, maxCauses);
+        t.attribution = 'but-for';
         t.method = 'recalculated';
         stats.recalculated++;
       } else {
@@ -729,6 +760,15 @@ interface Analysis {
   truncated: boolean;
   /** Exact causes per computed cell: sheet → aligned key → causes. */
   butFor(roots: Root[]): Map<number, Map<number, ExactCauses>>;
+  /** Shapley contributions per computed cell (after `butFor`, which finds what each root reaches). */
+  shapley(roots: Root[], maxPlayers: number): Map<number, Map<number, Shares>>;
+}
+
+interface Shares {
+  /** Root indexes that can reach the cell through what formulas actually read. */
+  players: number[];
+  /** Parallel to `players`: each one's Shapley value. They add up to new value − value with all of them undone. */
+  values: number[];
 }
 
 /** Origin of a table, with the default. */
@@ -849,7 +889,7 @@ function recalculate(diff: WorkbookDiff, maps: SheetMaps[], traces: Map<number, 
       }
     }
   }
-  if (truncated) return { graph: staticNew, modelled: new Set(), unmodelled: 0, truncated, butFor: () => new Map() };
+  if (truncated) return { graph: staticNew, modelled: new Set(), unmodelled: 0, truncated, butFor: () => new Map(), shapley: () => new Map() };
 
   // 2. Evaluate the cone in dependency order. Each formula must reproduce the
   //    old file's cached value first (calibration); a trusted formula whose
@@ -994,6 +1034,11 @@ function recalculate(diff: WorkbookDiff, maps: SheetMaps[], traces: Map<number, 
       return true;
     }));
 
+  /** Root index → the formula cells it reaches (from `butFor`), for `shapley`. */
+  const reachOf = new Map<number, Set<number>>();
+  /** Root index → its value with the edit undone, on today's other inputs (from `butFor`). */
+  const withoutOf = new Map<number, Scalar>();
+
   const butFor = (rootList: Root[]) => {
     const out = new Map<number, Map<number, ExactCauses>>();
     const record = (ref: CellRef) => {
@@ -1046,6 +1091,8 @@ function recalculate(diff: WorkbookDiff, maps: SheetMaps[], traces: Map<number, 
           queue.push(d);
         }
       }
+      reachOf.set(ri, reach);
+      withoutOf.set(ri, without);
       const { order, preds, cyclic } = topoOrder([root.id], reach, graph);
       const changed = new Set<number>([root.id]);
       const tainted = new Set<number>(cyclic);
@@ -1083,7 +1130,162 @@ function recalculate(diff: WorkbookDiff, maps: SheetMaps[], traces: Map<number, 
     return out;
   };
 
-  return { graph, modelled, unmodelled, get truncated() { return truncated; }, butFor };
+  /**
+   * Shapley values: each root's average marginal effect on a cell over every
+   * order in which the roots could have been applied. Unlike `butFor`'s
+   * one-at-a-time contributions, they add up: to the cell's change, less
+   * whatever no undoable edit explains (added rows, say). Cells are grouped
+   * by the roots that reach them (their players); each group recalculates
+   * its region once per subset of players, so a group costs 2^players
+   * passes. Groups over `maxPlayers` are skipped (their cells keep `butFor`'s
+   * contributions), as are groups that touch a formula the engine can't
+   * evaluate, and the whole pass stops when the evaluation budget runs out.
+   */
+  const shapley = (rootList: Root[], maxPlayers: number) => {
+    const out = new Map<number, Map<number, Shares>>();
+    if (truncated) return out;
+    // Its own budget: running out leaves cells with but-for contributions, not a truncated trace.
+    let spent = 0;
+    const spend = () => {
+      if (++spent > evalBudget) throw new Unsupported('shapley budget');
+    };
+    let exhausted = false;
+    // Cell → the roots that reach it.
+    const playersOf = new Map<number, number[]>();
+    for (const [ri, reach] of reachOf) {
+      for (const d of reach) {
+        const ref = toAligned('new', d);
+        if (!ref || traces[ref.sheet].get(traceKey(ref))?.kind !== 'computed') continue;
+        let p = playersOf.get(d);
+        if (!p) playersOf.set(d, (p = []));
+        p.push(ri);
+      }
+    }
+    // Group cells by player set. (A lone player's value is its but-for contribution, but
+    // computing it is one pass, and keeps every cell's attribution the same kind.)
+    const groups = new Map<string, { players: number[]; cells: number[] }>();
+    for (const [d, players] of playersOf) {
+      if (players.length > maxPlayers) continue;
+      const k = players.join(',');
+      let g = groups.get(k);
+      if (!g) groups.set(k, (g = { players, cells: [] }));
+      g.cells.push(d);
+    }
+    const factorial = (n: number) => {
+      let f = 1;
+      for (let i = 2; i <= n; i++) f *= i;
+      return f;
+    };
+    // Cheapest groups first, so a budget that runs out leaves the fewest cells without.
+    const planned = [...groups.values()].map((g) => {
+      const region = new Set<number>();
+      for (const ri of g.players) for (const d of reachOf.get(ri)!) region.add(d);
+      return { ...g, region, cost: ((1 << g.players.length) - 1) * region.size };
+    });
+    planned.sort((a, b) => a.cost - b.cost);
+    for (const { players, cells, region, cost } of planned) {
+      if (exhausted) break;
+      // Don't start what can't finish: 2^n − 1 passes over the region at most.
+      if (cost > evalBudget - spent) continue;
+      const n = players.length;
+      const formulaRoots = new Map<number, number>(); // cell id → player position
+      const inputRoots: number[] = [];
+      players.forEach((ri, i) => {
+        const id = rootList[ri].id;
+        if (rootList[ri].trace.kind === 'formula') {
+          region.add(id);
+          formulaRoots.set(id, i);
+        } else inputRoots.push(i);
+      });
+      const { order, preds, cyclic } = topoOrder(players.map((ri) => rootList[ri].id), region, graph);
+      if (cyclic.length) continue;
+      // f[mask]: each cell's value with the players in `mask` applied and the rest undone.
+      const f: Float64Array[] = cells.map(() => new Float64Array(1 << n));
+      const full = (1 << n) - 1;
+      let ok = true;
+      for (let mask = 0; mask <= full && ok; mask++) {
+        const saved = new Map<number, Scalar | undefined>();
+        const set = (k: number, v: Scalar) => {
+          if (!saved.has(k)) saved.set(k, newHost.overrides.has(k) ? newHost.overrides.get(k) : undefined);
+          newHost.override(k, v);
+        };
+        try {
+          const changed = new Set<number>();
+          for (const i of inputRoots) {
+            if (mask & (1 << i)) continue;
+            const id = rootList[players[i]].id;
+            set(sheetKey('new', id), withoutOf.get(players[i]) ?? null);
+            changed.add(id);
+          }
+          if (mask !== full) {
+            for (const d of order) {
+              const moved = (preds.get(d) ?? []).some((x) => changed.has(x));
+              const pos = formulaRoots.get(d);
+              let v: Scalar;
+              if (pos !== undefined && !(mask & (1 << pos))) {
+                // An undone formula edit: the old formula on these inputs, where its text still fits.
+                const oid = oldIdOf(rootList[players[pos]].ref);
+                const oldFormula = oid !== null ? formulaAt('old', oid) : null;
+                if (!oldFormula || !sameLayout()) throw new Unsupported('old formula elsewhere');
+                const sh = idSheet(d);
+                const o = originOf(newTables[sh]);
+                spend();
+                v = newEngine.evaluate(oldFormula, newHost.sheets[sh], idRow(d) + o.row, idCol(d) + o.col, false).value;
+              } else {
+                if (!moved) continue;
+                if (!modelled.has(d)) throw new Unsupported('unmodelled formula');
+                spend();
+                const sh = idSheet(d);
+                const o = originOf(newTables[sh]);
+                v = newEngine.evaluate(compileAt('new', d, formulaAt('new', d)!), newHost.sheets[sh], idRow(d) + o.row, idCol(d) + o.col, false).value;
+              }
+              if (sameResult(v, valueOf(d), diff.date1904?.new)) continue;
+              set(sheetKey('new', d), v);
+              changed.add(d);
+            }
+          }
+          cells.forEach((d, ci) => {
+            const k = sheetKey('new', d);
+            const v = newHost.overrides.has(k) ? newHost.overrides.get(k)! : valueOf(d);
+            if (typeof v !== 'number') ok = false;
+            else f[ci][mask] = v;
+          });
+        } catch (e) {
+          if (!(e instanceof Unsupported)) throw e;
+          ok = false;
+          if (spent > evalBudget) exhausted = true;
+        } finally {
+          for (const [k, v] of saved) newHost.override(k, v);
+        }
+      }
+      if (!ok) continue;
+      // φ_i = Σ over subsets S without i of |S|!(n−|S|−1)!/n! · (f(S ∪ i) − f(S)).
+      const weight: number[] = [];
+      for (let size = 0; size < n; size++) weight[size] = (factorial(size) * factorial(n - size - 1)) / factorial(n);
+      const bits = (m: number) => {
+        let c = 0;
+        for (; m; m &= m - 1) c++;
+        return c;
+      };
+      cells.forEach((d, ci) => {
+        const values = players.map((_, i) => {
+          let phi = 0;
+          for (let mask = 0; mask <= full; mask++) {
+            if (mask & (1 << i)) continue;
+            phi += weight[bits(mask)] * (f[ci][mask | (1 << i)] - f[ci][mask]);
+          }
+          return Number(phi.toPrecision(15));
+        });
+        const ref = toAligned('new', d)!;
+        let m = out.get(ref.sheet);
+        if (!m) out.set(ref.sheet, (m = new Map()));
+        m.set(traceKey(ref), { players, values });
+      });
+    }
+    return out;
+  };
+
+  return { graph, modelled, unmodelled, get truncated() { return truncated; }, butFor, shapley };
 }
 
 /** Engine value → table cell value (errors as their text). */

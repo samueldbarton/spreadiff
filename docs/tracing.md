@@ -123,7 +123,68 @@ Contributions needn't add up to the total change. Edits interact: a rate
 times a balance, an `IF` that needs two inputs to cross a threshold. A
 result can also have two edits that would each have been enough on their
 own. When no single edit makes a difference, the causes fall back to the
-next method.
+next method. For parts that add up, ask for Shapley contributions
+([below](#contributions-that-add-up)).
+
+## Contributions that add up
+
+Price went from 10 to 12 and volume from 5 to 6, so revenue went from 50
+to 72: up 22. Undo the price alone and revenue is 60, so the price
+"contributed" 12. Undo the volume alone and it is also 60: another 12.
+That's 24 for a change of 22. Neither number is wrong; the extra 2 is the
+interaction (2 more units at 2 more each), and one-at-a-time measurement
+counts it twice.
+
+`contributions: 'shapley'` splits the change so the parts add up:
+
+```ts
+import { traceWorkbook, type WorkbookDiff } from 'spreadiff';
+declare const workbookDiff: WorkbookDiff;
+
+const trace = traceWorkbook(workbookDiff, { contributions: 'shapley' });
+```
+
+Each edit gets its average effect over every order in which the edits
+could have been applied: the [Shapley value](https://en.wikipedia.org/wiki/Shapley_value).
+Here, price first moves revenue by 10 (50 → 60) and price second by 12
+(60 → 72), so the price gets 11, and the volume by symmetry also 11. The
+parts sum to 22. With one edit the two methods agree; they differ only
+where edits interact.
+
+| | `'but-for'` (default) | `'shapley'` |
+| --- | --- | --- |
+| Each number means | The result now, minus the result without that edit | That edit's average effect over every order of applying the edits |
+| Parts add up to the change | Only when edits don't interact | Yes, less anything an added or removed row explains |
+| Edits that mattered only together (`MAX` of two raised inputs) | Not causes | Causes, with their share |
+| Cost | One recalculation per edit | One per *subset* of the edits that reach a result: 2ⁿ for n edits |
+
+A loan in the test corpus shows the difference. An extra monthly payment
+pays it off early, so the final balance falls from 134,577 to 0, while the
+interest rate went up. By but-for, the rate isn't a cause: with the extra
+payment, the balance is 0 at either rate. By Shapley, the rate gets
++2,520, the extra payment −137,097, and they sum to −134,577. The rate did
+push the balance up, in every order where it came before the payment.
+
+`CellTrace.attribution` says which method a result's numbers came from.
+A result reached by more than 10 edits keeps but-for contributions (2¹⁰
+recalculations is the ceiling), as do results past `evaluationBudget`;
+groups too large for the budget are skipped before any work starts. Added
+and removed rows can't be undone cell by cell, so they stay outside the
+split: a result's Shapley parts add up to its change less what they did.
+
+In `spreadiff-lite`, it's `--shapley`; in `SpreadsheetDiff`,
+`compare: { trace: { contributions: 'shapley' } }`, and the outputs
+panel's waterfall then has no "interaction" bar.
+
+**How it was tested.** On the 16 real-file fixtures with at most 8 edits
+and no added or removed rows, LibreOffice recalculates the new file with
+every subset of the edits undone, and the Shapley values are computed from
+its results: all 1,918 Shapley-attributed results match spreadiff's,
+for every edit, including the ones spreadiff gave nothing
+(`npm run bench:shapley`, run in CI). On those files, Shapley adds 0 to
+50 ms to the trace. A synthetic worst case (10 edits all feeding a
+5,000-formula chain: 1,024 passes) exceeds the budget, keeps but-for, and
+costs nothing extra.
 
 ### When it can't recalculate
 
@@ -343,10 +404,14 @@ falls back to references and sets `truncated`.
 
 ## Limits
 
-- **Contributions are one edit at a time.** Undoing a single edit measures
-  its marginal effect with all the others in place. For interacting edits
-  (rate × balance), the parts don't sum to the whole, and no split of an
-  interaction term is unique.
+- **Contributions are one edit at a time by default.** Undoing a single
+  edit measures its marginal effect with all the others in place, so for
+  interacting edits (rate × balance) the parts don't sum to the whole.
+  [Shapley contributions](#contributions-that-add-up) do, but no split of
+  an interaction term is the only right one: Shapley's is the one that
+  treats every order of the edits alike. A sequential bridge in a stated
+  order (volume first, then price) gives different, equally valid numbers,
+  and isn't offered.
 - **An edited formula's undo needs the layout to line up.** It
   re-evaluates the old formula on today's inputs, which is only valid when
   no rows or columns were inserted or deleted (the old formula's
