@@ -3,6 +3,47 @@
 Versions from 0.2.0 are published to npm; 0.1.0 was the package version in
 the repository only.
 
+## Unreleased
+
+### Added
+
+- **Translations.** `strings` (a partial `DiffStrings`) translates
+  everything `DiffGrid` and `SpreadsheetDiff` show or announce, and
+  `locale` formats counts. `ENGLISH_STRINGS` has the defaults. See
+  `docs/grid.md#translating-the-grid`.
+- **More keys in the grid**, as the ARIA grid pattern lists them:
+  Home/End (the row's first and last column), Ctrl+Home/End (the first and
+  last cell), PageUp/PageDown (a screenful). Shift extends a range with
+  each. The sheet tabs take Home and End.
+- `require('spreadiff')` works on Node 20.19+ and 22.12+: the `exports`
+  have a `default` condition. `spreadiff/package.json` is exported.
+- `SpreadsheetDiff` takes `decisions`, to restore a saved review or keep
+  decisions in React state (`decisions={d} onDecisionsChange={setD}`).
+- A `SpreadsheetDiff.render` that a newer one replaces now cancels its
+  URL fetches (before, they ran to the end and were discarded).
+  Comparing itself, once started, still runs to the end.
+- CI runs the browser suite in Firefox and WebKit too, and fails when a
+  bundle grows past its gzip budget (`npm run size -- --check`).
+
+### Fixed
+
+- **Keyboard focus is visible.** Tabbing into the grid drew nothing
+  (WCAG 2.4.7); it now draws a focus ring. The "Show more" outputs button
+  had no focus style either.
+- **Windows High Contrast.** Under forced colours every theme colour
+  resolved to the same system colour, so the grid drew as a solid block.
+  It now draws in the system colours, and follows the mode when it
+  changes.
+- **The selection ring meets 3:1** against every background: it now
+  defaults to `--sd-modified-fg`, not `--sd-modified` (2.8:1 on white).
+- **`spreadiff/react` in a Next.js server component.** The entry now
+  starts with `'use client'`; before, the build failed with
+  `useRef is not a function`.
+- Changing `ariaLabel` (or `strings`) updated what a screen reader hears
+  only after the next scroll or selection.
+- Counts in `SpreadsheetDiff` were always formatted for `en-US`; they
+  follow `locale` (default: the browser's), like the grid's.
+
 ## 0.2.0
 
 ### Added

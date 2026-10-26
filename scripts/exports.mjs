@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../packages/spreadiff/', import.meta.url));
 const pkg = JSON.parse(readFileSync(root + 'package.json', 'utf8'));
 const entries = Object.entries(pkg.exports)
+  .filter(([, v]) => typeof v === 'object') // not './package.json'
   .map(([k, v]) => [k === '.' ? 'spreadiff' : `spreadiff/${k.slice(2)}`, root + v.import.replace('./dist/', 'src/').replace(/\.js$/, '.ts')])
   .map(([k, f]) => [k, f.endsWith('react/index.ts') ? f.replace(/\.ts$/, '.tsx') : f]);
 // spreadiff-lite is a package of its own; its API is documented in docs/api.md too.

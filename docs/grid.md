@@ -159,6 +159,8 @@ In every display:
 | `onSelectionChange` | — | `(cell \| null)`, whenever the selection changes, by any means |
 | `accessibility` | `true` | Mirror the visible cells as hidden ARIA rows and cells for screen readers; see [Accessibility](#accessibility) |
 | `ariaLabel` | a change summary | The grid's accessible name, e.g. "Spreadsheet diff: 3 rows modified, 1 row added, 7 cells changed" |
+| `strings` | English | The grid's words, to translate them; see [Translating the grid](#translating-the-grid) |
+| `locale` | the browser's | BCP 47 locale for counts ("1,234 unchanged rows") |
 
 Callbacks receive a [`CellInfo`](api.md#cellinfo): the aligned row and
 column, row status, old and new values and formulas, whether the cell
@@ -186,6 +188,10 @@ changed or its row moved, its change kind, and its trace.
 | --- | --- |
 | `n` or `j` / `p` or `k` | Next / previous change |
 | Arrow keys | Move the selection (starts at the top visible row) |
+| Home / End | The first / last column of the row |
+| Ctrl+Home / Ctrl+End | The first / last cell of the grid |
+| PageUp / PageDown | Up / down by a screenful of rows |
+| Shift + any of the above | Extend a range instead of moving |
 | ⌘C / Ctrl+C | Copy the selected cell's value (full precision) |
 | Esc | Clear the selection |
 | Tab | Leave the grid (never trapped) |
@@ -196,6 +202,37 @@ changed or its row moved, its change kind, and its trace.
 | Drag a header's right edge | Resize the column |
 
 The grid takes keyboard input when it has focus: click it, or Tab to it.
+Tabbing to it draws a focus ring around it; a click doesn't (the selected
+cell shows where you are).
+
+## Translating the grid
+
+Everything the grid and `SpreadsheetDiff` say is in the `strings` option:
+what a screen reader hears, the popover, the "N unchanged rows"
+separators, the sheet tabs, the outputs panel and the review bar. Set the
+ones you need; the rest stay English. `locale` formats counts.
+
+```ts
+import { DiffGrid, type DiffStrings } from 'spreadiff';
+
+const german: Partial<DiffStrings> = {
+  gridSummary: (parts) => `Tabellenvergleich: ${parts.join(', ') || 'keine Änderungen'}`,
+  summaryCellsChanged: (count, n) => `${count} ${n === 1 ? 'Zelle' : 'Zellen'} geändert`,
+  rowHeaderColumn: 'Zeile',
+  unchangedRows: (count, n) => `${count} unveränderte ${n === 1 ? 'Zeile' : 'Zeilen'}`,
+  was: (value) => `vorher ${value}`,
+};
+
+new DiffGrid({ strings: german, locale: 'de-DE' }).render({ diff, container });
+```
+
+Messages that contain a number get it twice: `count`, formatted for the
+locale, to show, and `n`, to choose a plural form. [`ENGLISH_STRINGS`](api.md#english_strings)
+holds every default. Cell values, sheet and column names and formulas
+aren't translated: they show as the file has them. Two things aren't
+covered yet: right-to-left layout (the grid always runs left to right),
+and the descriptions of changed charts, names and pivot tables, which
+come from `spreadiff/core` in English.
 
 ## Annotations
 

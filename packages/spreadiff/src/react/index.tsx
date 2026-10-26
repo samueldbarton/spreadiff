@@ -1,3 +1,5 @@
+'use client';
+
 import {
   forwardRef,
   useEffect,
@@ -255,4 +257,5 @@ export const SpreadsheetDiff = forwardRef(function SpreadsheetDiff<A>(
 
 export type { CellAnnotation, CellDisplay, CellInfo, DiffGridOptions, DiffLayout, GridRange, TraceContext } from '../render/DiffGrid.js';
 export type { SpreadsheetDiffOptions } from '../render/SpreadsheetDiff.js';
+export type { DiffStrings } from '../render/strings.js';
 export type { Comparison, SheetView, SpreadsheetInput } from '../core/compare.js';

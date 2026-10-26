@@ -22,32 +22,40 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./core": {
       "types": "./dist/core/index.d.ts",
-      "import": "./dist/core/index.js"
+      "import": "./dist/core/index.js",
+      "default": "./dist/core/index.js"
     },
     "./html": {
       "types": "./dist/html/index.d.ts",
-      "import": "./dist/html/index.js"
+      "import": "./dist/html/index.js",
+      "default": "./dist/html/index.js"
     },
     "./xlsx": {
       "types": "./dist/core/xlsx.d.ts",
-      "import": "./dist/core/xlsx.js"
+      "import": "./dist/core/xlsx.js",
+      "default": "./dist/core/xlsx.js"
     },
     "./react": {
       "types": "./dist/react/index.d.ts",
-      "import": "./dist/react/index.js"
+      "import": "./dist/react/index.js",
+      "default": "./dist/react/index.js"
     },
     "./worker": {
       "types": "./dist/worker/index.d.ts",
-      "import": "./dist/worker/index.js"
+      "import": "./dist/worker/index.js",
+      "default": "./dist/worker/index.js"
     },
     "./worker/worker.js": {
       "types": "./dist/worker/worker.d.ts",
-      "import": "./dist/worker/worker.js"
-    }
+      "import": "./dist/worker/worker.js",
+      "default": "./dist/worker/worker.js"
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
