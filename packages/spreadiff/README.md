@@ -22,8 +22,8 @@ new DiffGrid({ layout: 'split', cellDisplay: 'delta' }).render({ diff, container
 | Import | Contents | min + gzip |
 | --- | --- | --- |
 | `spreadiff/html` | Diff engine, CSV parser, number formats, HTML and text renderers. No DOM APIs | 19.9 KB |
-| `spreadiff/core` | + XLSX, XLSB, XLS and ODS readers, formula engine, tracing, review and merge | 74.2 KB |
-| `spreadiff` | + canvas `DiffGrid` and `SpreadsheetDiff` | 103.3 KB |
+| `spreadiff/core` | + XLSX, XLSB, XLS and ODS readers, formula engine, tracing, review and merge | 75.7 KB |
+| `spreadiff` | + canvas `DiffGrid` and `SpreadsheetDiff` | 104.9 KB |
 | `spreadiff/react` | React component for `DiffGrid` (React 18+) | + React |
 | `spreadiff/worker` | Parse, diff and trace in a Web Worker | |
 

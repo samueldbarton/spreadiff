@@ -341,6 +341,7 @@ spreadiff-lite OLD NEW [options]
 | `--keys COL[,COL]` | Match rows on these columns |
 | `--header auto\\|yes\\|no` | Whether row 1 holds column names (default `auto`) |
 | `--no-recalc` | Follow formula references instead of recalculating: faster, may over-attribute, no contributions |
+| `--shapley` | Split each result's change so its contributions add up (Shapley values; see [Contributions that add up](tracing.md#contributions-that-add-up)) |
 | `--live NAME[,NAME]` | More data-feed functions to treat as inputs, as `Provider:FN,FN` or `FN` |
 | `--tolerance X` | Numbers within X of each other are equal |
 | `--min-change P` | Ignore moves smaller than this share of the number (`0.1%` or `0.001`): a materiality threshold |

@@ -5,7 +5,26 @@ the repository only.
 
 ## Unreleased
 
+### Changed
+
+- **Node 20.19 or later** (`engines`), for `spreadiff` and `spreadiff-lite`.
+  Node 18 reached end of life in April 2025, and 20.19 is where `require()`
+  of an ES module works. CI runs the unit tests, `require()` and the CLI
+  on Node 20.19.0.
+
 ### Added
+
+- **Contributions that add up.** `traceWorkbook(diff, { contributions:
+  'shapley' })` splits each result's change among its edits by Shapley
+  value: each edit's average effect over every order of applying them.
+  Unlike the default one-at-a-time (`'but-for'`) numbers, they sum to the
+  change, and edits that mattered only together (`MAX` of two raised
+  inputs) become causes. `CellTrace.attribution` and the report's
+  `attribution` say which method a result used; results reached by more
+  than 10 edits, or past the evaluation budget, keep but-for numbers.
+  `spreadiff-lite --shapley`. On the real-file fixtures every one of
+  1,918 Shapley-attributed results matches LibreOffice recalculating each
+  subset of the edits (`npm run bench:shapley`, in CI).
 
 - **Translations.** `strings` (a partial `DiffStrings`) translates
   everything `DiffGrid` and `SpreadsheetDiff` show or announce, and

@@ -41,6 +41,20 @@ describe('compare: a regional model saved by Excel', () => {
     expect(r.totals).toMatchObject({ inputs: 1, external: 1, formulas: 0, recalculated: r.totals.downstream, unexplained: 0 });
   });
 
+  it('with Shapley contributions, a result\'s parts add up to its change', async () => {
+    const [a, b] = await files({ growth: 0.12, inr: 84 });
+    const r = compare(a, b, { trace: { contributions: 'shapley' } });
+    const c6 = r.downstream.find((c) => c.id === 'Model!C6')!;
+    expect(c6.attribution).toBe('shapley');
+    const by = Object.fromEntries(c6.causes!.map((c) => [c.label, c.contribution!]));
+    // Profit (8300 − 4150) × (1 + growth) / FX: each edit's effect, averaged over both orders.
+    const f = (g: number, fx: number) => (4150 * (1 + g)) / fx;
+    expect(by['Growth']).toBeCloseTo(((f(0.12, 83) - f(0.1, 83)) + (f(0.12, 84) - f(0.1, 84))) / 2, 10);
+    expect(by['USD/INR']).toBeCloseTo(((f(0.1, 84) - f(0.1, 83)) + (f(0.12, 84) - f(0.12, 83))) / 2, 10);
+    expect(by['Growth'] + by['USD/INR']).toBeCloseTo((c6.after as number) - (c6.before as number), 10);
+    expect(r.notes.join(' ')).toMatch(/Shapley values/);
+  });
+
   it('puts final outputs first', async () => {
     const [a, b] = await files({ growth: 0.12 });
     const r = compare(a, b);

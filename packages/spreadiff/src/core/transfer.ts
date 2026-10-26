@@ -218,7 +218,7 @@ export function unpackWorkbookDiff(p: PackedWorkbookDiff): WorkbookDiff {
 export interface PackedSheetTrace {
   /** Trace keys (`row * columns.length + col`), in `WorkbookTrace.sheet()` order. */
   keys: Float64Array;
-  /** Per trace: kind (index into `input, formula, computed, added, removed`), method (0 none, 1 recalculated, 2 references), unexplained (0 none, 1 volatile, 2 dynamic, 3 unknown), and whether it has contributions. */
+  /** Per trace: kind (index into `input, formula, computed, added, removed`), method (0 none, 1 recalculated, 2 references), unexplained (0 none, 1 volatile, 2 dynamic, 3 unknown), and its contributions (0 none, 1 but-for, 2 Shapley). */
   codes: Uint8Array;
   /** Per trace: `causeCount` and `impactCount`. */
   counts: Uint32Array;
@@ -278,7 +278,7 @@ function packSheetTrace(traces: ReadonlyMap<number, CellTrace>): PackedSheetTrac
     codes[i * 4] = KINDS.indexOf(t.kind);
     codes[i * 4 + 1] = METHODS.indexOf(t.method);
     codes[i * 4 + 2] = UNEXPLAINED.indexOf(t.unexplained);
-    codes[i * 4 + 3] = t.contributions ? 1 : 0;
+    codes[i * 4 + 3] = t.contributions ? (t.attribution === 'shapley' ? 2 : 1) : 0;
     counts[i * 2] = t.causeCount;
     counts[i * 2 + 1] = t.impactCount;
     causeAt[i] = nRefs;
@@ -318,6 +318,7 @@ function unpackSheetTrace(p: PackedSheetTrace): Map<number, CellTrace> {
       const c: (number | null)[] = [];
       for (let j = p.contribAt[i]; j < p.contribAt[i + 1]; j++) c.push(Number.isNaN(p.contributions[j]) ? null : p.contributions[j]);
       t.contributions = c;
+      t.attribution = p.codes[i * 4 + 3] === 2 ? 'shapley' : 'but-for';
     }
     const method = METHODS[p.codes[i * 4 + 1]];
     if (method) t.method = method;

@@ -13,7 +13,7 @@ on this page is a range across repeated runs. Single runs varied by up to
 | How long does the diff take? | 1.1–1.3 s keyed in the browser's worker; 2.9–5.0 s in Node without a key |
 | How long until it's on screen? | 7.4–8.4 s in the benchmark: generate + parse 4.8–4.9 s, diff 1.1–1.3 s, transfer 1.5–2.2 s |
 | How long does a recalculated trace take? | 0.24–0.36 s for a 10,000-formula model; 4.2–5.9 s for 300,000 formulas, 3–5× the references-only trace. See [Tracing → Cost](tracing.md#cost) |
-| What does it cost to ship? | 19.9 KB gzip for `spreadiff/html`, 103.3 KB for everything; less for what you import (below) |
+| What does it cost to ship? | 19.9 KB gzip for `spreadiff/html`, 104.9 KB for everything; less for what you import (below) |
 
 The rest of the page shows where each number comes from.
 
@@ -136,8 +136,8 @@ tree-shaken):
 | Entry | min | gzip | Contents |
 | --- | --- | --- | --- |
 | `spreadiff/html` | 51.1 KB | **19.9 KB** | Diff engine, CSV parser, number formats, HTML/text renderer |
-| `spreadiff/core` | 190.4 KB | 74.2 KB | + every file reader, formula engine, tracing, review and merge |
-| `spreadiff` | 282.6 KB | 103.3 KB | + canvas `DiffGrid` and `SpreadsheetDiff` |
+| `spreadiff/core` | 194.1 KB | 75.7 KB | + every file reader, formula engine, tracing, review and merge |
+| `spreadiff` | 286.4 KB | 104.9 KB | + canvas `DiffGrid` and `SpreadsheetDiff` |
 
 The XLSX reader uses [fflate](https://github.com/101arrowz/fflate), which is
 counted in `core`. Most of `core` is now the formula engine used for
@@ -153,7 +153,7 @@ cost depends on what you call (gzip, measured the same way):
 | `parseXlsx` (with the engine, for missing values) | 29.5 KB |
 | `parseFile` (every reader) | 43.0 KB |
 | `DiffGrid`, `diffTables` | 37.6 KB |
-| `SpreadsheetDiff` (everything it shows) | 99.8 KB |
+| `SpreadsheetDiff` (everything it shows) | 101.3 KB |
 
 `parseFile` costs about 13 KB more than `parseXlsx` because it can read
 any format; import `parseXlsx` if .xlsx is all you need. `spreadiff/react` adds a thin wrapper on top of

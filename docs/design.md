@@ -146,7 +146,7 @@ calling `String(Number(x))` per field.
 
 The reader handles values, shared strings, dates, booleans and shared
 formulas, on top of [fflate](https://github.com/101arrowz/fflate). The
-whole `core` entry, tracing and the other readers included, is 74.2 KB gzip;
+whole `core` entry, tracing and the other readers included, is 75.7 KB gzip;
 `parseXlsx` alone, with the engine it uses to compute missing values, is
 about 30 KB.
 

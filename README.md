@@ -62,7 +62,8 @@ report.
   formula edit, or a downstream result. For each result, spreadiff finds
   the edits that actually moved it by undoing each one and recalculating
   the workbook with its own formula engine. It also finds results that
-  were saved stale.
+  were saved stale. Ask for [Shapley contributions](docs/tracing.md#contributions-that-add-up)
+  and each result's parts add up to its change, interactions included.
 - **It closes the loop.** Accept or reject each change and download the
   reviewed .xlsx, with formulas and styles intact. Merge two people's edits
   to the same table by row key. See [Reviewing and merging](docs/review.md).
@@ -192,8 +193,8 @@ and `npm run test:hosted` reproduce them.
 | Import | Contents | min + gzip |
 | --- | --- | --- |
 | `spreadiff/html` | Diff engine, CSV parser, number formats, HTML and text renderers. No DOM | 19.9 KB |
-| `spreadiff/core` | + XLSX, XLSB, XLS and ODS readers, formula engine, tracing, review and merge | 74.2 KB |
-| `spreadiff` | + canvas `DiffGrid` and `SpreadsheetDiff` | 103.3 KB |
+| `spreadiff/core` | + XLSX, XLSB, XLS and ODS readers, formula engine, tracing, review and merge | 75.7 KB |
+| `spreadiff` | + canvas `DiffGrid` and `SpreadsheetDiff` | 104.9 KB |
 | `spreadiff/react` | React component for `DiffGrid` | + React |
 | `spreadiff/worker` | Parse, diff and trace in a Web Worker | |
 
@@ -212,9 +213,9 @@ how they could be wrong.
 ## Browser support
 
 The grid needs Chrome / Edge 111, Firefox 113 or Safari 16.2 (it uses
-CSS `color-mix()`). `spreadiff/html` and `spreadiff/core` run in Node 18 and any 2022+
-runtime. Testing is in Chromium and Node; Firefox and Safari aren't
-tested yet. See [Browser support](docs/browser-support.md).
+CSS `color-mix()`). `spreadiff/html` and `spreadiff/core` run in Node 20.19+ and any 2022+
+runtime. The grid is tested in Chromium, Firefox and WebKit (Playwright's
+builds), not Safari itself. See [Browser support](docs/browser-support.md).
 
 ## Limits
 

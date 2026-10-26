@@ -5412,6 +5412,7 @@ function traceWorkbook(diff, options = {}) {
     }
   });
   const exact = analysis?.butFor(roots) ?? null;
+  const shares = options.contributions === "shapley" && analysis ? analysis.shapley(roots, 10) : null;
   const stats = { inputs: 0, formulas: 0, computed: 0, unexplained: 0, stale: 0, recalculated: 0, unmodelled: analysis?.unmodelled ?? 0, external: 0 };
   diff.sheets.forEach((_, si) => {
     for (const [k, t] of traces[si]) {
@@ -5426,9 +5427,19 @@ function traceWorkbook(diff, options = {}) {
       const precise = exact?.get(si)?.get(k);
       let list;
       const structural2 = [...byRefs ?? []].filter((r) => roots[r].trace.kind !== "input" && roots[r].trace.kind !== "formula");
-      if (precise && precise.causes.length && !precise.tainted) {
+      const shared = shares?.get(si)?.get(k);
+      if (shared && !precise?.tainted && (precise?.causes.length || shared.values.some((v) => v !== 0))) {
+        const butFor = precise?.causes ?? [];
+        const ids = [...butFor, ...shared.players.filter((r, i) => shared.values[i] !== 0 && !butFor.includes(r))];
+        list = [...ids, ...structural2];
+        t.contributions = [...ids.map((r) => shared.values[shared.players.indexOf(r)]), ...structural2.map(() => null)].slice(0, maxCauses);
+        t.attribution = "shapley";
+        t.method = "recalculated";
+        stats.recalculated++;
+      } else if (precise && precise.causes.length && !precise.tainted) {
         list = [...precise.causes, ...structural2];
         t.contributions = [...precise.contributions, ...structural2.map(() => null)].slice(0, maxCauses);
+        t.attribution = "but-for";
         t.method = "recalculated";
         stats.recalculated++;
       } else {
@@ -5628,7 +5639,7 @@ function recalculate(diff, maps, traces, roots, staticNew, evalBudget) {
       }
     }
   }
-  if (truncated) return { graph: staticNew, modelled: /* @__PURE__ */ new Set(), unmodelled: 0, truncated, butFor: () => /* @__PURE__ */ new Map() };
+  if (truncated) return { graph: staticNew, modelled: /* @__PURE__ */ new Set(), unmodelled: 0, truncated, butFor: () => /* @__PURE__ */ new Map(), shapley: () => /* @__PURE__ */ new Map() };
   const modelled = /* @__PURE__ */ new Set();
   const reads = /* @__PURE__ */ new Map();
   const stale = /* @__PURE__ */ new Map();
@@ -5755,6 +5766,8 @@ function recalculate(diff, maps, traces, roots, staticNew, evalBudget) {
     for (let r = 0; r < d.rowCount; r++) if (d.oldRows[r] !== d.newRows[r]) return false;
     return true;
   });
+  const reachOf = /* @__PURE__ */ new Map();
+  const withoutOf = /* @__PURE__ */ new Map();
   const butFor = (rootList) => {
     const out = /* @__PURE__ */ new Map();
     const record = (ref) => {
@@ -5801,6 +5814,8 @@ function recalculate(diff, maps, traces, roots, staticNew, evalBudget) {
           queue2.push(d);
         }
       }
+      reachOf.set(ri, reach);
+      withoutOf.set(ri, without);
       const { order, preds, cyclic } = topoOrder([root.id], reach, graph);
       const changed = /* @__PURE__ */ new Set([root.id]);
       const tainted = new Set(cyclic);
@@ -5836,9 +5851,143 @@ function recalculate(diff, maps, traces, roots, staticNew, evalBudget) {
     });
     return out;
   };
+  const shapley = (rootList, maxPlayers) => {
+    const out = /* @__PURE__ */ new Map();
+    if (truncated) return out;
+    let spent = 0;
+    const spend = () => {
+      if (++spent > evalBudget) throw new Unsupported("shapley budget");
+    };
+    let exhausted = false;
+    const playersOf = /* @__PURE__ */ new Map();
+    for (const [ri, reach] of reachOf) {
+      for (const d of reach) {
+        const ref = toAligned("new", d);
+        if (!ref || traces[ref.sheet].get(traceKey(ref))?.kind !== "computed") continue;
+        let p = playersOf.get(d);
+        if (!p) playersOf.set(d, p = []);
+        p.push(ri);
+      }
+    }
+    const groups = /* @__PURE__ */ new Map();
+    for (const [d, players] of playersOf) {
+      if (players.length > maxPlayers) continue;
+      const k = players.join(",");
+      let g = groups.get(k);
+      if (!g) groups.set(k, g = { players, cells: [] });
+      g.cells.push(d);
+    }
+    const factorial = (n) => {
+      let f = 1;
+      for (let i = 2; i <= n; i++) f *= i;
+      return f;
+    };
+    const planned = [...groups.values()].map((g) => {
+      const region = /* @__PURE__ */ new Set();
+      for (const ri of g.players) for (const d of reachOf.get(ri)) region.add(d);
+      return { ...g, region, cost: ((1 << g.players.length) - 1) * region.size };
+    });
+    planned.sort((a, b) => a.cost - b.cost);
+    for (const { players, cells, region, cost } of planned) {
+      if (exhausted) break;
+      if (cost > evalBudget - spent) continue;
+      const n = players.length;
+      const formulaRoots = /* @__PURE__ */ new Map();
+      const inputRoots = [];
+      players.forEach((ri, i) => {
+        const id = rootList[ri].id;
+        if (rootList[ri].trace.kind === "formula") {
+          region.add(id);
+          formulaRoots.set(id, i);
+        } else inputRoots.push(i);
+      });
+      const { order, preds, cyclic } = topoOrder(players.map((ri) => rootList[ri].id), region, graph);
+      if (cyclic.length) continue;
+      const f = cells.map(() => new Float64Array(1 << n));
+      const full = (1 << n) - 1;
+      let ok = true;
+      for (let mask = 0; mask <= full && ok; mask++) {
+        const saved = /* @__PURE__ */ new Map();
+        const set = (k, v) => {
+          if (!saved.has(k)) saved.set(k, newHost.overrides.has(k) ? newHost.overrides.get(k) : void 0);
+          newHost.override(k, v);
+        };
+        try {
+          const changed = /* @__PURE__ */ new Set();
+          for (const i of inputRoots) {
+            if (mask & 1 << i) continue;
+            const id = rootList[players[i]].id;
+            set(sheetKey("new", id), withoutOf.get(players[i]) ?? null);
+            changed.add(id);
+          }
+          if (mask !== full) {
+            for (const d of order) {
+              const moved = (preds.get(d) ?? []).some((x) => changed.has(x));
+              const pos = formulaRoots.get(d);
+              let v;
+              if (pos !== void 0 && !(mask & 1 << pos)) {
+                const oid = oldIdOf(rootList[players[pos]].ref);
+                const oldFormula = oid !== null ? formulaAt("old", oid) : null;
+                if (!oldFormula || !sameLayout()) throw new Unsupported("old formula elsewhere");
+                const sh = idSheet(d);
+                const o = originOf(newTables[sh]);
+                spend();
+                v = newEngine.evaluate(oldFormula, newHost.sheets[sh], idRow(d) + o.row, idCol(d) + o.col, false).value;
+              } else {
+                if (!moved) continue;
+                if (!modelled.has(d)) throw new Unsupported("unmodelled formula");
+                spend();
+                const sh = idSheet(d);
+                const o = originOf(newTables[sh]);
+                v = newEngine.evaluate(compileAt("new", d, formulaAt("new", d)), newHost.sheets[sh], idRow(d) + o.row, idCol(d) + o.col, false).value;
+              }
+              if (sameResult(v, valueOf(d), diff.date1904?.new)) continue;
+              set(sheetKey("new", d), v);
+              changed.add(d);
+            }
+          }
+          cells.forEach((d, ci) => {
+            const k = sheetKey("new", d);
+            const v = newHost.overrides.has(k) ? newHost.overrides.get(k) : valueOf(d);
+            if (typeof v !== "number") ok = false;
+            else f[ci][mask] = v;
+          });
+        } catch (e) {
+          if (!(e instanceof Unsupported)) throw e;
+          ok = false;
+          if (spent > evalBudget) exhausted = true;
+        } finally {
+          for (const [k, v] of saved) newHost.override(k, v);
+        }
+      }
+      if (!ok) continue;
+      const weight = [];
+      for (let size = 0; size < n; size++) weight[size] = factorial(size) * factorial(n - size - 1) / factorial(n);
+      const bits2 = (m) => {
+        let c = 0;
+        for (; m; m &= m - 1) c++;
+        return c;
+      };
+      cells.forEach((d, ci) => {
+        const values = players.map((_, i) => {
+          let phi = 0;
+          for (let mask = 0; mask <= full; mask++) {
+            if (mask & 1 << i) continue;
+            phi += weight[bits2(mask)] * (f[ci][mask | 1 << i] - f[ci][mask]);
+          }
+          return Number(phi.toPrecision(15));
+        });
+        const ref = toAligned("new", d);
+        let m = out.get(ref.sheet);
+        if (!m) out.set(ref.sheet, m = /* @__PURE__ */ new Map());
+        m.set(traceKey(ref), { players, values });
+      });
+    }
+    return out;
+  };
   return { graph, modelled, unmodelled, get truncated() {
     return truncated;
-  }, butFor };
+  }, butFor, shapley };
 }
 function toCellValue2(v) {
   return isError(v) ? v.code : v;
@@ -8504,6 +8653,7 @@ function reportOf(diff, trace, oldName = "old", newName = "new") {
     }
     c.causeCount = t.causeCount;
     if (t.method) c.method = t.method;
+    if (t.attribution) c.attribution = t.attribution;
     if (t.unexplained) c.unexplained = t.unexplained;
     const causes = t.causes.map((r, i) => Object.defineProperty({ id: locate(r).id, label: locate(r).label, contribution: t.contributions?.[i] ?? null }, "ref", { value: r }));
     causes.sort((x, y) => Math.abs(y.contribution ?? 0) - Math.abs(x.contribution ?? 0));
@@ -8592,6 +8742,12 @@ function reportOf(diff, trace, oldName = "old", newName = "new") {
   if (st.external) notes.push(`${st.external} value${st.external === 1 ? "" : "s"} came from outside data (a data add-in, a web or RTD function, or another workbook). ${st.external === 1 ? "It is" : "They are"} taken as saved, not recalculated.`);
   const byRefs = downstream.filter((c) => c.method === "references").length;
   if (byRefs) notes.push(`${byRefs} downstream result${byRefs === 1 ? "'s causes come" : "s' causes come"} from formula references, not recalculation (a formula on the path couldn't be evaluated). They may list a cause that didn't matter, and have no contributions.`);
+  const shapley = downstream.filter((c) => c.attribution === "shapley").length;
+  if (shapley) {
+    notes.push("Contributions are Shapley values: each edit's average effect over every order of applying the edits, so a result's contributions add up to its change (less anything an added or removed row explains).");
+    const oneByOne = downstream.filter((c) => c.attribution === "but-for").length;
+    if (oneByOne) notes.push(`${oneByOne} result${oneByOne === 1 ? " is" : "s are"} reached by more than 10 edits (or ran past the evaluation budget) and ${oneByOne === 1 ? "has" : "have"} one-at-a-time contributions instead, which needn't add up.`);
+  }
   if (st.unexplained) notes.push(`${st.unexplained} result${st.unexplained === 1 ? "" : "s"} changed with no edit found upstream (volatile functions such as NOW, or files calculated by different apps).`);
   if (trace.truncated) notes.push("The workbook was too large to trace completely; some causes may be missing.");
   const computed = [diff.computedValues?.old, diff.computedValues?.new].reduce((n, c) => n + (c?.computed ?? 0), 0);

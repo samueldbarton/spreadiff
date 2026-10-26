@@ -26,7 +26,8 @@
     "bench:engine": "node bench/engine-fuzz/run.mjs",
     "build:action": "npm run build -w spreadiff && node scripts/build-action.mjs",
     "test:action": "node scripts/test-action.mjs",
-    "check:pack": "node scripts/check-pack.mjs"
+    "check:pack": "node scripts/check-pack.mjs",
+    "bench:shapley": "node bench/trace-eval/shapley.mjs 8 bench/trace-eval/work/shapley.json && python3 bench/trace-eval/shapley_oracle.py bench/trace-eval/work/shapley.json bench/trace-eval/work"
   },
   "devDependencies": {
     "axe-core": "^4.14.0",

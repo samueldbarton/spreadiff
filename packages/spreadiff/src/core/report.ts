@@ -45,6 +45,8 @@ export interface CellChange {
   causeCount?: number;
   /** For `computed`: `recalculated` (exact) or `references` (by formula references: may include a cause that didn't matter). */
   method?: 'recalculated' | 'references';
+  /** For `computed` with contributions: `but-for` (one edit at a time) or `shapley` (they add up). See `CellTrace.attribution`. */
+  attribution?: 'but-for' | 'shapley';
   /** For `computed`: nothing else that changed depends on it (a final output, not an intermediate step). */
   output?: boolean;
   /** For `computed` with no traced cause: why. */
@@ -61,7 +63,12 @@ export interface Cause {
   id: string;
   /** Its label. */
   label: string;
-  /** How much of the change it accounts for: the result now minus the result without that edit. Null when not recalculated or not numeric. */
+  /**
+   * How much of the change it accounts for. With `attribution: 'but-for'`,
+   * the result now minus the result without that edit; with `'shapley'`, its
+   * average effect over every order of applying the edits. Null when not
+   * recalculated or not numeric.
+   */
   contribution: number | null;
   /** Where the edit is in the diff. Not enumerable. */
   readonly ref: CellRef;
@@ -198,6 +205,7 @@ export function reportOf(diff: WorkbookDiff, trace: WorkbookTrace, oldName = 'ol
     }
     c.causeCount = t.causeCount;
     if (t.method) c.method = t.method;
+    if (t.attribution) c.attribution = t.attribution;
     if (t.unexplained) c.unexplained = t.unexplained;
     const causes = t.causes.map((r, i) => Object.defineProperty({ id: locate(r).id, label: locate(r).label, contribution: t.contributions?.[i] ?? null }, 'ref', { value: r }) as Cause);
     causes.sort((x, y) => Math.abs(y.contribution ?? 0) - Math.abs(x.contribution ?? 0));
@@ -290,6 +298,12 @@ export function reportOf(diff: WorkbookDiff, trace: WorkbookTrace, oldName = 'ol
   if (st.external) notes.push(`${st.external} value${st.external === 1 ? '' : 's'} came from outside data (a data add-in, a web or RTD function, or another workbook). ${st.external === 1 ? 'It is' : 'They are'} taken as saved, not recalculated.`);
   const byRefs = downstream.filter((c) => c.method === 'references').length;
   if (byRefs) notes.push(`${byRefs} downstream result${byRefs === 1 ? "'s causes come" : "s' causes come"} from formula references, not recalculation (a formula on the path couldn't be evaluated). They may list a cause that didn't matter, and have no contributions.`);
+  const shapley = downstream.filter((c) => c.attribution === 'shapley').length;
+  if (shapley) {
+    notes.push("Contributions are Shapley values: each edit's average effect over every order of applying the edits, so a result's contributions add up to its change (less anything an added or removed row explains).");
+    const oneByOne = downstream.filter((c) => c.attribution === 'but-for').length;
+    if (oneByOne) notes.push(`${oneByOne} result${oneByOne === 1 ? ' is' : 's are'} reached by more than 10 edits (or ran past the evaluation budget) and ${oneByOne === 1 ? 'has' : 'have'} one-at-a-time contributions instead, which needn't add up.`);
+  }
   if (st.unexplained) notes.push(`${st.unexplained} result${st.unexplained === 1 ? '' : 's'} changed with no edit found upstream (volatile functions such as NOW, or files calculated by different apps).`);
   if (trace.truncated) notes.push('The workbook was too large to trace completely; some causes may be missing.');
   const computed = [diff.computedValues?.old, diff.computedValues?.new].reduce((n, c) => n + (c?.computed ?? 0), 0);

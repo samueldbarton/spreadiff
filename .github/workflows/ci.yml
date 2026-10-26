@@ -37,6 +37,22 @@ jobs:
       - name: The committed action bundle matches its source
         run: npm run build:action && git diff --exit-code -- action/dist
 
+  node-minimum:
+    name: Node 20.19 (the minimum in engines)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.0
+          cache: npm
+      - run: npm ci
+      - run: npm run build -w spreadiff -w spreadiff-lite
+      - run: npm test
+      - name: require() loads the ES module package
+        run: node -e "const s = require('spreadiff'); if (typeof s.diffTables !== 'function') process.exit(1)"
+      - run: node packages/spreadiff-lite/dist/cli.js --help
+
   browser:
     name: Browser (grid, render fuzz, bundlers, hosted)
     runs-on: ubuntu-latest
@@ -102,3 +118,5 @@ jobs:
       - run: npm run build
       - name: Every difference from LibreOffice is a known one
         run: npm run bench:engine -- 1500 7 --check "$PWD/bench/engine-fuzz/expected.json"
+      - name: Shapley contributions equal LibreOffice's, on the real-file fixtures
+        run: npm run bench:shapley
