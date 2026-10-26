@@ -65,7 +65,16 @@ await test('canvas excludes the scrollbar (observes scroller, not host)', async 
   await page.waitForTimeout(150);
   const s = await internals();
   assert(s.width === s.clientWidth, `canvas width ${s.width} != scroller clientWidth ${s.clientWidth}`);
-  assert(s.clientWidth < 900, 'expected a vertical scrollbar to reduce clientWidth');
+  // Headless Firefox and WebKit on Linux draw overlay scrollbars, which take no width;
+  // there, nothing shrinks, and the equality above is the whole check.
+  const scrollbar = await page.evaluate(() => {
+    const d = Object.assign(document.createElement('div'), { style: 'position:absolute;width:100px;height:50px;overflow:scroll' });
+    document.body.append(d);
+    const w = d.offsetWidth - d.clientWidth;
+    d.remove();
+    return w;
+  });
+  if (scrollbar > 0) assert(s.clientWidth < 900, 'expected a vertical scrollbar to reduce clientWidth');
 });
 
 await test('setOptions with unchanged values does not relayout', async () => {
