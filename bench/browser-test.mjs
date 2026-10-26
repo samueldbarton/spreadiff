@@ -1,12 +1,19 @@
 // Browser regression tests for the canvas renderer.
 // Usage: (cd apps/viewer && npx vite --port 5199) & node bench/browser-test.mjs
+// BROWSER=firefox or BROWSER=webkit runs the same tests in Playwright's Firefox or WebKit.
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { chromium } from 'playwright';
+import playwright from 'playwright';
 
 const URL = process.env.URL ?? 'http://localhost:5199/test.html';
-// Headless Chromium hides scrollbars by default; the scrollbar test needs real ones.
-const browser = await chromium.launch({ executablePath: process.env.CHROMIUM ?? '/opt/pw-browsers/chromium', ignoreDefaultArgs: ['--hide-scrollbars'] });
+const engine = process.env.BROWSER ?? 'chromium';
+const browser = await playwright[engine].launch(
+  engine === 'chromium'
+    ? // Headless Chromium hides scrollbars by default; the scrollbar test needs real ones.
+      { executablePath: process.env.CHROMIUM ?? '/opt/pw-browsers/chromium', ignoreDefaultArgs: ['--hide-scrollbars'] }
+    : {},
+);
+console.log(`${engine} ${browser.version()}`);
 const page = await browser.newPage({ viewport: { width: 1000, height: 700 } });
 const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
@@ -390,6 +397,8 @@ await test('canvas text colors meet WCAG AA in light and dark', async () => {
         ['modifiedFg', 'gutterBg'], ['modifiedFg', 'bg'], ['addedFg', 'gutterBg'], ['removedFg', 'gutterBg'], ['computedFg', 'bg'], ['computedFg', 'computedEmphasis'],
         // Outlines (graphics: 3:1). Bars and tints are backed up by signs, so they're not checked.
         ['computedFg', 'bg', 3], ['modifiedFg', 'bg', 3],
+        // The selected cell's ring and the keyboard focus ring (WCAG 1.4.11).
+        ['selection', 'bg', 3], ['selection', 'addedEmphasis', 3], ['selection', 'removedEmphasis', 3], ['selection', 'computedEmphasis', 3],
       ];
       for (const [fgKey, bgKey, min = 4.5] of pairs) {
         const back = bgKey === 'bg' ? bg : on(t[bgKey]);
@@ -401,6 +410,122 @@ await test('canvas text colors meet WCAG AA in light and dark', async () => {
     return out;
   });
   assert(fails.length === 0, fails.join('\n    '));
+});
+
+await test('keyboard focus is visible: a ring when tabbed into, none after a click', async () => {
+  await setup({}, 50);
+  const ring = () => page.evaluate(() => {
+    const r = window.G.shadow.querySelector('.sd-focus-ring');
+    return { opacity: getComputedStyle(r).opacity, afterCanvas: !!(window.G.canvas.compareDocumentPosition(r) & Node.DOCUMENT_POSITION_FOLLOWING) };
+  });
+  assert((await ring()).opacity === '0', 'ring shows before focus');
+  await page.focus('#before');
+  await page.keyboard.press('Tab');
+  const tabbed = await ring();
+  assert(tabbed.opacity === '1' && tabbed.afterCanvas, `tabbed in: ${JSON.stringify(tabbed)}`);
+  // Focus that arrives by mouse gets no ring (the selection shows where it is).
+  const before = await page.locator('#before').boundingBox();
+  await page.mouse.click(before.x + 5, before.y + 5);
+  const box = await scrollerBox();
+  await page.mouse.click(box.x + 200, box.y + 80);
+  const clicked = await page.evaluate(() => window.G.shadow.activeElement === window.G.scroller);
+  assert(clicked && (await ring()).opacity === '0', 'ring shows after a mouse click');
+});
+
+await test('Home/End, Ctrl+Home/End and PageUp/PageDown move the selection; Shift extends', async () => {
+  await setup({}, 300);
+  await page.evaluate(() => window.G.scroller.focus());
+  const sel = () => page.evaluate(() => {
+    const g = window.G;
+    const s = g.selected;
+    return { row: s.row, vi: g.cols.cols.indexOf(s.col), last: g.cols.cols.length - 1, rows: g.diff.rowCount, top: g.scroller.scrollTop, extent: g.extent };
+  });
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('End');
+  let s = await sel();
+  assert(s.vi === s.last && s.row === 0, `End: ${JSON.stringify(s)}`);
+  await page.keyboard.press('Home');
+  s = await sel();
+  assert(s.vi === 0, `Home: ${JSON.stringify(s)}`);
+  await page.keyboard.press('PageDown');
+  const paged = await sel();
+  assert(paged.row > 5 && paged.row < 40 && paged.top > 0, `PageDown: ${JSON.stringify(paged)}`);
+  await page.keyboard.press('PageUp');
+  s = await sel();
+  assert(s.row === 0, `PageUp: ${JSON.stringify(s)}`);
+  await page.keyboard.press('Control+End');
+  s = await sel();
+  assert(s.row === s.rows - 1 && s.vi === s.last, `Ctrl+End: ${JSON.stringify(s)}`);
+  await page.keyboard.press('Control+Home');
+  s = await sel();
+  assert(s.row === 0 && s.vi === 0 && s.top === 0, `Ctrl+Home: ${JSON.stringify(s)}`);
+  await page.keyboard.press('Shift+End');
+  s = await sel();
+  assert(s.row === 0 && s.vi === 0 && s.extent && s.extent.row === 0, `Shift+End extends: ${JSON.stringify(s)}`);
+});
+
+await test('forced colors (Windows High Contrast): the canvas uses the system colors', async () => {
+  await setup({}, 20);
+  const read = () => page.evaluate(() => {
+    const t = window.G.theme;
+    return { bg: t.bg, fg: t.fg, addedEmphasis: t.addedEmphasis, selection: t.selection };
+  });
+  const normal = await read();
+  await page.emulateMedia({ forcedColors: 'active' });
+  await page.waitForTimeout(100);
+  const forced = await read();
+  // A fresh grid resolves the same way as one that followed the change.
+  await setup({}, 20);
+  const fresh = await read();
+  await page.emulateMedia({ forcedColors: 'none' });
+  await page.waitForTimeout(100);
+  const back = await read();
+  // Every token used to read as the one forced text color: a solid block.
+  assert(forced.bg !== forced.fg, `background and text are the same color: ${JSON.stringify(forced)}`);
+  assert(forced.addedEmphasis === forced.bg, `tints should fall back to the background: ${JSON.stringify(forced)}`);
+  assert(JSON.stringify(forced) !== JSON.stringify(normal), 'the theme did not change under forced colors');
+  assert(JSON.stringify(fresh) === JSON.stringify(forced), `fresh ${JSON.stringify(fresh)} != followed ${JSON.stringify(forced)}`);
+  assert(JSON.stringify(back) === JSON.stringify(normal), 'the theme did not return when forced colors ended');
+});
+
+await test('strings and locale translate what the grid announces and draws', async () => {
+  const r = await page.evaluate(() => {
+    window.G?.cleanUp();
+    const { parseCsv, diffTables, DiffGrid } = window.sd;
+    const rows = (bump) => 'id,price\n' + Array.from({ length: 1500 }, (_, i) => `${i},${bump && i === 1499 ? 12.5 : 10}`).join('\n');
+    const strings = {
+      gridSummary: (parts) => `Tabellenvergleich: ${parts.join('; ')}`,
+      summaryRowsModified: (c, n) => `${c} ${n === 1 ? 'Zeile' : 'Zeilen'} geändert`,
+      summaryCellsChanged: (c, n) => `${c} ${n === 1 ? 'Zelle' : 'Zellen'} geändert`,
+      rowHeaderColumn: 'Zeile',
+      unchangedRowsCollapsed: (c) => `${c} unveränderte Zeilen`,
+      rowHeader: (row) => `Zeile ${row}`,
+      rowModified: 'geändert',
+      was: (v) => `vorher ${v}`,
+      up: (a) => `plus ${a}`,
+      kindInput: 'bearbeitet',
+    };
+    const g = new DiffGrid({ collapseUnchanged: true, strings, locale: 'de-DE' });
+    g.render({ diff: diffTables(parseCsv(rows(false)), parseCsv(rows(true))), container: document.getElementById('grid') });
+    g.select(1499, 1);
+    g.drawNow();
+    window.G = g;
+    const root = g.scroller;
+    const cells = [...root.querySelectorAll('[role=gridcell]')].map((e) => e.textContent);
+    const active = g.shadow.getElementById(root.getAttribute('aria-activedescendant'))?.textContent;
+    const out = { label: root.getAttribute('aria-label'), header: root.querySelector('[role=columnheader]')?.textContent, separator: cells.find((t) => /unveränderte/.test(t)), active, rowHeaders: [...root.querySelectorAll('[role=rowheader]')].map((e) => e.textContent) };
+    // Switching back to English rebuilds the words.
+    g.setOptions({ strings: undefined, locale: 'en-US' });
+    g.drawNow();
+    out.english = root.getAttribute('aria-label');
+    return out;
+  });
+  assert(r.label === 'Tabellenvergleich: 1 Zeile geändert; 1 Zelle geändert', `label: ${r.label}`);
+  assert(r.header === 'Zeile', `header: ${r.header}`);
+  assert(/^1\.4\d\d unveränderte Zeilen$/.test(r.separator ?? ''), `separator (de-DE grouping): ${r.separator}`);
+  assert(r.active === '12.5, vorher 10, plus 2.5 (25.0%), bearbeitet', `active cell: ${r.active}`);
+  assert(r.rowHeaders.includes('Zeile 1501, geändert'), `row headers: ${r.rowHeaders}`);
+  assert(r.english === 'Spreadsheet diff: 1 row modified, 1 cell changed', `back to English: ${r.english}`);
 });
 
 await test('axe-core finds no violations in spreadiff/html HTML, light and dark', async () => {
@@ -798,6 +923,123 @@ await test('SpreadsheetDiff: an unreadable file shows the error and rejects', as
   });
   assert(r.threw && r.called === r.threw && r.shown === r.threw, JSON.stringify(r));
   await page.evaluate(() => window.W.cleanUp());
+});
+
+await test('SpreadsheetDiff: strings translate the tabs, the outputs panel and the review bar', async () => {
+  const r = await page.evaluate(async ({ a, b }) => {
+    window.G?.cleanUp();
+    window.W?.cleanUp();
+    const { SpreadsheetDiff } = window.sd;
+    const strings = { sheetsLabel: 'Blätter', outputsHeading: (c) => `Geänderte Ergebnisse · ${c}`, accept: 'Annehmen', waterfallBefore: 'Vorher', waterfallAfter: 'Nachher' };
+    window.W = new SpreadsheetDiff({ review: true, tooltips: false, strings });
+    await window.W.render({ oldFile: { name: 'old.xlsx', data: new Uint8Array(a) }, newFile: { name: 'new.xlsx', data: new Uint8Array(b) }, container: document.getElementById('grid') });
+    const root = window.W.host.shadowRoot;
+    root.querySelector('.sx-out').click();
+    await new Promise((res) => setTimeout(res, 50));
+    const out = {
+      tabs: root.querySelector('.sx-tabs').getAttribute('aria-label'),
+      heading: root.querySelector('.sx-side h2').textContent,
+      buttons: [...root.querySelectorAll('.sx-btn')].map((x) => x.textContent),
+      waterfall: root.querySelector('.sx-wf')?.getAttribute('aria-label'),
+    };
+    window.W.setOptions({ strings: undefined });
+    out.englishTabs = root.querySelector('.sx-tabs').getAttribute('aria-label');
+    out.englishButtons = [...root.querySelectorAll('.sx-btn')].map((x) => x.textContent);
+    return out;
+  }, { a: fixtureBytes('old.xlsx'), b: fixtureBytes('new.xlsx') });
+  assert(r.tabs === 'Blätter' && /^Geänderte Ergebnisse · \d/.test(r.heading), JSON.stringify(r));
+  assert(r.buttons.includes('Annehmen') && r.buttons.includes('Reject'), `buttons: ${r.buttons}`);
+  assert(/^Vorher .* Nachher /.test(r.waterfall ?? ''), `waterfall: ${r.waterfall}`);
+  assert(r.englishTabs === 'Sheets' && r.englishButtons.includes('Accept'), `back to English: ${JSON.stringify(r)}`);
+});
+
+await test('SpreadsheetDiff tabs: Home and End go to the first and last sheet', async () => {
+  const r = await page.evaluate(async () => {
+    const root = window.W.host.shadowRoot;
+    const tabs = () => [...root.querySelectorAll('.sx-tab')];
+    tabs()[0].focus();
+    tabs()[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+    const end = { sheet: window.W.sheet, focused: tabs().indexOf(root.activeElement) };
+    tabs()[end.focused].dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+    return { end, home: { sheet: window.W.sheet, focused: tabs().indexOf(root.activeElement) }, count: tabs().length };
+  });
+  assert(r.end.sheet === r.count - 1 && r.end.focused === r.count - 1, `End: ${JSON.stringify(r)}`);
+  assert(r.home.sheet === 0 && r.home.focused === 0, `Home: ${JSON.stringify(r)}`);
+});
+
+await test('SpreadsheetDiff decisions: applied on load, replaced when the app passes new ones, no echo', async () => {
+  const r = await page.evaluate(async ({ a, b }) => {
+    window.W?.cleanUp();
+    const { SpreadsheetDiff, decideRange, noDecisions, compareWorkbooks, parseXlsx } = window.sd;
+    const cmp = compareWorkbooks(parseXlsx(new Uint8Array(a).buffer), parseXlsx(new Uint8Array(b).buffer));
+    const sheet = cmp.firstChanged;
+    const d = cmp.sheets[sheet].diff;
+    const rejectAll = (n) => cmp.sheets.map((s, i) => (i === sheet ? decideRange(s.diff, noDecisions(), Array.from({ length: n }, (_, k) => k), d.columns.map((_, c) => c), 'reject') : noDecisions()));
+    const initial = rejectAll(1);
+    let calls = 0;
+    window.W = new SpreadsheetDiff({ review: true, tooltips: false, decisions: initial, onDecisionsChange: () => calls++ });
+    await window.W.render({ oldFile: { name: 'old.xlsx', data: new Uint8Array(a) }, newFile: { name: 'new.xlsx', data: new Uint8Array(b) }, container: document.getElementById('grid') });
+    const applied = window.W.getDecisions()[sheet] === initial[sheet];
+    const more = rejectAll(d.rowCount);
+    window.W.setOptions({ decisions: more });
+    const replaced = window.W.getDecisions()[sheet] === more[sheet];
+    // Passing back what onDecisionsChange gave is a no-op.
+    const own = window.W.getDecisions();
+    window.W.setOptions({ decisions: own });
+    return { applied, replaced, same: window.W.getDecisions() === own, calls };
+  }, { a: fixtureBytes('old.xlsx'), b: fixtureBytes('new.xlsx') });
+  assert(r.applied && r.replaced && r.same && r.calls === 0, JSON.stringify(r));
+});
+
+await test('SpreadsheetDiff (React): decisions kept in state round-trip without a loop', async () => {
+  const r = await page.evaluate(async ({ a, b }) => {
+    window.W?.cleanUp();
+    const { SpreadsheetDiff, createElement: h, useState, createRoot } = window.sdReact;
+    const container = document.getElementById('grid');
+    let changes = 0;
+    let handle;
+    const files = { old: { name: 'old.xlsx', data: new Uint8Array(a) }, new: { name: 'new.xlsx', data: new Uint8Array(b) } };
+    function App() {
+      const [decisions, setDecisions] = useState(undefined);
+      return h(SpreadsheetDiff, { ref: (x) => (handle = x), oldFile: files.old, newFile: files.new, review: true, decisions, onDecisionsChange: (d) => { changes++; setDecisions(d); }, style: { height: 500 } });
+    }
+    const root = createRoot(container);
+    root.render(h(App));
+    for (let i = 0; i < 100 && !handle?.instance?.cmp; i++) await new Promise((res) => setTimeout(res, 20));
+    const w = handle.instance;
+    w.grid.selectRange(0, 0, w.grid.diff.rowCount - 1, w.grid.diff.columns.length - 1);
+    handle.decideSelection('reject');
+    await new Promise((res) => setTimeout(res, 200));
+    const out = { changes, rejected: w.getDecisions().some((x) => x.cells.size + x.rows.size + x.columns.size > 0) };
+    root.unmount();
+    return out;
+  }, { a: fixtureBytes('old.xlsx'), b: fixtureBytes('new.xlsx') });
+  assert(r.changes === 1 && r.rejected, JSON.stringify(r));
+});
+
+await test('SpreadsheetDiff: a newer render cancels the fetches of the one it replaces', async () => {
+  let release;
+  const held = new Promise((res) => (release = res));
+  await page.route('**/held.csv', async (route) => { await held; await route.fulfill({ body: 'a\n1' }).catch(() => {}); });
+  const r = await page.evaluate(async () => {
+    window.W?.cleanUp();
+    const { SpreadsheetDiff } = window.sd;
+    const signals = [];
+    const realFetch = window.fetch;
+    window.fetch = (input, init) => { signals.push(init?.signal); return realFetch(input, init); };
+    window.W = new SpreadsheetDiff({ tooltips: false });
+    const container = document.getElementById('grid');
+    const held = new URL('/held.csv', location.href);
+    const first = window.W.render({ oldFile: held, newFile: held, container }).then(() => 'resolved', (e) => `rejected: ${e.message}`);
+    await new Promise((res) => setTimeout(res, 50));
+    await window.W.render({ oldFile: { name: 'a.csv', data: new TextEncoder().encode('a\n1') }, newFile: { name: 'b.csv', data: new TextEncoder().encode('a\n2') }, container });
+    window.fetch = realFetch;
+    return { aborted: signals.length > 0 && signals.every((s) => s?.aborted), shown: window.W.cmp?.sheets.length, first: await Promise.race([first, new Promise((res) => setTimeout(() => res('pending'), 300))]) };
+  });
+  release();
+  await page.unroute('**/held.csv');
+  assert(r.aborted && r.shown === 1, JSON.stringify(r));
+  assert(r.first === 'resolved', `the replaced render should settle quietly: ${r.first}`);
 });
 
 assert(true);

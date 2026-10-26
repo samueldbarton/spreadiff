@@ -32,6 +32,8 @@ jobs:
       - run: npm run test:cli
       - run: npm run test:action
       - run: node scripts/check-pack.mjs
+      - name: Bundle sizes are within budget
+        run: npm run size -- --check
       - name: The committed action bundle matches its source
         run: npm run build:action && git diff --exit-code -- action/dist
 
@@ -58,6 +60,31 @@ jobs:
       - run: npm run fuzz:render
       - run: npm run test:bundle
       - run: npm run test:hosted
+
+  other-browsers:
+    name: Browser (${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [firefox, webkit]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps ${{ matrix.browser }}
+      - run: npm run build
+      - name: Start the viewer
+        run: |
+          (cd apps/viewer && npx vite --port 5199 --strictPort > /tmp/vite.log 2>&1 &)
+          for i in $(seq 1 60); do curl -sf http://localhost:5199/test.html > /dev/null && exit 0; sleep 1; done
+          cat /tmp/vite.log; exit 1
+      - run: npm run test:browser
+        env:
+          BROWSER: ${{ matrix.browser }}
 
   engine:
     name: Formula engine vs LibreOffice

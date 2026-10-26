@@ -39,7 +39,8 @@ const BASE_STYLE = /* css */ `
   --sdi-added-fg: var(--sd-added-fg, light-dark(color-mix(in srgb, var(--sdi-added) 62%, #000), color-mix(in srgb, var(--sdi-added) 70%, var(--sdi-fg))));
   --sdi-removed-fg: var(--sd-removed-fg, light-dark(color-mix(in srgb, var(--sdi-removed) 62%, #000), color-mix(in srgb, var(--sdi-removed) 70%, var(--sdi-fg))));
   --sdi-modified-fg: var(--sd-modified-fg, light-dark(color-mix(in srgb, var(--sdi-modified) 62%, #000), var(--sdi-modified)));
-  --sdi-selection: var(--sd-selection, var(--sdi-modified));
+  /* The selected cell's ring and the keyboard focus ring: 3:1 against the background at least (WCAG 1.4.11). */
+  --sdi-selection: var(--sd-selection, var(--sdi-modified-fg));
   /* Downstream (computed) changes: same formula, new result. */
   --sdi-computed: var(--sd-computed, light-dark(#e08a00, #f5b83d));
   --sdi-computed-fg: var(--sd-computed-fg, light-dark(color-mix(in srgb, var(--sdi-computed) 62%, #000), var(--sdi-computed)));
@@ -63,6 +64,42 @@ const BASE_STYLE = /* css */ `
   font-size: var(--sdi-font-size);
   overflow: hidden;
 }
+/*
+ * Windows High Contrast and other forced-colors modes: the user's system
+ * colors. Status stays readable without hue: rows and cells keep their
+ * +, −, • and ↕ markers.
+ */
+@media (forced-colors: active) {
+  :host, .sd-root {
+    --sdi-bg: Canvas;
+    --sdi-fg: CanvasText;
+    --sdi-fg-muted: CanvasText;
+    --sdi-fg-faint: GrayText;
+    --sdi-border: GrayText;
+    --sdi-border-strong: CanvasText;
+    --sdi-header-bg: Canvas;
+    --sdi-gutter-bg: Canvas;
+    --sdi-separator-bg: Canvas;
+    --sdi-hover: Canvas;
+    --sdi-added: CanvasText;
+    --sdi-removed: CanvasText;
+    --sdi-modified: Highlight;
+    --sdi-added-bg: Canvas;
+    --sdi-removed-bg: Canvas;
+    --sdi-added-emphasis: Canvas;
+    --sdi-removed-emphasis: Canvas;
+    --sdi-added-fg: CanvasText;
+    --sdi-removed-fg: CanvasText;
+    --sdi-modified-fg: CanvasText;
+    --sdi-computed: LinkText;
+    --sdi-computed-fg: LinkText;
+    --sdi-computed-emphasis: Canvas;
+    --sdi-formula: LinkText;
+    --sdi-selection: Highlight;
+    --sdi-dim: Canvas;
+    --sdi-hatch: GrayText;
+  }
+}
 :host([data-theme="light"]), .sd-root[data-theme="light"] { color-scheme: light; }
 :host([data-theme="dark"]), .sd-root[data-theme="dark"] { color-scheme: dark; }
 
@@ -79,6 +116,15 @@ const BASE_STYLE = /* css */ `
   scrollbar-color: var(--sdi-border-strong) transparent;
   outline: none;
 }
+/* The focus ring for keyboard users (the scroller's own outline would sit under the canvas). */
+.sd-focus-ring {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  outline: 2px solid var(--sdi-selection);
+  outline-offset: -2px;
+  opacity: 0;
+}
+.sd-scroller:focus-visible ~ .sd-focus-ring { opacity: 1; }
 .sd-spacer { pointer-events: none; }
 .sd-canvas, .sd-minimap {
   position: absolute; top: 0; left: 0;
@@ -145,7 +191,7 @@ const BASE_STYLE = /* css */ `
 .sd-tooltip .sd-tt-moved { margin: 2px 0 4px; color: var(--sdi-modified-fg); font-size: 11.5px; font-weight: 500; }
 .sd-tooltip .sd-tt-stale b { color: var(--sdi-fg); font-family: var(--sdi-mono-font-family); font-weight: 600; }
 .sd-tooltip .sd-tt-formula { color: var(--sdi-fg-muted); font-family: var(--sdi-mono-font-family); font-size: 11px; }
-.sd-probe { position: absolute; width: 0; height: 0; visibility: hidden; pointer-events: none; }
+.sd-probe { position: absolute; width: 0; height: 0; visibility: hidden; pointer-events: none; forced-color-adjust: none; }
 `;
 
 /** The tokens block above, for deriving the no-`light-dark()` fallback. */

@@ -193,7 +193,7 @@ and `npm run test:hosted` reproduce them.
 | --- | --- | --- |
 | `spreadiff/html` | Diff engine, CSV parser, number formats, HTML and text renderers. No DOM | 19.9 KB |
 | `spreadiff/core` | + XLSX, XLSB, XLS and ODS readers, formula engine, tracing, review and merge | 74.2 KB |
-| `spreadiff` | + canvas `DiffGrid` and `SpreadsheetDiff` | 101.3 KB |
+| `spreadiff` | + canvas `DiffGrid` and `SpreadsheetDiff` | 103.3 KB |
 | `spreadiff/react` | React component for `DiffGrid` | + React |
 | `spreadiff/worker` | Parse, diff and trace in a Web Worker | |
 

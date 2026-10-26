@@ -71,7 +71,7 @@ some other way from script, call `grid.refreshTheme()`.
 | `--sd-computed-fg` | computed + 38% black / computed | Text and outlines in the computed hue: impact outlines, the tooltip's kind label |
 | `--sd-computed-emphasis` | computed at 13% / 15% | Background of downstream changes |
 | `--sd-formula` | `#7c3aed` / `#a78bfa` | The `ƒ` on formula edits |
-| `--sd-selection` | `--sd-modified` | Selected-cell ring |
+| `--sd-selection` | `--sd-modified-fg` | Selected-cell ring and keyboard focus ring (3:1 or better on every background) |
 | `--sd-dim` | 62% bg | Veil over unrelated cells in trace focus |
 | `--sd-hatch` | 7% fg | Hatching where a row or column is missing (split layout) |
 | `--sd-font-family` | Inter, system UI fonts | Cell and header text |
@@ -92,6 +92,10 @@ If you set `--sd-added`, `--sd-removed`, `--sd-modified` or
 `--sd-computed`, the `-fg` variants follow. Check a custom palette's text
 contrast yourself, though: a pale base color can still give a pale `-fg`.
 See [Accessibility](accessibility.md).
+
+**Forced colors.** Under `forced-colors: active` (Windows High Contrast),
+the grid uses the user's system colors and ignores your tokens, as the
+browser does for page CSS. See [Accessibility](accessibility.md#the-canvas-grid).
 
 [`spreadiff/html`](html.md#styling) reads the base colors and fonts too:
 `--sd-bg`, `--sd-fg`, `--sd-added`, `--sd-removed`, `--sd-modified`,

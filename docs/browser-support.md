@@ -29,12 +29,15 @@ readable without any colour.
   suite, the render fuzzer and the bundling test. The hosted test runs the
   packed library and the viewer as static sites, with outside requests
   blocked.
+- **Firefox and WebKit** (Playwright's builds, headless): the renderer
+  regression suite, axe-core and the contrast checks included
+  (`BROWSER=firefox npm run test:browser`).
 - **Node 22**: the unit tests and the trace evaluation.
 
-**Not tested: Firefox and Safari.** Nothing in the code is
-Chromium-specific, but a canvas grid is exactly where engines differ:
-font metrics, subpixel text, scroll events, the pixel-ratio handling.
-Treat them as expected to work but unverified, and report what you find.
+**Not tested: Safari itself, and real devices.** Playwright's WebKit is
+close to Safari but isn't it, and nothing runs on iOS or with touch. A
+canvas grid is exactly where engines differ (font metrics, subpixel text,
+scroll events, the pixel-ratio handling), so report what you find.
 
 ## Server-side and CSP
 
@@ -56,5 +59,11 @@ Treat them as expected to work but unverified, and report what you find.
 - `DiffGrid` touches `document` only in its constructor and `render`, so
   importing `spreadiff` during server-side rendering is safe; create the
   grid in the browser (`useEffect`, or the React wrapper, which does).
+- `spreadiff/react` starts with `'use client'`, so a Next.js App Router
+  server component can render `<SpreadsheetDiff>` or `<DiffGrid>`
+  directly; it renders on the client.
+- The package is ES modules only. On Node 20.19+ and 22.12+, `require()`
+  loads it too (the `exports` have a `default` condition), so CommonJS
+  code and tools that resolve through `require` work.
 - Nothing makes network requests. Files are read and processed where you
   call the library.

@@ -31,17 +31,34 @@ Scrolling benchmarks with it on and off didn't differ. Pass
 next to an accessible view.
 
 **Keyboard.** Everything the mouse does, the keyboard does too: `n`/`p`
-for the next or previous change, the arrow keys to move, Esc to clear,
-⌘C/Ctrl+C to copy. The grid is one Tab stop, and Tab leaves it again:
-focus is never trapped. The full table is in [The DiffGrid → Keyboard and
-mouse](grid.md#keyboard-and-mouse).
+for the next or previous change, the arrow keys to move, Home/End and
+Ctrl+Home/End to jump to the edges, PageUp/PageDown by a screenful, Esc
+to clear, ⌘C/Ctrl+C to copy. These are the moves the [ARIA grid
+pattern](https://www.w3.org/WAI/ARIA/apg/patterns/grid/) lists. The grid
+is one Tab stop, and Tab leaves it again: focus is never trapped. Tabbing
+in draws a focus ring around the grid (WCAG 2.4.7); a mouse click
+doesn't, since the selected cell already shows where you are. The full
+table is in [The DiffGrid → Keyboard and mouse](grid.md#keyboard-and-mouse).
+
+**Forced colours.** In Windows High Contrast and other forced-colours
+modes, the canvas draws in the user's system colours: text in
+`CanvasText` on `Canvas`, the selection and focus ring in `Highlight`,
+downstream changes in `LinkText`, and no tints. What changed stays
+readable from the markers alone: `+`, `−`, `•`, `↕` and struck-through
+old values. (In 0.2.0, every colour resolved to the same forced
+colour and the grid drew as a solid block.)
+
+**Other languages.** The `strings` option translates everything the grid
+announces and shows, and `locale` formats counts; see [Translating the
+grid](grid.md#translating-the-grid).
 
 **Contrast.** Text and status glyphs meet 4.5:1 against every background
 they're drawn on, in light and dark. That covers:
 - values, row numbers and secondary text;
 - the `+`, `−`, `↕` and modified-dot markers;
 - the deltas and change counts;
-- the outlines of the focus mode.
+- the outlines of the focus mode;
+- the selected cell's ring and the keyboard focus ring (3:1).
 
 The bright status colours are kept for bars and tints, which back up
 signs and text rather than carry meaning alone. If you override the
@@ -96,10 +113,14 @@ The first run of these checks found real problems, all fixed since:
   NVDA, JAWS or VoiceOver. Automated checks can't tell whether the
   announcements are pleasant to listen to.
 - **Only the visible window is in the accessibility tree.** Moving with
-  the arrow keys scrolls the grid, so the next cell is always there.
-  Screen-reader commands that jump far away (to the last row, say) stop
-  at the window's edge. `nextChange()` and the keyboard shortcuts are the
-  intended way through a long diff.
+  the grid's own keys (arrows, PageUp/PageDown, Ctrl+Home/End) scrolls
+  it, so the next cell is always there. A screen reader's own table
+  commands, which move its virtual cursor without the grid knowing, stop
+  at the window's edge.
+- **No right-to-left layout.** The grid always runs left to right, even
+  under `dir="rtl"`.
+- **Firefox and WebKit run in CI, but with no manual testing.** The
+  browser suite, axe-core included, runs in all three engines.
 - **Colour still separates two kinds of change.** An edited input and a
   downstream result differ visually by hue (blue against amber), which
   people with tritanopia may not tell apart. The popover and the

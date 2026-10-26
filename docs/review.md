@@ -27,6 +27,29 @@ changes undone (for an .xlsx or .xlsm new file), or the shown sheet as CSV
 for other formats. `view.exportXlsx()`, `view.exportCsv()` and
 `view.mergedTable()` give you the same without the button.
 
+### Keeping decisions
+
+To restore a review (saved, or shared with a colleague), pass `decisions`.
+They're applied when the files are compared, and replaced whenever you
+pass a different array. In React, keep them in state: store what
+`onDecisionsChange` gives you and pass it back. Passing back the array the
+component just gave you changes nothing, so this doesn't loop.
+
+```tsx
+import { SpreadsheetDiff } from 'spreadiff/react';
+import type { SheetDecisions } from 'spreadiff';
+import { useState } from 'react';
+declare const before: File, after: File;
+
+export function Review() {
+  const [decisions, setDecisions] = useState<SheetDecisions[]>();
+  return <SpreadsheetDiff oldFile={before} newFile={after} review decisions={decisions} onDecisionsChange={setDecisions} style={{ height: 600 }} />;
+}
+```
+
+The component still updates its own decisions when someone presses
+Accept or Reject; `decisions` doesn't have to be passed back for that.
+
 ## What can be decided
 
 - **Edits**: a value or formula someone changed, and a value from outside

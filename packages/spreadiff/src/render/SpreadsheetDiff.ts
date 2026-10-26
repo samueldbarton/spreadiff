@@ -8,6 +8,7 @@ import type { CellRef } from '../core/trace.js';
 import type { CellValue, Table } from '../core/types.js';
 import { DiffGrid, type DiffGridOptions, type GridRange } from './DiffGrid.js';
 import { STYLE } from './theme.js';
+import { words, type Words } from './strings.js';
 
 /** Options for {@link SpreadsheetDiff}: every `DiffGrid` option, plus these. */
 export interface SpreadsheetDiffOptions<A = unknown> extends Omit<DiffGridOptions<A>, 'trace' | 'decisions'> {
@@ -36,6 +37,13 @@ export interface SpreadsheetDiffOptions<A = unknown> extends Omit<DiffGridOption
   onSheetChange?: (sheet: SheetView) => void;
   /** Called when review decisions change, with one entry per sheet. */
   onDecisionsChange?: (decisions: SheetDecisions[]) => void;
+  /**
+   * Review decisions, one entry per sheet: applied when files are compared,
+   * and whenever you pass a different array. To keep them in your state,
+   * store what `onDecisionsChange` gives you and pass it back; passing back
+   * that same array changes nothing.
+   */
+  decisions?: SheetDecisions[];
 }
 
 /** Arguments to {@link SpreadsheetDiff.render}: two files, or a comparison you already have. */
@@ -64,7 +72,7 @@ const CSS = /* css */ `
 .sx-tab { all: unset; cursor: pointer; padding: 4px 10px; border-radius: 6px; white-space: nowrap; color: var(--sdi-fg-muted); display: inline-flex; gap: 6px; align-items: center; font-size: 12px; }
 .sx-tab:hover { background: var(--sdi-hover); color: var(--sdi-fg); }
 .sx-tab[aria-selected="true"] { background: var(--sdi-bg); color: var(--sdi-fg); box-shadow: 0 0 0 1px var(--sdi-border-strong); }
-.sx-tab:focus-visible, .sx-btn:focus-visible, .sx-out:focus-visible { outline: 2px solid var(--sdi-selection); outline-offset: 1px; }
+.sx-tab:focus-visible, .sx-btn:focus-visible, .sx-out:focus-visible, .sx-more:focus-visible { outline: 2px solid var(--sdi-selection); outline-offset: 1px; }
 .sx-count { font-family: var(--sdi-mono-font-family); font-size: 10.5px; color: var(--sdi-modified-fg); }
 .sx-tab[data-status="added"] .sx-count { color: var(--sdi-added-fg); }
 .sx-tab[data-status="removed"] .sx-count { color: var(--sdi-removed-fg); }
@@ -152,11 +160,22 @@ export class SpreadsheetDiff<A = unknown> {
   private cmp: Comparison | null = null;
   private index = 0;
   private decisions: SheetDecisions[] = [];
+  private wordsCache: { key: unknown[]; w: Words } | null = null;
+
+  /** The strings and count format in effect. */
+  private get w(): Words {
+    const { strings, locale } = this.options;
+    const c = this.wordsCache;
+    if (c && c.key[0] === strings && c.key[1] === locale) return c.w;
+    return (this.wordsCache = { key: [strings, locale], w: words(strings, locale) }).w;
+  }
   private newBytes: { name: string; data: Uint8Array } | null = null;
   private expanded: CellChange | null = null;
   private outputsShown = 100;
   private headerSlot: HTMLElement | null = null;
   private loadId = 0;
+  /** Cancels the fetches of a comparison that a newer `render` or `cleanUp` replaced. */
+  private loading: AbortController | null = null;
   private range: GridRange | null = null;
 
   constructor(options: SpreadsheetDiffOptions<A> = {}) {
@@ -174,7 +193,7 @@ export class SpreadsheetDiff<A = unknown> {
     const bar = el('div', 'sx-bar');
     this.tabs = el('div', 'sx-tabs');
     this.tabs.setAttribute('role', 'tablist');
-    this.tabs.setAttribute('aria-label', 'Sheets');
+    this.tabs.setAttribute('aria-label', this.w.t.sheetsLabel);
     this.head = el('div', 'sx-head');
     this.head.append(Object.assign(document.createElement('slot'), { name: 'header' }));
     this.review = el('div', 'sx-review');
@@ -183,7 +202,7 @@ export class SpreadsheetDiff<A = unknown> {
     this.gridBox = el('div', 'sx-grid');
     this.gridBox.setAttribute('role', 'tabpanel');
     this.side = el('div', 'sx-side');
-    this.side.setAttribute('aria-label', 'Changed outputs');
+    this.side.setAttribute('aria-label', this.w.t.outputsLabel);
     body.append(this.gridBox, this.side);
     this.objects = el('div', 'sx-objects');
     this.msg = el('div', 'sx-msg');
@@ -213,23 +232,28 @@ export class SpreadsheetDiff<A = unknown> {
   async render(props: SpreadsheetDiffRenderProps): Promise<void> {
     if (this.host.parentElement !== props.container) props.container.appendChild(this.host);
     const id = ++this.loadId;
+    this.loading?.abort();
+    this.loading = null;
     if ('comparison' in props) {
       const nb = props.newFile;
       this.newBytes = nb ? { name: nb.name, data: nb.data instanceof Uint8Array ? nb.data : new Uint8Array(nb.data) } : null;
       this.show(props.comparison);
       return;
     }
-    this.message('Comparing…');
+    this.message(this.w.t.comparing);
+    const loading = (this.loading = new AbortController());
+    const { signal } = loading;
     try {
       const parsed = (x: SpreadsheetInput) => !!x && typeof x === 'object' && ('sheets' in x || 'columns' in x) && !(x instanceof Blob) && !(x instanceof URL);
-      const read = async (x: SpreadsheetInput, fallback: string) => (parsed(x) ? x : await readSpreadsheetInput(x as Exclude<SpreadsheetInput, { sheets: unknown } | { columns: unknown }>, fallback));
+      const read = async (x: SpreadsheetInput, fallback: string) => (parsed(x) ? x : await readSpreadsheetInput(x as Exclude<SpreadsheetInput, { sheets: unknown } | { columns: unknown }>, fallback, signal));
       const [a, b] = await Promise.all([read(props.oldFile, 'old'), read(props.newFile, 'new')]);
       if (id !== this.loadId) return;
       const nb = b as { name?: string; data?: ArrayBuffer };
       // Keep the new file's bytes for the merged download (the worker takes the buffers it's given).
       this.newBytes = nb.data instanceof ArrayBuffer && nb.name ? { name: nb.name, data: new Uint8Array(nb.data.slice(0)) } : null;
-      const cmp = await diffFiles(a as SpreadsheetInput, b as SpreadsheetInput, { ...this.options.compare, worker: this.options.worker });
+      const cmp = await diffFiles(a as SpreadsheetInput, b as SpreadsheetInput, { ...this.options.compare, worker: this.options.worker, signal });
       if (id !== this.loadId) return;
+      this.loading = null;
       this.show(cmp);
     } catch (e) {
       if (id !== this.loadId) return;
@@ -268,11 +292,15 @@ export class SpreadsheetDiff<A = unknown> {
 
   /** Replace the review decisions (one entry per sheet; missing entries mean none). */
   setDecisions(decisions: SheetDecisions[]): void {
+    this.replaceDecisions(decisions);
+    this.options.onDecisionsChange?.(this.decisions);
+  }
+
+  private replaceDecisions(decisions: SheetDecisions[]): void {
     const n = this.cmp?.sheets.length ?? decisions.length;
     this.decisions = Array.from({ length: n }, (_, i) => decisions[i] ?? noDecisions());
     this.grid.setOptions({ decisions: this.decisions[this.index] });
     this.renderReview();
-    this.options.onDecisionsChange?.(this.decisions);
   }
 
   /** Accept or reject every change in the selected range (`undefined` clears their decisions). */
@@ -311,9 +339,20 @@ export class SpreadsheetDiff<A = unknown> {
     const prev = this.options;
     this.options = { ...prev, ...next };
     if (next.theme !== undefined && next.theme !== prev.theme) this.applyTheme();
+    // New decisions from the app (not the array onDecisionsChange just handed it).
+    if (this.cmp && next.decisions && next.decisions !== prev.decisions && next.decisions !== this.decisions) this.replaceDecisions(next.decisions);
     this.grid.setOptions(this.gridOptions());
+    const reworded = ('strings' in next && next.strings !== prev.strings) || ('locale' in next && next.locale !== prev.locale);
+    if (reworded) {
+      this.tabs.setAttribute('aria-label', this.w.t.sheetsLabel);
+      this.side.setAttribute('aria-label', this.w.t.outputsLabel);
+    }
     if (!this.cmp) return;
-    if ('outputs' in next || 'review' in next || 'renderSheetHeader' in next) {
+    if (reworded) {
+      this.renderTabs();
+      this.renderObjects();
+    }
+    if ('outputs' in next || 'review' in next || 'renderSheetHeader' in next || reworded) {
       this.renderSide();
       this.renderReview();
       this.renderHeader();
@@ -323,6 +362,8 @@ export class SpreadsheetDiff<A = unknown> {
   /** Unmount and release everything. */
   cleanUp(): void {
     this.loadId++;
+    this.loading?.abort();
+    this.loading = null;
     this.grid.cleanUp();
     this.headerSlot?.remove();
     this.host.remove();
@@ -331,7 +372,7 @@ export class SpreadsheetDiff<A = unknown> {
   // ---- Internals ---------------------------------------------------------
 
   private gridOptions(): DiffGridOptions<A> {
-    const { compare: _c, worker: _w, outputs: _o, review: _r, renderSheetHeader: _h, onLoad: _l, onError: _e, onSheetChange: _s, onDecisionsChange: _d, ...grid } = this.options;
+    const { compare: _c, worker: _w, outputs: _o, review: _r, renderSheetHeader: _h, onLoad: _l, onError: _e, onSheetChange: _s, onDecisionsChange: _d, decisions: _ds, ...grid } = this.options;
     return { ...grid, trace: this.cmp?.sheets[this.index]?.trace, decisions: this.decisions[this.index], onRangeChange: this.onRange };
   }
 
@@ -357,7 +398,8 @@ export class SpreadsheetDiff<A = unknown> {
   private show(cmp: Comparison): void {
     this.cmp = cmp;
     this.msg.hidden = true;
-    this.decisions = cmp.sheets.map(() => noDecisions());
+    const given = this.options.decisions;
+    this.decisions = cmp.sheets.map((_, i) => given?.[i] ?? noDecisions());
     this.expanded = null;
     this.outputsShown = 100;
     this.index = -1;
@@ -377,14 +419,17 @@ export class SpreadsheetDiff<A = unknown> {
       b.dataset.status = s.status;
       const st = s.diff.stats;
       const n = st.cellsChanged + st.rowsAdded + st.rowsRemoved;
-      const count = s.status === 'added' ? 'new' : s.status === 'removed' ? 'removed' : n ? n.toLocaleString('en-US') : '';
+      const { t, count: fmt } = this.w;
+      const count = s.status === 'added' ? t.sheetNew : s.status === 'removed' ? t.sheetRemoved : n ? fmt(n) : '';
       b.append(el('span', undefined, s.name));
       if (count) b.append(el('span', 'sx-count', count));
-      b.title = s.status === 'equal' ? `${s.name}: no changes` : `${s.name}: ${st.cellsChanged} cells changed, ${st.rowsAdded} rows added, ${st.rowsRemoved} removed`;
+      b.title = s.status === 'equal' ? t.sheetUnchangedTitle(s.name) : t.sheetTitle(s.name, st.cellsChanged, st.rowsAdded, st.rowsRemoved);
       b.addEventListener('click', () => this.showSheet(i));
       b.addEventListener('keydown', (e) => {
-        if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
-        const j = (i + (e.key === 'ArrowRight' ? 1 : -1) + cmp.sheets.length) % cmp.sheets.length;
+        const n = cmp.sheets.length;
+        const to: Record<string, number> = { ArrowRight: (i + 1) % n, ArrowLeft: (i - 1 + n) % n, Home: 0, End: n - 1 };
+        const j = to[e.key];
+        if (j === undefined) return;
         this.showSheet(j);
         (this.tabs.children[j] as HTMLElement | undefined)?.focus();
         e.preventDefault();
@@ -427,13 +472,14 @@ export class SpreadsheetDiff<A = unknown> {
       return b;
     };
     const hasSel = !!range;
-    const tally = el('span', 'sx-tally', `${stats.rejected} rejected · ${stats.accepted} accepted · ${stats.changes} change${stats.changes === 1 ? '' : 's'}`);
-    const download = btn(this.newBytes && /\.xls[xm]$/i.test(this.newBytes.name) ? 'Download .xlsx' : 'Download .csv', 'download', 'The new file with rejected changes undone', () => this.download());
+    const t = this.w.t;
+    const tally = el('span', 'sx-tally', t.tally(stats.rejected, stats.accepted, stats.changes));
+    const download = btn(this.newBytes && /\.xls[xm]$/i.test(this.newBytes.name) ? t.downloadXlsx : t.downloadCsv, 'download', t.downloadTitle, () => this.download());
     this.review.replaceChildren(
       tally,
-      btn('Accept', 'accept', 'Accept the selected changes (a)', () => this.decideSelection('accept'), hasSel),
-      btn('Reject', 'reject', 'Reject the selected changes (r)', () => this.decideSelection('reject'), hasSel),
-      btn('Undo', 'clear', 'Clear decisions on the selection (u)', () => this.decideSelection(undefined), hasSel),
+      btn(t.accept, 'accept', t.acceptTitle, () => this.decideSelection('accept'), hasSel),
+      btn(t.reject, 'reject', t.rejectTitle, () => this.decideSelection('reject'), hasSel),
+      btn(t.undo, 'clear', t.undoTitle, () => this.decideSelection(undefined), hasSel),
       download,
     );
   }
@@ -445,10 +491,11 @@ export class SpreadsheetDiff<A = unknown> {
     if (xlsx) {
       const { file } = this.exportXlsx();
       blob = new Blob([file.slice().buffer as ArrayBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-      name = this.newBytes!.name.replace(/(\.\w+)$/, ' (reviewed)$1');
+      const suffix = this.w.t.reviewedSuffix;
+      name = this.newBytes!.name.replace(/(\.\w+)$/, (ext) => `${suffix}${ext}`);
     } else {
       blob = new Blob([this.exportCsv()], { type: 'text/csv' });
-      name = `${this.cmp!.sheets[this.index].name} (reviewed).csv`;
+      name = `${this.cmp!.sheets[this.index].name}${this.w.t.reviewedSuffix}.csv`;
     }
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -475,9 +522,11 @@ export class SpreadsheetDiff<A = unknown> {
     const show = mode === true || (mode === 'auto' && outputs.length > 0);
     this.side.hidden = !show;
     if (!show) return;
-    const title = el('h2', undefined, outputs.length ? `Changed outputs · ${outputs.length.toLocaleString('en-US')}` : 'No outputs changed');
+    const { t, count } = this.w;
+    const title = el('h2', undefined, outputs.length ? t.outputsHeading(count(outputs.length), outputs.length) : t.noOutputs);
     const items = outputs.slice(0, this.outputsShown).map((c) => this.outputItem(c));
-    const more = outputs.length > this.outputsShown ? el('button', 'sx-more', `Show ${Math.min(100, outputs.length - this.outputsShown)} more`) : null;
+    const next = Math.min(100, outputs.length - this.outputsShown);
+    const more = next > 0 ? el('button', 'sx-more', t.showMore(count(next), next)) : null;
     more?.addEventListener('click', () => {
       this.outputsShown += 100;
       this.renderSide();
@@ -527,12 +576,13 @@ export class SpreadsheetDiff<A = unknown> {
   private waterfall(c: CellChange, code: string | undefined): HTMLElement {
     const box = el('div', 'sx-wf');
     if (typeof c.before !== 'number' || typeof c.after !== 'number') {
-      box.append(el('span', 'sx-wf-label', 'Not a number: no waterfall.'));
+      box.append(el('span', 'sx-wf-label', this.w.t.waterfallNotNumber));
       return box;
     }
     const causes = (c.causes ?? []).filter((x) => typeof x.contribution === 'number' && x.contribution !== 0).slice(0, 8);
     type Step = { label: string; from: number; to: number; kind: 'total' | 'up' | 'down' | 'other' };
-    const steps: Step[] = [{ label: 'Before', from: 0, to: c.before, kind: 'total' }];
+    const t = this.w.t;
+    const steps: Step[] = [{ label: t.waterfallBefore, from: 0, to: c.before, kind: 'total' }];
     let at = c.before;
     for (const x of causes) {
       const v = x.contribution as number;
@@ -542,10 +592,10 @@ export class SpreadsheetDiff<A = unknown> {
     const rest = c.after - at;
     if (Math.abs(rest) > 1e-9 * Math.max(1, Math.abs(c.after))) {
       const listed = (c.causes ?? []).length;
-      const label = (c.causeCount ?? 0) > causes.length || listed > causes.length ? 'Other causes, together' : 'Interaction of the edits';
+      const label = (c.causeCount ?? 0) > causes.length || listed > causes.length ? t.waterfallOther : t.waterfallInteraction;
       steps.push({ label, from: at, to: c.after, kind: 'other' });
     }
-    steps.push({ label: 'After', from: 0, to: c.after, kind: 'total' });
+    steps.push({ label: t.waterfallAfter, from: 0, to: c.after, kind: 'total' });
     // The axis covers what the steps move through, not down to zero: a 3% change would be a sliver.
     const ends = steps.flatMap((s) => (s.kind === 'total' ? [s.to] : [s.from, s.to]));
     let lo = Math.min(...ends);
@@ -579,9 +629,10 @@ export class SpreadsheetDiff<A = unknown> {
     this.objects.hidden = !list.length;
     if (!list.length) return;
     const det = el('details');
-    det.append(el('summary', undefined, `${list.length} change${list.length === 1 ? '' : 's'} to names, charts or pivot tables`));
+    const { t, count } = this.w;
+    det.append(el('summary', undefined, t.objectsSummary(count(list.length), list.length)));
     const ul = el('ul');
-    const noun = { name: 'Name', chart: 'Chart', pivot: 'Pivot table' };
+    const noun = { name: t.objectName, chart: t.objectChart, pivot: t.objectPivot };
     for (const o of list) {
       const li = el('li');
       li.append(`${noun[o.kind]} `, el('code', undefined, o.name), ` ${o.change}${o.details.filter(Boolean).length ? ': ' + o.details.filter(Boolean).join('; ') : ''}`);

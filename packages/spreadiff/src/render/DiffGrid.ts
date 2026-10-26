@@ -28,6 +28,7 @@ import {
   type RowLayout,
 } from './layout.js';
 import { resolveTheme, STYLE, type Theme } from './theme.js';
+import { words, type DiffStrings, type Words } from './strings.js';
 
 /**
  * - `unified`: one grid; changed cells show old and new together (see {@link CellDisplay}).
@@ -243,6 +244,14 @@ export interface DiffGridOptions<A = unknown> {
    * Default true.
    */
   traceFocus?: boolean;
+  /**
+   * The grid's words, to translate what it shows and announces (see
+   * `DiffStrings`). Unset ones stay English. Keep the object stable
+   * (useMemo); a new one rebuilds the screen-reader copy.
+   */
+  strings?: Partial<DiffStrings>;
+  /** BCP 47 locale for counts ("1,234 unchanged rows"). Default: the browser's. Cell values keep their sheet's number formats. */
+  locale?: string;
 }
 
 /** Arguments to `DiffGrid.render`. */
@@ -308,8 +317,11 @@ interface PaneGeometry {
  * ```
  *
  * Keyboard (when the grid has focus): `n`/`j` next change, `p`/`k`
- * previous, arrow keys move the selection, ⌘/Ctrl+C copies the selected
- * value, Esc clears the selection. Tab moves focus out of the grid.
+ * previous, arrow keys move the selection, Home/End to the row's first or
+ * last column, Ctrl+Home/End to the first or last cell, PageUp/PageDown by
+ * a screenful (Shift extends a range with any of these), ⌘/Ctrl+C copies
+ * the selected value, Esc clears the selection. Tab moves focus out of the
+ * grid.
  */
 export class DiffGrid<A = unknown> {
   /**
@@ -379,6 +391,16 @@ export class DiffGrid<A = unknown> {
   /** `options.trace` with its sheet resolved against the diff shown (see `resolveTrace`). */
   private tc: (TraceContext & { sheet: number }) | null = null;
 
+  private wordsCache: { strings?: Partial<DiffStrings>; locale?: string; w: Words } | null = null;
+
+  /** The strings and count format in effect. */
+  private get w(): Words {
+    const { strings, locale } = this.options;
+    const c = this.wordsCache;
+    if (c && c.strings === strings && c.locale === locale) return c.w;
+    return (this.wordsCache = { strings, locale, w: words(strings, locale) }).w;
+  }
+
   constructor(options: DiffGridOptions<A> = {}) {
     this.options = options;
     this.host = document.createElement('div');
@@ -400,12 +422,13 @@ export class DiffGrid<A = unknown> {
     this.scroller = el('div', 'sd-scroller');
     this.scroller.tabIndex = 0;
     this.scroller.setAttribute('role', 'grid');
-    this.scroller.setAttribute('aria-label', 'Spreadsheet diff');
+    this.scroller.setAttribute('aria-label', this.w.t.gridLabel);
     this.spacer = el('div', 'sd-spacer');
     this.scroller.appendChild(this.spacer);
     this.canvas = el('canvas', 'sd-canvas');
     this.minimap = el('canvas', 'sd-minimap');
     this.overlay = el('div', 'sd-overlay');
+    const focusRing = el('div', 'sd-focus-ring');
     // Annotation content lives in the light DOM (so page CSS styles it) and
     // is projected into the overlay through this slot.
     this.overlay.appendChild(document.createElement('slot'));
@@ -414,7 +437,7 @@ export class DiffGrid<A = unknown> {
     this.tooltip.setAttribute('aria-hidden', 'true');
     this.tooltip.id = `${this.a11yId}-tip`;
     if (style) this.shadow.append(style);
-    this.shadow.append(this.scroller, this.canvas, this.minimap, this.overlay, this.tooltip);
+    this.shadow.append(this.scroller, this.canvas, this.minimap, this.overlay, focusRing, this.tooltip);
     this.ctx = this.canvas.getContext('2d', { alpha: false })!;
     this.mctx = this.minimap.getContext('2d')!;
     this.applyThemeAttr();
@@ -786,8 +809,11 @@ export class DiffGrid<A = unknown> {
         this.refreshTheme();
       });
     };
-    mq.addEventListener('change', onScheme);
-    this.cleanups.push(() => mq.removeEventListener('change', onScheme));
+    const forced = matchMedia('(forced-colors: active)');
+    for (const m of [mq, forced]) {
+      m.addEventListener('change', onScheme);
+      this.cleanups.push(() => m.removeEventListener('change', onScheme));
+    }
     const mo = new MutationObserver(onScheme);
     const watch = { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] };
     mo.observe(document.documentElement, watch);
@@ -1327,11 +1353,11 @@ export class DiffGrid<A = unknown> {
       return;
     }
     // Per frame, only compare scroll position and selection: rebuilding while
-    // scrolling waits until it settles; a new selection or diff applies at once.
+    // scrolling waits until it settles; a new selection, diff or options apply at once.
     const sel0 = this.selected;
     const selNow = sel0 ? `${sel0.row}:${sel0.col}` : '';
     const scrollNow = `${this.scroller.scrollTop}:${this.scroller.scrollLeft}:${this.rows.count}:${this.width}:${this.height}`;
-    if (!now && this.a11y && this.a11yDiff === this.diff && selNow === this.a11ySel) {
+    if (!now && this.a11y && this.a11yDiff === this.diff && this.a11yOptions === this.options && selNow === this.a11ySel) {
       if (scrollNow === this.a11yScroll) return;
       this.a11yScroll = scrollNow;
       clearTimeout(this.a11yTimer);
@@ -1368,9 +1394,16 @@ export class DiffGrid<A = unknown> {
       this.scroller.appendChild(this.a11y);
     }
     const s = diff.stats;
-    const n = (k: number, one: string, many = `${one}s`) => `${k.toLocaleString()} ${k === 1 ? one : many}`;
-    const parts = [s.rowsModified && `${n(s.rowsModified, 'row')} modified`, s.rowsAdded && `${n(s.rowsAdded, 'row')} added`, s.rowsRemoved && `${n(s.rowsRemoved, 'row')} removed`, s.rowsMoved && `${n(s.rowsMoved, 'row')} moved`, s.cellsChanged && `${n(s.cellsChanged, 'cell')} changed`].filter(Boolean);
-    this.scroller.setAttribute('aria-label', this.options.ariaLabel ?? `Spreadsheet diff: ${parts.length ? parts.join(', ') : 'no changes'}`);
+    const { t, count } = this.w;
+    const part = (k: number, msg: (count: string, n: number) => string) => (k ? msg(count(k), k) : '');
+    const parts = [
+      part(s.rowsModified, t.summaryRowsModified),
+      part(s.rowsAdded, t.summaryRowsAdded),
+      part(s.rowsRemoved, t.summaryRowsRemoved),
+      part(s.rowsMoved ?? 0, t.summaryRowsMoved),
+      part(s.cellsChanged, t.summaryCellsChanged),
+    ].filter(Boolean);
+    this.scroller.setAttribute('aria-label', this.options.ariaLabel ?? t.gridSummary(parts));
     this.scroller.setAttribute('aria-rowcount', String(rows.count + 1));
     this.scroller.setAttribute('aria-colcount', String(cols.cols.length + 1));
     const id = (d: number, vi: number) => `${this.a11yId}-${d}-${vi}`;
@@ -1386,12 +1419,12 @@ export class DiffGrid<A = unknown> {
     const header = el('div', 'sd-a11y-row');
     header.setAttribute('role', 'row');
     header.setAttribute('aria-rowindex', '1');
-    header.append(cell('columnheader', 'Row', 1));
+    header.append(cell('columnheader', t.rowHeaderColumn, 1));
     for (const vi of visible) {
       const c = diff.columns[cols.cols[vi]];
       const heading = (this.options.columnHeaders ?? 'labels') === 'letters' ? [] : this.columnHeading(cols.cols[vi], 'new');
       const title = heading.length && c.status !== 'renamed' ? heading.join(', ') : c.name;
-      const name = c.status === 'renamed' ? `${c.name}, renamed from ${c.oldName}` : c.status === 'added' ? `${title}, added column` : c.status === 'removed' ? `${title}, removed column` : title;
+      const name = c.status === 'renamed' ? t.columnRenamed(c.name, c.oldName ?? '') : c.status === 'added' ? t.columnAdded(title) : c.status === 'removed' ? t.columnRemoved(title) : title;
       header.append(cell('columnheader', name, vi + 2));
     }
     out.push(header);
@@ -1405,7 +1438,7 @@ export class DiffGrid<A = unknown> {
       if (kind === ROW_KIND.separator) {
         const region = rows.regions[rows.ref[d]];
         const n = region.end - region.start;
-        row.append(cell('gridcell', `${n.toLocaleString()} unchanged ${n === 1 ? 'row' : 'rows'}, collapsed`, 1));
+        row.append(cell('gridcell', t.unchangedRowsCollapsed(count(n), n), 1));
         out.push(row);
         continue;
       }
@@ -1431,11 +1464,13 @@ export class DiffGrid<A = unknown> {
     const oi = diff.oldRows[r];
     const ni = diff.newRows[r];
     const n = ni >= 0 ? ni + this.rowOffset('new') : oi + this.rowOffset('old');
+    const t = this.w.t;
     const status = ROW_STATUS_NAMES[diff.status[r]];
     const label = this.rowHeaderMode() === 'numbers' ? null : this.rowLabelOf(r, 'unified');
-    let text = `${label ? `${this.rowLabelText(label)}, row ${n}` : `Row ${n}`}${status === 'equal' ? '' : `, ${status}`}`;
-    if (diff.moved?.[r]) text += `, moved from row ${oi + this.rowOffset('old')}`;
-    return text;
+    const parts = [t.rowHeader(n, label ? this.rowLabelText(label) : null)];
+    if (status !== 'equal') parts.push(status === 'added' ? t.rowAdded : status === 'removed' ? t.rowRemoved : t.rowModified);
+    if (diff.moved?.[r]) parts.push(t.movedFromRow(oi + this.rowOffset('old')));
+    return parts.join(', ');
   }
 
   /** A cell as words: its value, and for a change the old value, the delta and why it changed. */
@@ -1444,18 +1479,23 @@ export class DiffGrid<A = unknown> {
     const dd = this.diff!;
     const ov = this.shown(dd.oldTable, info.oldRow, info.column.oldIndex);
     const nv = this.shown(dd.newTable, info.newRow, info.column.newIndex);
-    const v = (x: string) => x || 'empty';
-    if (info.status === 'added') return info.newValue === undefined ? 'not in the new table' : v(nv);
+    const t = this.w.t;
+    const v = (x: string) => x || t.empty;
+    if (info.status === 'added') return info.newValue === undefined ? t.notInNewTable : v(nv);
     if (info.status === 'removed') return v(ov);
     if (info.column.status === 'added') return v(nv);
-    if (info.column.status === 'removed') return `${v(ov)}, column removed`;
+    if (info.column.status === 'removed') return `${v(ov)}, ${t.cellColumnRemoved}`;
     if (!info.changed) return v(nv);
+    const parts = [v(nv), t.was(v(ov))];
     const d = numericDelta(info.oldValue ?? null, info.newValue ?? null);
-    const delta = d && d.delta !== 0 ? `, ${d.delta > 0 ? 'up' : 'down'} ${displayMagnitude(Math.abs(d.delta), this.codeOf(r, ci))}${d.ratio === null ? '' : ` (${Math.abs(d.ratio * 100).toFixed(1)}%)`}` : '';
-    const why = info.kind === 'computed' ? ', recalculated result' : info.kind === 'formula' ? ', formula edited' : ', edited';
-    const formula = info.oldFormula !== info.newFormula && info.newFormula ? `, formula ${info.newFormula}` : '';
-    const decided = info.decision ? `, ${info.decision === 'reject' ? 'rejected' : 'accepted'}` : '';
-    return `${v(nv)}, was ${v(ov)}${delta}${why}${formula}${decided}`;
+    if (d && d.delta !== 0) {
+      const amount = `${displayMagnitude(Math.abs(d.delta), this.codeOf(r, ci))}${d.ratio === null ? '' : ` (${Math.abs(d.ratio * 100).toFixed(1)}%)`}`;
+      parts.push(d.delta > 0 ? t.up(amount) : t.down(amount));
+    }
+    parts.push(info.kind === 'computed' ? t.kindComputed : info.kind === 'formula' ? t.kindFormula : t.kindInput);
+    if (info.oldFormula !== info.newFormula && info.newFormula) parts.push(t.formulaIs(info.newFormula));
+    if (info.decision) parts.push(info.decision === 'reject' ? t.rejected : t.accepted);
+    return parts.join(', ');
   }
 
   private drawPane(p: PaneGeometry): void {
@@ -1886,7 +1926,7 @@ export class DiffGrid<A = unknown> {
       const bottom = y + h * 0.72;
       this.text(newText, x, top, w, align, font, t.fg);
       if (deltaText) this.text(this.fitDelta(deltaText, w, tiny), x, bottom, w, align, tiny, deltaText.up ? t.addedFg : t.removedFg);
-      else this.text(`was ${oldText || '∅'}`, x, bottom, w, align, small, oldFg);
+      else this.text(this.w.t.was(oldText || '∅'), x, bottom, w, align, small, oldFg);
     } else {
       // inline: old → new on one line; falls back to the new value when narrow.
       ctx.fillStyle = newBg;
@@ -2080,7 +2120,7 @@ export class DiffGrid<A = unknown> {
     hline(ctx, p.x, p.x + p.width, y, t.border);
     hline(ctx, p.x, p.x + p.width, y + h, t.border);
     const n = region.end - region.start;
-    const label = `${n.toLocaleString()} unchanged ${n === 1 ? 'row' : 'rows'}`;
+    const label = this.w.t.unchangedRows(this.w.count(n), n);
     const cy = y + h / 2 + 0.5;
     // Expand glyph: two small chevrons.
     const gx = p.x + p.gutter / 2;
@@ -2514,7 +2554,14 @@ export class DiffGrid<A = unknown> {
   }
 
   private onKeyDown(e: KeyboardEvent): void {
+    const toEnd = e.key === 'Home' ? -1 : e.key === 'End' ? 1 : 0;
     if (e.metaKey || e.ctrlKey) {
+      // Ctrl+Home / Ctrl+End: the first or last cell of the grid.
+      if (toEnd) {
+        this.moveSelection(toEnd * Infinity, toEnd * Infinity, e.shiftKey);
+        e.preventDefault();
+        return;
+      }
       if (e.key === 'c' && this.selected) {
         // Exact values, not display-rounded ones; a range as tab-separated rows.
         const text = (row: number, col: number) => {
@@ -2528,44 +2575,6 @@ export class DiffGrid<A = unknown> {
       }
       return;
     }
-    const firstDataRowFrom = (d: number) => {
-      while (d < this.rows.count && this.rows.kind[d] !== ROW_KIND.data) d++;
-      return d < this.rows.count ? d : -1;
-    };
-    const move = (dr: number, dc: number) => {
-      if (!this.cols.cols.length) return;
-      const extend = e.shiftKey && this.selected !== null;
-      const from = extend ? (this.extent ?? this.selected) : this.selected;
-      let d = from ? this.rows.displayOf[from.row] : -1;
-      const col = from?.col ?? this.cols.cols[0];
-      if (d < 0) {
-        // No (visible) selection yet: start at the first row in view.
-        d = firstDataRowFrom(Math.max(0, rowAt(this.rows, this.scroller.scrollTop)));
-        if (d < 0) return;
-        dr = 0;
-      }
-      const sel = { row: this.rows.ref[d], col };
-      if (dr) {
-        do d += dr;
-        while (d >= 0 && d < this.rows.count && this.rows.kind[d] !== ROW_KIND.data);
-        if (d < 0 || d >= this.rows.count) return;
-      }
-      let vi = this.cols.cols.indexOf(sel.col) + dc;
-      vi = Math.max(0, Math.min(this.cols.cols.length - 1, vi));
-      const to = { row: this.rows.ref[d], col: this.cols.cols[vi] };
-      if (extend) {
-        const a = this.selected!;
-        this.extent = to.row === a.row && to.col === a.col ? null : to;
-      } else {
-        this.selected = to;
-        this.extent = null;
-        this.options.onSelectionChange?.(this.cellInfo(to.row, to.col));
-      }
-      this.emitRange();
-      this.scrollToDisplay(d, 'nearest');
-      this.scrollToColumn(vi);
-      this.schedule();
-    };
     switch (e.key) {
       case 'n':
       case 'j':
@@ -2576,16 +2585,24 @@ export class DiffGrid<A = unknown> {
         this.prevChange();
         break;
       case 'ArrowDown':
-        move(1, 0);
+        this.moveSelection(1, 0, e.shiftKey);
         break;
       case 'ArrowUp':
-        move(-1, 0);
+        this.moveSelection(-1, 0, e.shiftKey);
         break;
       case 'ArrowLeft':
-        move(0, -1);
+        this.moveSelection(0, -1, e.shiftKey);
         break;
       case 'ArrowRight':
-        move(0, 1);
+        this.moveSelection(0, 1, e.shiftKey);
+        break;
+      case 'Home':
+      case 'End':
+        this.moveSelection(0, toEnd * Infinity, e.shiftKey);
+        break;
+      case 'PageDown':
+      case 'PageUp':
+        this.movePage(e.key === 'PageDown' ? 1 : -1, e.shiftKey);
         break;
       // Tab is deliberately not handled: it must move focus out of the grid.
       case 'Escape':
@@ -2595,6 +2612,68 @@ export class DiffGrid<A = unknown> {
         return;
     }
     e.preventDefault();
+  }
+
+  /**
+   * Move the selection (or, with `extend`, the far corner of the range) by
+   * `dr` display rows and `dc` visible columns; ±Infinity goes to the edge.
+   * Rows land on data rows, skipping separators and annotations.
+   */
+  private moveSelection(dr: number, dc: number, extend: boolean): void {
+    if (!this.cols.cols.length) return;
+    const rows = this.rows;
+    const isData = (d: number) => rows.kind[d] === ROW_KIND.data;
+    extend &&= this.selected !== null;
+    const from = extend ? (this.extent ?? this.selected) : this.selected;
+    let d = from ? rows.displayOf[from.row] : -1;
+    const col = from?.col ?? this.cols.cols[0];
+    if (d < 0) {
+      // No (visible) selection yet: start at the first row in view.
+      d = Math.max(0, rowAt(rows, this.scroller.scrollTop));
+      while (d < rows.count && !isData(d)) d++;
+      if (d >= rows.count) return;
+      // The first arrow only selects a row in view; a jump to an edge still jumps.
+      if (Number.isFinite(dr)) dr = 0;
+    }
+    if (dr) {
+      const step = Math.sign(dr);
+      const target = Math.max(0, Math.min(rows.count - 1, d + dr));
+      // The nearest data row at or past the target, else back toward where we started.
+      let t = target;
+      while (t >= 0 && t < rows.count && !isData(t)) t += step;
+      if (t < 0 || t >= rows.count) {
+        t = target;
+        while (t !== d && !isData(t)) t -= step;
+      }
+      if (t === d && !dc) return;
+      d = t;
+    }
+    const vi = Math.max(0, Math.min(this.cols.cols.length - 1, this.cols.cols.indexOf(col) + dc));
+    const to = { row: rows.ref[d], col: this.cols.cols[vi] };
+    if (extend) {
+      const a = this.selected!;
+      this.extent = to.row === a.row && to.col === a.col ? null : to;
+    } else {
+      this.selected = to;
+      this.extent = null;
+      this.options.onSelectionChange?.(this.cellInfo(to.row, to.col));
+    }
+    this.emitRange();
+    this.scrollToDisplay(d, 'nearest');
+    this.scrollToColumn(vi);
+    this.schedule();
+  }
+
+  /** PageDown / PageUp: move the selection by the rows that fit in the view. */
+  private movePage(dir: 1 | -1, extend: boolean): void {
+    const rows = this.rows;
+    const from = (extend ? (this.extent ?? this.selected) : this.selected) ?? null;
+    const d = from ? rows.displayOf[from.row] : -1;
+    const body = Math.max(1, this.scroller.clientHeight - HEADER_HEIGHT);
+    if (d < 0) return this.moveSelection(1, 0, extend);
+    const y = rows.offsets[d] + dir * body;
+    const target = y < 0 ? 0 : y >= rows.offsets[rows.count] ? rows.count - 1 : rowAt(rows, y);
+    this.moveSelection(Math.max(1, Math.abs(target - d)) * dir, 0, extend);
   }
 
   private jumpChange(dir: 1 | -1): boolean {
@@ -2698,20 +2777,21 @@ export class DiffGrid<A = unknown> {
             .map((s) => (s.kind === 'equal' ? esc(s.text) : kind === 'removed' ? `<del>${esc(s.text)}</del>` : `<ins>${esc(s.text)}</ins>`))
             .join('')
         : esc(kind === 'removed' ? before : after);
-    const rowNumber = info.newRow >= 0 ? `row ${info.newRow + this.rowOffset('new')}` : `row ${info.oldRow + this.rowOffset('old')}`;
+    const { t: w, count: fmtCount } = this.w;
+    const rowNumber = esc(w.tooltipRow(info.newRow >= 0 ? info.newRow + this.rowOffset('new') : info.oldRow + this.rowOffset('old')));
     // With labels: "India › Revenue · C7" under the column heading; else the column name and row number.
     const rl = this.rowHeaderMode() === 'numbers' ? null : this.rowLabelOf(info.row, 'unified');
     const heading = (this.options.columnHeaders ?? 'labels') === 'letters' ? [] : this.columnHeading(info.columnIndex, info.newRow >= 0 ? 'new' : 'old');
     const colTitle = heading.length && info.column.status !== 'renamed' ? heading.join(LABEL_SEP) : info.column.name;
     const where = rl ? `${esc(this.rowLabelText(rl))} · ${esc(this.addressOf(info))}` : rowNumber;
     let html = `<div class="sd-tt-head"><span class="sd-tt-col">${esc(colTitle)}</span><span>${where}</span></div>`;
-    if (info.moved) html += `<div class="sd-tt-moved">↕ Moved from row ${info.oldRow + this.rowOffset('old')}</div>`;
+    if (info.moved) html += `<div class="sd-tt-moved">↕ ${esc(w.tooltipMovedFromRow(info.oldRow + this.rowOffset('old')))}</div>`;
     if (!info.changed) {
       this.placeTooltip(html, hit);
       return;
     }
-    html += `<div class="sd-tt-row sd-tt-old"><span class="sd-tt-sign">−</span><span class="sd-tt-val">${side('removed') || '<i>empty</i>'}</span></div>`;
-    html += `<div class="sd-tt-row sd-tt-new"><span class="sd-tt-sign">+</span><span class="sd-tt-val">${side('added') || '<i>empty</i>'}</span></div>`;
+    html += `<div class="sd-tt-row sd-tt-old"><span class="sd-tt-sign">−</span><span class="sd-tt-val">${side('removed') || `<i>${esc(w.empty)}</i>`}</span></div>`;
+    html += `<div class="sd-tt-row sd-tt-new"><span class="sd-tt-sign">+</span><span class="sd-tt-val">${side('added') || `<i>${esc(w.empty)}</i>`}</span></div>`;
     if (info.oldFormula || info.newFormula) {
       html +=
         info.kind === 'computed' || info.oldFormula === info.newFormula
@@ -2728,18 +2808,16 @@ export class DiffGrid<A = unknown> {
     const tc = this.tc;
     const kind = info.kind;
     if (kind && this.options.highlightComputed !== false) {
-      const kindLabel = kind === 'computed' ? 'downstream' : kind === 'formula' ? 'formula edit' : 'input edit';
-      let trace = `<div class="sd-tt-trace"><div class="sd-tt-trace-title"><span class="sd-tt-kind" data-kind="${kind}">${kindLabel}</span>`;
+      const kindLabel = kind === 'computed' ? w.tooltipKindComputed : kind === 'formula' ? w.tooltipKindFormula : w.tooltipKindInput;
+      let trace = `<div class="sd-tt-trace"><div class="sd-tt-trace-title"><span class="sd-tt-kind" data-kind="${kind}">${esc(kindLabel)}</span>`;
       const t = info.trace;
       if (tc && t) {
         const list = kind === 'computed' ? t.causes : t.impacts;
         const count = kind === 'computed' ? t.causeCount : t.impactCount;
         if (kind === 'computed') {
-          trace += count
-            ? ` changed because of ${count} edit${count === 1 ? '' : 's'}:`
-            : t.unexplained === 'volatile' ? ' volatile function (NOW, RAND, …)' : t.unexplained === 'dynamic' ? ' dynamic reference (INDIRECT, OFFSET, …)' : ' cause not found';
+          trace += ` ${esc(count ? w.changedBecause(fmtCount(count), count) : t.unexplained === 'volatile' ? w.causeVolatile : t.unexplained === 'dynamic' ? w.causeDynamic : w.causeNotFound)}`;
         } else {
-          trace += count ? ` flows into ${count} cell${count === 1 ? '' : 's'}:` : ' nothing downstream changed';
+          trace += ` ${esc(count ? w.flowsInto(fmtCount(count), count) : w.nothingDownstream)}`;
         }
         trace += '</div>';
         // Each cause, its own change, and (when recalculated) how much of this cell's change it accounts for.
@@ -2751,15 +2829,19 @@ export class DiffGrid<A = unknown> {
           const share = typeof c === 'number' && c !== 0 ? `<span class="sd-tt-share" data-sign="${c > 0 ? '+' : '-'}">${c > 0 ? '+' : '−'}${esc(formatCell(Number(Math.abs(c).toPrecision(12))))}</span>` : contributions ? '<span></span>' : '';
           trace += `<div class="sd-tt-cause${contributions ? ' sd-tt-has-share' : ''}"><span>${kind === 'computed' ? '←' : '→'}</span><span class="sd-tt-ref">${esc(d.label)}</span><span class="sd-tt-d" data-sign="${d.sign}">${esc(d.delta)}</span>${share}</div>`;
         }
-        if (count > 6) trace += `<div class="sd-tt-trace-title">+ ${count - 6} more</div>`;
+        if (count > 6) trace += `<div class="sd-tt-trace-title">${esc(w.more(fmtCount(count - 6), count - 6))}</div>`;
         if (kind === 'computed' && count) {
           trace +=
             t.method === 'recalculated'
-              ? `<div class="sd-tt-note">${contributions?.some((x) => typeof x === 'number') ? 'Right column: this cell\'s change from each edit, found by undoing it and recalculating.' : 'Found by undoing each edit and recalculating.'}</div>`
-              : '<div class="sd-tt-note">From formula references; some listed edits may not have mattered.</div>';
+              ? `<div class="sd-tt-note">${esc(contributions?.some((x) => typeof x === 'number') ? w.noteContributions : w.noteRecalculated)}</div>`
+              : `<div class="sd-tt-note">${esc(w.noteReferences)}</div>`;
         }
         if (t.stale) {
-          trace += `<div class="sd-tt-stale">The file saved <b>${esc(formatCell(t.stale.cached) || 'nothing')}</b> here without recalculating; recalculating its inputs gives <b>${esc(formatCell(t.stale.recalculated))}</b>.</div>`;
+          // The message is text; only the two values it places are bold.
+          const saved = `<b>${esc(formatCell(t.stale.cached) || w.staleNothing)}</b>`;
+          const recalculated = `<b>${esc(formatCell(t.stale.recalculated))}</b>`;
+          const msg = esc(w.stale('\u0001', '\u0002')).replace('\u0001', () => saved).replace('\u0002', () => recalculated);
+          trace += `<div class="sd-tt-stale">${msg}</div>`;
         }
       } else {
         trace += '</div>';
@@ -2802,7 +2884,8 @@ export class DiffGrid<A = unknown> {
     if (!label) return;
     const diff = this.diff!;
     const esc = (s: string) => s.replace(/[&<>]/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'));
-    const nums = [diff.oldRows[r] >= 0 ? `old row ${diff.oldRows[r] + this.rowOffset('old')}` : '', diff.newRows[r] >= 0 ? `new row ${diff.newRows[r] + this.rowOffset('new')}` : ''].filter(Boolean).join(' · ');
+    const w = this.w.t;
+    const nums = [diff.oldRows[r] >= 0 ? w.tooltipOldRow(diff.oldRows[r] + this.rowOffset('old')) : '', diff.newRows[r] >= 0 ? w.tooltipNewRow(diff.newRows[r] + this.rowOffset('new')) : ''].filter(Boolean).map(esc).join(' · ');
     this.placeTooltip(`<div class="sd-tt-head"><span class="sd-tt-col">${esc(this.rowLabelText(label))}</span><span>${nums}</span></div>`, hit);
   }
 

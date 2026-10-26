@@ -1078,7 +1078,21 @@ behavior: `layout`, `cellDisplay`, `collapseUnchanged`, `context`,
 `theme`, `minimap`, `tooltips`, `highlightComputed`, `trace`, `traceFocus`,
 `annotations`, `renderAnnotation`, `numberFormats`, `decisions`,
 `onCellClick`, `onCellHover`, `onSelectionChange`, `onRangeChange`,
-`accessibility`, `ariaLabel`.
+`accessibility`, `ariaLabel`, `strings`, `locale`.
+
+### DiffStrings
+
+Every word the grid and `SpreadsheetDiff` show or announce: the
+screen-reader text, the popover, the separators, the sheet tabs, the
+outputs panel and the review bar. Pass a partial set as the `strings`
+option; the rest stay English. Messages with a number get it twice:
+formatted for `locale` ("1.234" in `de-DE`), and as a number, to pick a
+plural form. See [Translating the grid](grid.md#translating-the-grid).
+
+### ENGLISH_STRINGS
+
+The English [`DiffStrings`](#diffstrings): the defaults, and a starting
+point for a translation.
 
 ### DiffGridRenderProps
 
@@ -1180,8 +1194,8 @@ and in tests query through `view.host.shadowRoot` (Playwright's
 
 ### SpreadsheetDiffOptions
 
-Every `DiffGridOptions` field except `trace` and `decisions` (the component
-supplies them), plus:
+Every `DiffGridOptions` field except `trace` (the component supplies it),
+plus:
 
 | Field | Type | Default | |
 | --- | --- | --- | --- |
@@ -1194,6 +1208,7 @@ supplies them), plus:
 | `onError` | `(error) => void` | | Reading or comparing failed |
 | `onSheetChange` | `(sheet) => void` | | Another sheet is shown |
 | `onDecisionsChange` | `(decisions) => void` | | Review decisions changed |
+| `decisions` | `SheetDecisions[]` | | Decisions, one per sheet, applied when files are compared and whenever a different array is passed; see [Keeping decisions](review.md#keeping-decisions) |
 
 ### SpreadsheetDiffRenderProps
 
